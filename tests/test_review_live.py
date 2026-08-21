@@ -35,10 +35,21 @@ class FakeProviderTransport:
         return ProviderHttpResponse(200, json.dumps(response, ensure_ascii=False).encode(), {"Content-Type": "application/json"})
 
 
-def test_review_workflow_imports_pdf_and_compiles_page_citations(tmp_path):
+def test_review_workflow_imports_pdf_and_compiles_page_citations(tmp_path, monkeypatch):
+    class FakePage:
+        def __init__(self, page_number):
+            self.page_number = page_number
+
+        def extract_text(self):
+            return f"Review evidence on PDF page {self.page_number}."
+
+    class FakePdfReader:
+        def __init__(self, source):
+            self.pages = [FakePage(page) for page in range(1, 72)]
+
+    monkeypatch.setattr("pypdf.PdfReader", FakePdfReader)
     pdf_path = tmp_path / "review.pdf"
-    source = __import__("pathlib").Path("F:/fyx/文档/book/网络/论文/Agent Harness Engineering A Survey.pdf")
-    pdf_path.write_bytes(source.read_bytes())
+    pdf_path.write_bytes(b"%PDF-local-fixture")
     store = LocalArtifactStore(tmp_path / "artifacts")
     provider = OpenAICompatibleChatAdapter(store, ProviderConfig("https://provider.example/v1", "fixture-secret", "fixture-model"), transport=FakeProviderTransport())
     result = FixedReviewReadingNoteWorkflow(store, provider, clock=lambda: "2026-08-21T00:00:00Z", id_factory=lambda p: p + "-fixed").execute(pdf_path, "总结综述并解释术语")
@@ -51,4 +62,3 @@ def test_review_workflow_imports_pdf_and_compiles_page_citations(tmp_path):
     report = store.read_bytes(result.report_artifact).decode()
     assert "ETCLOVG" in report
     assert "PDF 第 7 页" in report
-
