@@ -74,6 +74,17 @@ are stored as ignored content-addressed Artifacts without the API key. A
 `partial` result means that useful cited claims were produced while an explicit
 acceptance criterion remains unmet.
 
+Create a cited Chinese reading note from an authorized local review PDF:
+
+```powershell
+uv run --frozen conflux-weave review-document "path/to/review.pdf" --query "总结综述，解释术语并指出展开不足的点"
+```
+
+The W1 implementation milestone is validated live at its frozen scope. This
+means the bounded local-document and repository-identity slices ran with real
+inputs and the configured Provider; it does not establish full-document review,
+independent verification of every source, or general research-agent capability.
+
 Local databases, artifacts, indexes, evaluation outputs, secrets, and private
 research data must not be committed. See `var/README.md` for the planned runtime
 layout.

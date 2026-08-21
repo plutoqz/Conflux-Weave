@@ -219,7 +219,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 }
             )
             return 2
-        except (LiveResearchValidationError, ValueError, FileNotFoundError) as exc:
+        except (
+            LiveResearchValidationError,
+            ProviderPortError,
+            ValueError,
+            FileNotFoundError,
+        ) as exc:
             _print_json(
                 {
                     "status": "failed",
@@ -228,6 +233,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "request_artifact_ref": getattr(exc, "request_artifact_ref", None),
                     "response_artifact_ref": getattr(exc, "response_artifact_ref", None),
                     "recovery_action": getattr(exc, "recovery_action", "检查输入和原始 Artifact 后显式创建新 Run。"),
+                    "network_called": isinstance(exc, ProviderPortError),
+                    "provider_called": isinstance(exc, ProviderPortError),
                     "automatic_retry": False,
                     "fallback": False,
                 }
@@ -253,7 +260,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 },
                 "limitations": list(execution.delivery.limitations),
                 "unmet_criteria": list(execution.delivery.unmet_criteria),
-                "network_called": False,
+                "network_called": True,
                 "provider_called": True,
                 "automatic_retry": False,
                 "fallback": False,
