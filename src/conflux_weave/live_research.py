@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -47,7 +48,25 @@ SYSTEM_PROMPT = """你是证据约束的研究助手。你只能使用用户消�
 
 
 class LiveResearchValidationError(ValueError):
-    """Raised when a live model response cannot form a closed cited delivery."""
+    """Raised when a live response cannot form a closed cited delivery."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "live_output_invalid",
+        artifact_ref: str | None = None,
+        request_artifact_ref: str | None = None,
+        response_artifact_ref: str | None = None,
+        recovery_action: str = "检查原始 Artifact 和证据映射后显式创建新 Run。",
+    ) -> None:
+        self.code = code
+        self.retryable = False
+        self.artifact_ref = artifact_ref
+        self.request_artifact_ref = request_artifact_ref
+        self.response_artifact_ref = response_artifact_ref
+        self.recovery_action = recovery_action
+        super().__init__(message)
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +117,7 @@ class FixedRepositoryIdentityWorkflow:
         run_id = self.id_factory("run")
         step_id = self.id_factory("step")
         created_at = self.clock()
+        search_query = _derive_search_query(normalized_query)
         budget = BudgetLedger(
             wall_clock_seconds=120,
             input_tokens=12_000,
@@ -114,6 +134,7 @@ class FixedRepositoryIdentityWorkflow:
                 "prompt_version": PROMPT_VERSION,
                 "code_revision": self.code_revision,
                 "query": normalized_query,
+                "search_query": search_query,
                 "provider": self.chat_adapter.config.provider_name,
                 "model": self.chat_adapter.config.model,
                 "parameters": {
@@ -141,7 +162,7 @@ class FixedRepositoryIdentityWorkflow:
         task = TaskSpec(
             task_id=task_id,
             kind="repository_identity_research",
-            input={"query": normalized_query},
+            input={"query": normalized_query, "search_query": search_query},
             requested_policy=LIVE_WORKFLOW_VERSION,
             idempotency_key=_idempotency_key(normalized_query),
         )
@@ -164,9 +185,14 @@ class FixedRepositoryIdentityWorkflow:
             StepRecord(step_id, run_id, "repository_identity_live", 1, StepStatus.RUNNING),
         ]
 
-        search_result = self.search_adapter.search(normalized_query, limit=10)
+        search_result = self.search_adapter.search(search_query, limit=10)
         if not search_result.candidates:
-            raise LiveResearchValidationError("GitHub search returned no valid candidates")
+            raise LiveResearchValidationError(
+                "GitHub search returned no valid candidates",
+                code="repository_candidates_missing",
+                artifact_ref=search_result.manifest_artifact.artifact_id,
+                recovery_action="检查检索查询和 discovery manifest 后显式创建新 Run。",
+            )
         selected = search_result.candidates[0]
         registered = self.search_adapter.register(
             search_result, full_name=selected.full_name
@@ -183,9 +209,14 @@ class FixedRepositoryIdentityWorkflow:
             json_object=True,
             producer_step_id=step_id,
         )
-        claims, citations, model_limitations = _parse_model_claims(
-            completion.content, evidence, step_id
-        )
+        try:
+            claims, citations, model_limitations = _parse_model_claims(
+                completion.content, evidence, step_id
+            )
+        except LiveResearchValidationError as exc:
+            exc.request_artifact_ref = completion.request_artifact.artifact_id
+            exc.response_artifact_ref = completion.response_artifact.artifact_id
+            raise
         report = _render_report(
             normalized_query,
             selected,
@@ -210,6 +241,7 @@ class FixedRepositoryIdentityWorkflow:
                 "run_id": run_id,
                 "status": RunStatus.PARTIAL.value,
                 "query": normalized_query,
+                "search_query": search_query,
                 "selected_repository": selected.full_name,
                 "selection_rank": 1,
                 "official_status": "readme_self_identified_not_independently_verified",
@@ -439,6 +471,20 @@ def _render_report(
 def _idempotency_key(query: str) -> str:
     payload = f"{LIVE_WORKFLOW_VERSION}\0{query}".encode("utf-8")
     return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def _derive_search_query(query: str) -> str:
+    tokens = re.findall(r"[A-Za-z][A-Za-z0-9_.+-]*", query)
+    ignored = {
+        "url",
+        "github",
+        "repository",
+        "repo",
+        "official",
+        "implementation",
+    }
+    useful = [token for token in tokens if token.casefold() not in ignored]
+    return " ".join(useful[:6]) if useful else query
 
 
 def _new_id(prefix: str) -> str:

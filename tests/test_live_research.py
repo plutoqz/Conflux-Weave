@@ -36,7 +36,11 @@ def repository_item() -> dict[str, object]:
 
 
 class GitHubTransport:
+    def __init__(self) -> None:
+        self.urls = []
+
     def get(self, url, *, headers, timeout_seconds):
+        self.urls.append(url)
         if url.endswith("/readme"):
             return HttpResponse(
                 200,
@@ -92,9 +96,10 @@ def fixed_clock() -> str:
 
 def build_workflow(tmp_path, model_content):
     store = LocalArtifactStore(tmp_path / "artifacts")
+    github_transport = GitHubTransport()
     search = GitHubRepositorySearchAdapter(
         store,
-        transport=GitHubTransport(),
+        transport=github_transport,
         acquired_at=fixed_clock(),
     )
     provider_transport = ProviderTransport(model_content)
@@ -111,11 +116,11 @@ def build_workflow(tmp_path, model_content):
         id_factory=stable_id,
         code_revision="fixture-revision",
     )
-    return workflow, store, provider_transport
+    return workflow, store, provider_transport, github_transport
 
 
 def test_live_repository_workflow_compiles_closed_cited_partial_delivery(tmp_path) -> None:
-    workflow, store, provider_transport = build_workflow(
+    workflow, store, provider_transport, github_transport = build_workflow(
         tmp_path,
         {
             "claims": [
@@ -140,6 +145,7 @@ def test_live_repository_workflow_compiles_closed_cited_partial_delivery(tmp_pat
     assert len(result.claims) == 2
     assert len(result.citations) == 2
     assert provider_transport.calls == 1
+    assert "q=pi+coding+agent" in github_transport.urls[0]
     report = store.read_bytes(result.report_artifact).decode()
     assert "该仓库将项目自述为 Pi Agent Harness。 [1]" in report
     manifest = store.read_bytes(result.manifest_artifact)
@@ -148,7 +154,7 @@ def test_live_repository_workflow_compiles_closed_cited_partial_delivery(tmp_pat
 
 
 def test_live_repository_workflow_rejects_unknown_model_evidence(tmp_path) -> None:
-    workflow, _, provider_transport = build_workflow(
+    workflow, _, provider_transport, _ = build_workflow(
         tmp_path,
         {
             "claims": [
@@ -162,3 +168,21 @@ def test_live_repository_workflow_rejects_unknown_model_evidence(tmp_path) -> No
         workflow.execute("pi coding agent")
 
     assert provider_transport.calls == 1
+
+
+def test_live_repository_workflow_extracts_ascii_entity_terms_from_chinese_question(
+    tmp_path,
+) -> None:
+    workflow, _, _, github_transport = build_workflow(
+        tmp_path,
+        {
+            "claims": [
+                {"text": "Pi self-identifies in README.", "evidence_ids": ["github-repository-readme"]}
+            ],
+            "limitations": [],
+        },
+    )
+
+    workflow.execute("定位 pi coding agent 的规范名称、维护者、官方仓库 URL 和公开实现入口")
+
+    assert "q=pi+coding+agent" in github_transport.urls[0]
