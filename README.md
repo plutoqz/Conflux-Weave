@@ -1,12 +1,12 @@
 # Conflux-Weave
 
 Conflux-Weave is being initialized as an evidence-native, local-first Research
-Agent Workbench. W0 is validated offline and the W1 scope is frozen, but no
-Research Query product path or live capability has been delivered. W1.1 exposes
-a deterministic runtime validation command and W1.2 exposes local document
-import/report preparation. W1.3 adds explicit GitHub repository discovery and
-source registration; it performs network calls only when invoked and never calls
-a model Provider.
+Agent Workbench. W0 and W1.0-W1.4 are validated at their stated evidence
+boundaries, but no end-to-end Research Query capability has been delivered.
+W1.1 exposes a deterministic runtime validation command, W1.2 exposes local
+document import/report preparation, and W1.3 adds explicit GitHub repository
+discovery and source registration. W1.4 adds offline outcome and citation
+validation; it never calls a network or model Provider.
 
 ## Project entry points
 
@@ -35,6 +35,20 @@ uv run --frozen conflux-weave validate-workflow --query "validate fixed workflow
 
 The command reports `validation_only: true`; it does not produce a research
 answer or a user Delivery.
+
+Validate W1.4 missing-input, no-answer, partial-source, source-failure, and
+budget-failure semantics without external calls:
+
+```powershell
+uv run --frozen conflux-weave validate-outcome --query "缺少综述" --scenario missing_input
+uv run --frozen conflux-weave validate-outcome --query "严格检索" --scenario no_answer
+uv run --frozen conflux-weave validate-outcome --query "来源不完整" --scenario source_partial
+uv run --frozen conflux-weave validate-outcome --query "来源失败" --scenario source_failure
+uv run --frozen conflux-weave validate-outcome --query "预算耗尽" --scenario budget_failure
+```
+
+These commands validate deterministic contracts only. In particular, the
+budget scenario does not implement or prove live token or cost metering.
 
 Discover public GitHub repository candidates without treating rank as official
 identity proof:

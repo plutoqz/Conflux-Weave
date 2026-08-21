@@ -31,6 +31,7 @@ class RunStatus(StrEnum):
 class StepStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
+    WAITING_FOR_USER = "waiting_for_user"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"

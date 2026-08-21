@@ -5,6 +5,7 @@ from conflux_weave.core import (
     DeliveryRecord,
     InvalidRunTransition,
     RunStatus,
+    StepStatus,
     UserInputKind,
     UserInputRequest,
     allowed_targets,
@@ -88,3 +89,7 @@ def test_user_input_request_requires_actionable_input() -> None:
         created_at="2026-08-21T00:00:00Z",
     )
     assert request.requested_inputs == ("review_document",)
+
+
+def test_step_can_explicitly_wait_for_user_input() -> None:
+    assert StepStatus.WAITING_FOR_USER.value == "waiting_for_user"

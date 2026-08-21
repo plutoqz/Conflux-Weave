@@ -30,7 +30,8 @@ def test_markdown_import_creates_snapshot_segments_and_citations(tmp_path) -> No
         "start_line": 2,
         "end_line": 4,
     }
-    assert len(report.evidence) == len(report.citations) == 2
+    assert len(report.claims) == len(report.evidence) == len(report.citations) == 2
+    assert report.claims[0].claim_id == report.citations[0].claim_id
     assert report.citations[0].evidence_id == report.evidence[0].evidence_id
     markdown = store.read_bytes(report.report_artifact).decode("utf-8")
     assert "阅读笔记" in markdown

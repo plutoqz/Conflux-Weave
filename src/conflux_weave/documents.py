@@ -10,7 +10,14 @@ from pathlib import Path
 
 from pypdf import PdfReader
 
-from conflux_weave.evidence import ArtifactRef, Citation, EvidenceRef, SourceSnapshot
+from conflux_weave.evidence import (
+    ArtifactRef,
+    Citation,
+    Claim,
+    EvidenceRef,
+    SourceSnapshot,
+    require_closed_citations,
+)
 from conflux_weave.runtime.artifacts import LocalArtifactStore
 
 
@@ -41,6 +48,7 @@ class ImportedDocument:
 @dataclass(frozen=True, slots=True)
 class DocumentReport:
     report_artifact: ArtifactRef
+    claims: tuple[Claim, ...]
     evidence: tuple[EvidenceRef, ...]
     citations: tuple[Citation, ...]
 
@@ -133,6 +141,7 @@ class LocalDocumentImporter:
         title: str | None = None,
         producer_step_id: str = "step-document-report",
     ) -> DocumentReport:
+        claims: list[Claim] = []
         evidence: list[EvidenceRef] = []
         citations: list[Citation] = []
         lines = [
@@ -152,6 +161,15 @@ class LocalDocumentImporter:
             evidence_id = f"{document.document_id}:evidence-{segment.ordinal:04d}"
             claim_id = f"{document.document_id}:claim-{segment.ordinal:04d}"
             citation_id = f"{document.document_id}:citation-{segment.ordinal:04d}"
+            claims.append(
+                Claim(
+                    claim_id=claim_id,
+                    text=segment.text,
+                    claim_type="source_excerpt",
+                    importance="supporting",
+                    generated_by_step=producer_step_id,
+                )
+            )
             evidence.append(
                 EvidenceRef(
                     evidence_id=evidence_id,
@@ -180,6 +198,10 @@ class LocalDocumentImporter:
                     "",
                 ]
             )
+        closed_claims = tuple(claims)
+        closed_evidence = tuple(evidence)
+        closed_citations = tuple(citations)
+        require_closed_citations(closed_claims, closed_evidence, closed_citations)
         report = ("\n".join(lines).rstrip() + "\n").encode("utf-8")
         report_artifact = self.artifact_store.put_bytes(
             report,
@@ -187,7 +209,12 @@ class LocalDocumentImporter:
             producer_step_id=producer_step_id,
             schema_version="conflux-weave.document-report.v1",
         )
-        return DocumentReport(report_artifact, tuple(evidence), tuple(citations))
+        return DocumentReport(
+            report_artifact,
+            closed_claims,
+            closed_evidence,
+            closed_citations,
+        )
 
 
 def _parse_markdown(text: str, document_id: str) -> list[DocumentSegment]:

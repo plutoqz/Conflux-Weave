@@ -9,7 +9,12 @@ from pathlib import Path
 from typing import Sequence
 
 from conflux_weave.documents import LocalDocumentImporter, UnsupportedDocumentError
-from conflux_weave.runtime import FixedValidationWorkflow, LocalArtifactStore
+from conflux_weave.runtime import (
+    FixedOutcomeWorkflow,
+    FixedValidationWorkflow,
+    LocalArtifactStore,
+    OutcomeScenario,
+)
 from conflux_weave.search import GitHubRepositorySearchAdapter, SearchPortError
 
 
@@ -18,6 +23,12 @@ def _print_json(value: object, *, indent: int | None = 2) -> None:
     encoding = sys.stdout.encoding or "utf-8"
     safe_text = text.encode(encoding, errors="backslashreplace").decode(encoding)
     print(safe_text)
+
+
+def _configure_stdout() -> None:
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if callable(reconfigure):
+        reconfigure(encoding="utf-8", errors="backslashreplace")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -58,12 +69,78 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("var") / "artifacts" / "sha256",
     )
+    outcome = subparsers.add_parser(
+        "validate-outcome",
+        help="validate W1.4 user-visible outcome semantics without external calls",
+    )
+    outcome.add_argument("--query", required=True)
+    outcome.add_argument("--scenario", required=True, choices=[item.value for item in OutcomeScenario])
+    outcome.add_argument(
+        "--artifact-root",
+        type=Path,
+        default=Path("var") / "artifacts" / "sha256",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    _configure_stdout()
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.command == "validate-outcome":
+        try:
+            execution = FixedOutcomeWorkflow(
+                LocalArtifactStore(args.artifact_root)
+            ).execute(args.query, OutcomeScenario(args.scenario))
+        except ValueError as exc:
+            _print_json(
+                {
+                    "status": "failed",
+                    "error_code": "outcome_input_invalid",
+                    "message": str(exc),
+                }
+            )
+            return 2
+        _print_json(
+            {
+                "run_id": execution.final_run.run_id,
+                "run_status": execution.final_run.status.value,
+                "step_status": execution.final_step.status.value,
+                "scenario": args.scenario,
+                "artifact_ref": execution.artifact.artifact_id,
+                "delivery_disposition": (
+                    execution.delivery.disposition.value
+                    if execution.delivery
+                    else None
+                ),
+                "user_input_request": (
+                    {
+                        "reason_code": execution.user_input_request.reason_code,
+                        "prompt": execution.user_input_request.prompt,
+                        "requested_inputs": list(
+                            execution.user_input_request.requested_inputs
+                        ),
+                    }
+                    if execution.user_input_request
+                    else None
+                ),
+                "error": (
+                    {
+                        "code": execution.error.code,
+                        "category": execution.error.category.value,
+                        "retryable": execution.error.retryable,
+                        "recovery_action": execution.error.recovery_action,
+                    }
+                    if execution.error
+                    else None
+                ),
+                "validation_only": True,
+                "network_called": False,
+                "provider_called": False,
+            }
+        )
+        return 1 if execution.error else 0
 
     if args.command == "search-github":
         try:
