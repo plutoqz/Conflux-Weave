@@ -186,3 +186,55 @@ def test_live_repository_workflow_extracts_ascii_entity_terms_from_chinese_quest
     workflow.execute("定位 pi coding agent 的规范名称、维护者、官方仓库 URL 和公开实现入口")
 
     assert "q=pi+coding+agent" in github_transport.urls[0]
+
+
+def test_live_repository_workflow_rejects_provider_usage_over_frozen_budget(
+    tmp_path,
+) -> None:
+    workflow, _, provider_transport, _ = build_workflow(
+        tmp_path,
+        {
+            "claims": [
+                {"text": "Pi self-identifies in README.", "evidence_ids": ["github-repository-readme"]}
+            ],
+            "limitations": [],
+        },
+    )
+    original_post = provider_transport.post
+
+    def over_budget_post(*args, **kwargs):
+        response = original_post(*args, **kwargs)
+        payload = json.loads(response.body)
+        payload["usage"]["completion_tokens"] = 2049
+        payload["usage"]["total_tokens"] = 2149
+        return ProviderHttpResponse(
+            response.status_code,
+            json.dumps(payload).encode(),
+            response.headers,
+        )
+
+    provider_transport.post = over_budget_post
+
+    with pytest.raises(LiveResearchValidationError) as captured:
+        workflow.execute("pi coding agent")
+
+    assert captured.value.code == "budget_exhausted"
+    assert captured.value.request_artifact_ref
+    assert captured.value.response_artifact_ref
+
+
+def test_live_repository_workflow_rejects_official_wording_without_independent_proof(
+    tmp_path,
+) -> None:
+    workflow, _, _, _ = build_workflow(
+        tmp_path,
+        {
+            "claims": [
+                {"text": "官方仓库 URL 是 https://github.com/example/pi。", "evidence_ids": ["github-repository-metadata"]}
+            ],
+            "limitations": [],
+        },
+    )
+
+    with pytest.raises(LiveResearchValidationError, match="official repository"):
+        workflow.execute("pi coding agent")

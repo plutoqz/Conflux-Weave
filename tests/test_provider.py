@@ -55,12 +55,18 @@ def test_provider_adapter_records_request_and_raw_response_without_secret(tmp_pa
         store,
         ProviderConfig("https://provider.example/v1", "fixture-secret", "fixture-model"),
         transport=transport,
-    ).complete(system_prompt="system", user_prompt="user", max_output_tokens=128)
+    ).complete(
+        system_prompt="system",
+        user_prompt="user",
+        max_output_tokens=128,
+        enable_thinking=False,
+    )
 
     assert result.content == "fixture answer"
     assert result.total_tokens == 16
     request_payload = json.loads(store.read_bytes(result.request_artifact))
     assert request_payload["request"]["model"] == "fixture-model"
+    assert request_payload["request"]["enable_thinking"] is False
     assert request_payload["automatic_retry"] is False
     assert b"fixture-secret" not in store.read_bytes(result.request_artifact)
     assert transport.calls[0][1]["Authorization"] == "Bearer fixture-secret"

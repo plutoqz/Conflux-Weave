@@ -44,7 +44,7 @@ MAX_OUTPUT_TOKENS = 2_048
 SYSTEM_PROMPT = """你是证据约束的研究助手。你只能使用用户消息中的 Evidence，不得使用参数化知识补充外部事实。
 输出一个 JSON object，且只能包含 claims 和 limitations：
 {"claims":[{"text":"中文声明","evidence_ids":["evidence id"]}],"limitations":["中文限制"]}
-每条声明必须是可由所列 Evidence 直接支持的原子事实。不要输出 Markdown，不要输出代码围栏，不要把 GitHub 搜索排名表述为官方性证明。"""
+每条声明必须是可由所列 Evidence 直接支持的原子事实。不要输出 Markdown，不要输出代码围栏，不要把 GitHub 搜索排名表述为官方性证明。仓库 URL 只能表述为“规范候选 URL”或“README 自述所在仓库 URL”，不得称为“官方仓库 URL”。"""
 
 
 class LiveResearchValidationError(ValueError):
@@ -141,6 +141,7 @@ class FixedRepositoryIdentityWorkflow:
                     "temperature": 0.0,
                     "max_output_tokens": MAX_OUTPUT_TOKENS,
                     "response_format": "json_object",
+                    "enable_thinking": False,
                 },
                 "budget_limits": {
                     "wall_clock_seconds": budget.wall_clock_seconds,
@@ -207,8 +208,20 @@ class FixedRepositoryIdentityWorkflow:
             max_output_tokens=MAX_OUTPUT_TOKENS,
             temperature=0.0,
             json_object=True,
+            enable_thinking=False,
             producer_step_id=step_id,
         )
+        if completion.output_tokens > MAX_OUTPUT_TOKENS:
+            raise LiveResearchValidationError(
+                (
+                    "Provider-reported output usage exceeded the frozen budget: "
+                    f"{completion.output_tokens}/{MAX_OUTPUT_TOKENS}"
+                ),
+                code="budget_exhausted",
+                request_artifact_ref=completion.request_artifact.artifact_id,
+                response_artifact_ref=completion.response_artifact.artifact_id,
+                recovery_action="检查 Provider token 语义并重新冻结预算后创建新 Run。",
+            )
         try:
             claims, citations, model_limitations = _parse_model_claims(
                 completion.content, evidence, step_id
@@ -405,6 +418,10 @@ def _parse_model_claims(
         evidence_ids = raw_claim.get("evidence_ids")
         if not isinstance(text, str) or not text.strip():
             raise LiveResearchValidationError("claim text must be non-empty")
+        if "官方仓库" in text:
+            raise LiveResearchValidationError(
+                "claim exceeds evidence boundary by asserting an official repository"
+            )
         if not isinstance(evidence_ids, list) or not evidence_ids:
             raise LiveResearchValidationError("each claim requires evidence_ids")
         if not all(isinstance(item, str) and item in allowed_evidence for item in evidence_ids):

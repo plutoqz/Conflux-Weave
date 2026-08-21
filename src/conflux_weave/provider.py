@@ -165,6 +165,7 @@ class OpenAICompatibleChatAdapter:
         max_output_tokens: int = 2048,
         temperature: float = 0.0,
         json_object: bool = False,
+        enable_thinking: bool | None = None,
         producer_step_id: str = "step-provider-chat",
     ) -> ChatCompletionResult:
         if not system_prompt.strip() or not user_prompt.strip():
@@ -186,6 +187,8 @@ class OpenAICompatibleChatAdapter:
         }
         if json_object:
             payload["response_format"] = {"type": "json_object"}
+        if enable_thinking is not None:
+            payload["enable_thinking"] = enable_thinking
         request_artifact = self.artifact_store.put_json(
             {
                 "schema_version": PROVIDER_SCHEMA_VERSION,
