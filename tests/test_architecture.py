@@ -69,7 +69,8 @@ def test_core_only_imports_its_own_project_namespace() -> None:
 def test_w1_runtime_shell_has_no_network_or_optional_framework_dependency() -> None:
     violations: list[str] = []
     paths = list((PACKAGE_ROOT / "runtime").rglob("*.py")) + [
-        PACKAGE_ROOT / "cli.py"
+        PACKAGE_ROOT / "cli.py",
+        PACKAGE_ROOT / "search.py",
     ]
     for path in paths:
         for module in imported_modules(path):

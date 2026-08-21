@@ -4,7 +4,9 @@ Conflux-Weave is being initialized as an evidence-native, local-first Research
 Agent Workbench. W0 is validated offline and the W1 scope is frozen, but no
 Research Query product path or live capability has been delivered. W1.1 exposes
 a deterministic runtime validation command and W1.2 exposes local document
-import/report preparation; neither performs network or model calls.
+import/report preparation. W1.3 adds explicit GitHub repository discovery and
+source registration; it performs network calls only when invoked and never calls
+a model Provider.
 
 ## Project entry points
 
@@ -33,6 +35,17 @@ uv run --frozen conflux-weave validate-workflow --query "validate fixed workflow
 
 The command reports `validation_only: true`; it does not produce a research
 answer or a user Delivery.
+
+Discover public GitHub repository candidates without treating rank as official
+identity proof:
+
+```powershell
+uv run --frozen conflux-weave search-github --query "pi coding agent" --limit 10
+uv run --frozen conflux-weave search-github --query "pi coding agent" --limit 10 --select "owner/repo"
+```
+
+`GITHUB_TOKEN` is optional and read only from the local environment. It is never
+written to an Artifact or repository file.
 
 Local databases, artifacts, indexes, evaluation outputs, secrets, and private
 research data must not be committed. See `var/README.md` for the planned runtime
