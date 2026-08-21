@@ -1,0 +1,209 @@
+{
+  "scope_version": "1.0.0",
+  "status": "scope_frozen",
+  "frozen_at": "2026-08-21",
+  "design_basis": "docs/design/current/Conflux-Weave设计文档v0.2.md",
+  "verification_base_revision": "f8e25fedc0646e7bd287e06cd9ae138a0a210416",
+  "milestone": {
+    "id": "W1",
+    "name": "本人可用的最小 Research Query 垂直切片",
+    "goal": "研究问题 -> 一个已登记来源 -> 检索或读取 -> Evidence -> 声明级引用回答",
+    "evidence_target": "validated_live",
+    "implementation_authorized_by_this_freeze": false
+  },
+  "selected_approach": {
+    "id": "B",
+    "name": "bounded_dual_ingress_fixed_workflow",
+    "user_entry": "local_cli",
+    "workflow": "single_fixed_research_query_workflow",
+    "source_ingress": [
+      "local_document",
+      "github_repository_search"
+    ],
+    "registered_source_identity_limit_per_run": 1,
+    "discovery_responses_are_artifacts_not_evidence": true,
+    "runtime_mode": "single_process_synchronous",
+    "state_mode": "in_process_lifecycle_plus_immutable_artifacts",
+    "reason": "同时验证本地材料和系统自主定位官方仓库两类核心需求，但限制为单流程、单一登记来源身份，避免提前建设多源编排平台。"
+  },
+  "rejected_approaches": [
+    {
+      "id": "A",
+      "name": "local_document_only",
+      "reason": "实现最小，但不能验证用户已冻结的自主定位具体项目和官方仓库要求。"
+    },
+    {
+      "id": "C",
+      "name": "multi_source_multi_agent_workbench",
+      "reason": "可覆盖完整综述和四对象比较，但会在首个真实任务前引入多源规划、角色编排和复杂恢复。"
+    }
+  ],
+  "in_scope": [
+    "一个本地 CLI 用户入口",
+    "一个同步 Fixed Workflow",
+    "最小 Task/Run/Step 生命周期和结构化失败",
+    "PDF 与 UTF-8 Markdown 本地文档导入路径",
+    "一个用于官方 GitHub 仓库身份定位的 SearchPort Adapter",
+    "一个在 live validation 前明确选择的 ModelPort Adapter",
+    "SourceSnapshot、Evidence、Claim、Citation 和 Markdown 报告闭环",
+    "内容寻址的 Source/Artifact 存放和可打开引用",
+    "确定性状态、引用、缺失输入、无答案和来源失败测试",
+    "两次经授权的真实端到端查询"
+  ],
+  "out_of_scope": [
+    "Web UI、FastAPI、Worker、队列、SSE 和多用户服务",
+    "SQLite 权威状态、lease、heartbeat、跨进程恢复和历史 Runs",
+    "多 Agent、Planner、LangGraph 和动态 Workflow",
+    "多源综合比较、完整论文雷达、Dense/RRF/Reranker 和 GraphRAG",
+    "旧 Conflux Runtime、Chroma 索引或历史结果导入",
+    "Phoenix、Ragas、DeepEval 作为运行依赖或验收前置",
+    "付费评测、无预算上限的 Provider 调用和生产部署"
+  ],
+  "ports": {
+    "required_by_w1_consumers": [
+      "ModelPort",
+      "SearchPort",
+      "DocumentFetchPort",
+      "ParserPort",
+      "ArtifactStorePort"
+    ],
+    "deferred": [
+      "RetrieverPort",
+      "RerankerPort",
+      "EvaluatorPort",
+      "WorkflowStrategy"
+    ],
+    "rule": "只实现 W1 Fixed Workflow 实际调用的方法；不为假设中的第二个 Adapter 预留通用框架。"
+  },
+  "data_contract": {
+    "frozen_dataset": {
+      "id": "personal-research-v1",
+      "version": "1.0.0",
+      "manifest_path": "datasets/regression/personal-research-v1.0.0/manifest.json",
+      "manifest_sha256_lf": "2cd14178bf3d3aeb46ce58c0ae49a69670a41cf3eb062589cc1263c14032cefb"
+    },
+    "runtime_paths": {
+      "source_and_artifact": "var/artifacts/sha256/",
+      "import_staging": "var/imports/",
+      "delivery": "var/exports/",
+      "evaluation_evidence": "var/evaluations/"
+    },
+    "git_boundary": "真实文档、Provider 原始响应、运行报告、数据库、索引和 Secret 不进入 Git。",
+    "source_snapshot": "原始内容或不可变响应按 SHA-256 存放，记录来源身份、获取时间、媒体类型、内容 hash 和访问限制。",
+    "citation_locator": "PDF 使用页码并保留文本片段 hash；Markdown 使用标题路径和行范围；GitHub 搜索结果使用规范 URL、仓库身份、查询时间和响应片段 hash。"
+  },
+  "validation_cases": [
+    {
+      "validation_id": "W1-LOCAL-SUCCESS",
+      "kind": "deterministic_and_live",
+      "maps_to_case_ids": ["CW-PR-006"],
+      "input": "用户明确提供且授权处理的一篇综述 PDF 或 Markdown；live 前必须记录稳定身份和内容 hash。",
+      "expected": "中文结构化阅读笔记，原文结论可定位；没有获准的第二来源时，将扩展点写成待补证问题而不是外部事实。",
+      "live_input_status": "required_before_live_validation"
+    },
+    {
+      "validation_id": "W1-REPOSITORY-IDENTITY",
+      "kind": "deterministic_and_live",
+      "maps_to_case_ids": ["CW-PR-002"],
+      "input": "定位 pi coding agent 的官方仓库，说明规范名称、维护者、官方 URL 和可公开证实的实现入口；不执行四对象完整比较。",
+      "expected": "系统自行检索并保留候选排序和消歧证据，只对官方身份与公开实现入口作有来源的陈述。",
+      "case_completion_boundary": "这是 CW-PR-002 的 W1 身份解析切片，不得标记原完整案例通过。"
+    },
+    {
+      "validation_id": "W1-MISSING-DOCUMENT",
+      "kind": "deterministic",
+      "maps_to_case_ids": ["CW-PR-011"],
+      "expected": "waiting_for_user，说明缺失输入和恢复动作，不生成摘要或引用。"
+    },
+    {
+      "validation_id": "W1-NO-ANSWER",
+      "kind": "deterministic",
+      "maps_to_case_ids": ["CW-PR-010"],
+      "expected": "在单来源或搜索结果不满足硬约束时返回 no_answer，不静默放宽条件。",
+      "case_completion_boundary": "只验证无答案语义，不声明完成 CW-PR-010 的全面检索。"
+    },
+    {
+      "validation_id": "W1-SOURCE-FAILURE",
+      "kind": "deterministic",
+      "maps_to_case_ids": ["CW-PR-012"],
+      "expected": "来源失败被结构化记录；已有 Evidence 可形成 partial，否则失败且无伪引用。",
+      "case_completion_boundary": "只验证来源失败语义，不声明完成四对象比较。"
+    }
+  ],
+  "live_tasks": [
+    {
+      "live_id": "W1-LIVE-01",
+      "validation_id": "W1-LOCAL-SUCCESS",
+      "required_input": "用户提供并授权的一篇真实综述 PDF 或 Markdown",
+      "use_decision": "阅读笔记被用户用于后续阅读、综述或项目判断，并记录用途。",
+      "stop_if": "未提供授权文档、解析不完整且无法定位关键结论，或 Provider 未配置。"
+    },
+    {
+      "live_id": "W1-LIVE-02",
+      "validation_id": "W1-REPOSITORY-IDENTITY",
+      "required_input": "冻结的 pi coding agent 仓库身份定位问题",
+      "use_decision": "结果作为后续四对象比较的身份基线，并记录接受或驳回决定。",
+      "stop_if": "网络未授权、候选无法消歧、GitHub API 不可用且无获准替代来源，或 Provider 未配置。"
+    }
+  ],
+  "authorization": {
+    "scope_and_plan_changes": "authorized_by_current_user_instruction",
+    "implementation": "not_authorized_by_this_acceptance_point",
+    "deterministic_fixtures": "allowed_after_implementation_authorization",
+    "tracked_repository_documents": "allowed_for_offline_parser_tests_only",
+    "user_private_documents": "explicit_per_document_authorization_required",
+    "public_network_search": "explicit_live_run_authorization_required",
+    "model_provider_calls": "provider_model_budget_and_live_run_authorization_required",
+    "paid_services": "not_authorized",
+    "secrets": "local_environment_only_never_git_trace_or_artifact"
+  },
+  "milestone_completion_criteria": [
+    "用户不查看源码即可通过 CLI 提交、等待、查看中文回答并打开引用定位。",
+    "本地文档和官方仓库搜索两条入口均形成不可变 SourceSnapshot、Evidence、Claim、Citation 和报告。",
+    "缺失输入、无答案和来源失败不会生成伪引用，并提供可行动的恢复或降级结果。",
+    "Phoenix、Ragas、DeepEval 和 LangGraph 未安装时核心链路及验证仍可运行。",
+    "两次真实端到端查询保留模型、Provider、Prompt、预算、原始响应、失败和产物 hash。",
+    "至少一份真实结果被用户接受并用于阅读笔记、综述或项目判断。"
+  ],
+  "acceptance_points": [
+    {
+      "id": "W1.0",
+      "name": "范围、真实输入与授权冻结",
+      "status": "validated_offline",
+      "evidence": "本文件、W1 实施方案和冻结案例映射"
+    },
+    {
+      "id": "W1.1",
+      "name": "CLI、Fixed Workflow 与最小状态离线骨架",
+      "status": "pending"
+    },
+    {
+      "id": "W1.2",
+      "name": "本地文档 Source/Evidence/Citation 闭环",
+      "status": "pending"
+    },
+    {
+      "id": "W1.3",
+      "name": "官方仓库 SearchPort Adapter",
+      "status": "pending"
+    },
+    {
+      "id": "W1.4",
+      "name": "失败语义、引用确定性与可选框架解耦",
+      "status": "pending"
+    },
+    {
+      "id": "W1.5",
+      "name": "两次真实端到端使用验收",
+      "status": "pending"
+    }
+  ],
+  "next_acceptance_point": "W1.1",
+  "stop_conditions": [
+    "需要多源综合、完整四对象比较、论文雷达或多 Agent 才能让首个真实任务通过。",
+    "需要把 SQLite、服务端队列、Web UI、LangGraph 或评测框架变成黄金路径前置依赖。",
+    "需要复制旧 Conflux 模块、Runtime DB、Chroma 索引或历史结果。",
+    "连续两次修改只增加 Prompt、重试或案例特判而未解决结构性失败。",
+    "真实验证缺少用户文档授权、Provider/模型/预算或网络授权。"
+  ]
+}
