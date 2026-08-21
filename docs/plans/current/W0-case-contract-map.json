@@ -1,0 +1,56 @@
+{
+  "contract_map_version": "1.0.0",
+  "status": "frozen",
+  "created_at": "2026-08-21",
+  "dataset": {
+    "id": "personal-research-v1",
+    "version": "1.0.0",
+    "manifest_path": "datasets/regression/personal-research-v1.0.0/manifest.json",
+    "manifest_sha256_lf": "2cd14178bf3d3aeb46ce58c0ae49a69670a41cf3eb062589cc1263c14032cefb"
+  },
+  "stable_contracts": [
+    "TaskSpec",
+    "RunRecord",
+    "RunStatus",
+    "DeliveryRecord",
+    "DeliveryDisposition",
+    "UserInputRequest",
+    "ErrorRecord",
+    "ArtifactRef",
+    "SourceSnapshot",
+    "EvidenceRef",
+    "Claim",
+    "ClaimAssessment",
+    "EvidenceRelation",
+    "AssessmentVerdict",
+    "Citation"
+  ],
+  "case_mappings": [
+    {"case_id":"CW-PR-001","run_outcome":"succeeded","delivery_disposition":"complete","user_input_policy":"not_expected"},
+    {"case_id":"CW-PR-002","run_outcome":"succeeded","delivery_disposition":"complete","user_input_policy":"not_expected"},
+    {"case_id":"CW-PR-003","run_outcome":"succeeded","delivery_disposition":"complete","user_input_policy":"conditional"},
+    {"case_id":"CW-PR-004","run_outcome":"succeeded","delivery_disposition":"complete","user_input_policy":"conditional"},
+    {"case_id":"CW-PR-005","run_outcome":"succeeded","delivery_disposition":"complete","user_input_policy":"conditional"},
+    {"case_id":"CW-PR-006","run_outcome":"succeeded","delivery_disposition":"complete","user_input_policy":"conditional"},
+    {"case_id":"CW-PR-007","run_outcome":"succeeded","delivery_disposition":"complete","user_input_policy":"conditional"},
+    {"case_id":"CW-PR-008","run_outcome":"succeeded","delivery_disposition":"complete","user_input_policy":"conditional"},
+    {"case_id":"CW-PR-009","run_outcome":"succeeded","delivery_disposition":"complete","user_input_policy":"not_expected"},
+    {"case_id":"CW-PR-010","run_outcome":"succeeded","delivery_disposition":"no_answer","user_input_policy":"conditional"},
+    {"case_id":"CW-PR-011","run_outcome":"waiting_for_user","delivery_disposition":null,"user_input_policy":"required"},
+    {"case_id":"CW-PR-012","run_outcome":"partial","delivery_disposition":"partial","user_input_policy":"conditional"}
+  ],
+  "decisions": [
+    "RunStatus represents operational lifecycle; DeliveryDisposition represents user-visible outcome.",
+    "A well-supported no-answer result is a successful Run with a no_answer DeliveryDisposition.",
+    "A partial Run requires a committed delivery that lists unmet criteria and limitations.",
+    "Missing required input creates a UserInputRequest and waiting_for_user state, not a fabricated answer.",
+    "Evidence support, contradiction, context, and insufficiency are typed separately from assessment verdict."
+  ],
+  "deferred_until_consumer": [
+    "project identity resolution artifact schema",
+    "retrieval and source ranking strategy",
+    "Evidence Locator v1 typed variants",
+    "API and persistence schemas",
+    "workflow and Provider contracts"
+  ]
+}

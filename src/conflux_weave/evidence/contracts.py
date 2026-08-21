@@ -1,7 +1,21 @@
 """Draft W0 contracts for immutable artifacts and claim-level evidence."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
+
+
+class EvidenceRelation(StrEnum):
+    SUPPORTS = "supports"
+    CONTRADICTS = "contradicts"
+    CONTEXT = "context"
+    INSUFFICIENT = "insufficient"
+
+
+class AssessmentVerdict(StrEnum):
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    UNCERTAIN = "uncertain"
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,11 +59,11 @@ class Claim:
 @dataclass(frozen=True, slots=True)
 class ClaimAssessment:
     claim_id: str
-    evidence_ids: tuple[str, ...] = field(default_factory=tuple)
-    relation: str = ""
-    verdict: str = ""
-    rationale: str = ""
-    evaluator_ref: str = ""
+    evidence_ids: tuple[str, ...]
+    relation: EvidenceRelation
+    verdict: AssessmentVerdict
+    rationale: str
+    evaluator_ref: str
 
 
 @dataclass(frozen=True, slots=True)
