@@ -39,14 +39,15 @@ REVIEW_SCHEMA_VERSION = "conflux-weave.review-reading-note-live.v1"
 REVIEW_PROMPT_VERSION = "review-reading-note-zh-v1"
 MAX_OUTPUT_TOKENS = 2048
 MAX_CONTEXT_CHARS = 42_000
+MAX_EVIDENCE_CHARS = 2_300
 SELECTED_PAGES = (1, 4, 7, 9, 10, 19, 23, 25, 27, 33, 39, 40, 48, 50, 67, 71)
 
 
 SYSTEM_PROMPT = """你是证据约束的中文论文阅读助手。只能使用用户消息中的 PDF Evidence，不得用参数化知识补充论文外事实。
 输出一个 JSON object，只能包含：title、executive_summary、key_points、terms、omitted_or_underdeveloped、implications、limitations。
 格式：
-{"title":"中文标题","executive_summary":"紧凑摘要","key_points":[{"text":"观点","evidence_ids":["pdf-page-01"]}],"terms":[{"term":"术语","explanation":"通俗解释","evidence_ids":["pdf-page-01"]}],"omitted_or_underdeveloped":[{"text":"文章略过或证据不足的点","evidence_ids":["pdf-page-01"]}],"implications":[{"text":"对研究工程的启发","evidence_ids":["pdf-page-01"]}],"limitations":["阅读覆盖限制"]}
-每个 key_points、terms、omitted_or_underdeveloped、implications 项都必须引用一个或多个给定 Evidence ID。不要声称未出现在 Evidence 中的论文事实；不要编造页码或参考文献。"""
+{"title":"中文标题","executive_summary":{"text":"紧凑摘要","evidence_ids":["pdf-page-01"]},"key_points":[{"text":"观点","evidence_ids":["pdf-page-01"]}],"terms":[{"term":"术语","explanation":"通俗解释","evidence_ids":["pdf-page-01"]}],"omitted_or_underdeveloped":[{"text":"文章略过或证据不足的点","evidence_ids":["pdf-page-01"]}],"implications":[{"text":"对研究工程的启发","evidence_ids":["pdf-page-01"]}],"limitations":["阅读覆盖限制"]}
+executive_summary 和每个 key_points、terms、omitted_or_underdeveloped、implications 项都必须引用一个或多个给定 Evidence ID。不要声称未出现在 Evidence 中的论文事实；不要编造页码或参考文献。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -308,9 +309,13 @@ def _build_evidence(
         EvidenceRef(
             evidence_id=f"pdf-page-{int(segment.locator['page']):02d}",
             source_snapshot_id=source_snapshot_id,
-            locator=segment.locator,
-            quote=segment.text,
-            extraction_method="pypdf-page-extraction-v1",
+            locator={
+                **segment.locator,
+                "start_char": 0,
+                "end_char": min(len(segment.text), MAX_EVIDENCE_CHARS),
+            },
+            quote=segment.text[:MAX_EVIDENCE_CHARS],
+            extraction_method="pypdf-page-prefix-v1",
         )
         for segment in segments
     )
@@ -326,7 +331,10 @@ def _build_context(query: str, imported, evidence: tuple[EvidenceRef, ...]) -> s
         blocks.extend((f"\nEvidence ID: {item.evidence_id}", item.quote))
     context = "\n".join(blocks)
     if len(context) > MAX_CONTEXT_CHARS:
-        context = context[:MAX_CONTEXT_CHARS] + "\n[上下文在字符预算处截断]"
+        raise LiveResearchValidationError(
+            f"bounded Evidence context exceeds character budget: {len(context)}/{MAX_CONTEXT_CHARS}",
+            code="context_budget_exhausted",
+        )
     return context
 
 
@@ -339,10 +347,13 @@ def _parse_note(
         raise LiveResearchValidationError(f"model reading note is not valid JSON: {exc}") from exc
     if not isinstance(payload, dict):
         raise LiveResearchValidationError("model reading note root must be an object")
-    for key in ("title", "executive_summary"):
-        if not isinstance(payload.get(key), str) or not payload[key].strip():
-            raise LiveResearchValidationError(f"{key} must be a non-empty string")
+    if not isinstance(payload.get("title"), str) or not payload["title"].strip():
+        raise LiveResearchValidationError("title must be a non-empty string")
     allowed = {item.evidence_id for item in evidence}
+    summary = payload.get("executive_summary")
+    if not isinstance(summary, dict) or not isinstance(summary.get("text"), str):
+        raise LiveResearchValidationError("executive_summary must be an object with text")
+    _require_known_evidence_ids(summary, allowed, "executive_summary")
     for key in ("key_points", "terms", "omitted_or_underdeveloped", "implications"):
         items = payload.get(key)
         if not isinstance(items, list) or not items:
@@ -350,13 +361,23 @@ def _parse_note(
         for item in items:
             if not isinstance(item, dict) or not isinstance(item.get("text") or item.get("term"), str):
                 raise LiveResearchValidationError(f"invalid {key} item")
-            ids = item.get("evidence_ids")
-            if not isinstance(ids, list) or not ids or not all(isinstance(i, str) and i in allowed for i in ids):
-                raise LiveResearchValidationError(f"{key} item references unknown evidence")
+            _require_known_evidence_ids(item, allowed, f"{key} item")
     limitations = payload.get("limitations")
     if not isinstance(limitations, list) or not limitations or not all(isinstance(i, str) and i.strip() for i in limitations):
         raise LiveResearchValidationError("limitations must be a non-empty list")
     return payload
+
+
+def _require_known_evidence_ids(
+    item: dict[str, object], allowed: set[str], label: str
+) -> None:
+    ids = item.get("evidence_ids")
+    if (
+        not isinstance(ids, list)
+        or not ids
+        or not all(isinstance(value, str) and value in allowed for value in ids)
+    ):
+        raise LiveResearchValidationError(f"{label} references unknown evidence")
 
 
 def _render_report(
@@ -376,16 +397,38 @@ def _render_report(
         "",
         "## 执行摘要",
         "",
-        str(note["executive_summary"]),
-        "",
     ]
+    summary = note["executive_summary"]
+    summary_claim_id = "review-claim-0001"
+    claims.append(
+        Claim(
+            summary_claim_id,
+            str(summary["text"]),
+            "摘要",
+            "primary",
+            "step-review-reading-note",
+        )
+    )
+    summary_markers = []
+    index = 1
+    for evidence_id in summary["evidence_ids"]:
+        citations.append(
+            Citation(
+                f"review-citation-{index:04d}",
+                summary_claim_id,
+                evidence_id,
+                index,
+            )
+        )
+        summary_markers.append(f"[{index}]")
+        index += 1
+    lines.extend((f"{summary['text']} {' '.join(summary_markers)}", ""))
     section_map = (
         ("key_points", "核心观点", "观点"),
         ("terms", "专业名词解释", "术语"),
         ("omitted_or_underdeveloped", "文章略过或展开不足的点", "缺口"),
         ("implications", "对研究工程的启发", "启发"),
     )
-    index = 1
     evidence_by_id = {item.evidence_id: item for item in evidence}
     for key, heading, kind in section_map:
         lines.extend((f"## {heading}", ""))

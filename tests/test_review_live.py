@@ -10,7 +10,10 @@ class FakeProviderTransport:
     def post(self, url, *, headers, body, timeout_seconds):
         note = {
             "title": "Agent Harness 工程综述阅读笔记",
-            "executive_summary": "综述将 agent harness 作为围绕模型的系统工程对象，并用 ETCLOVG 组织设计空间。",
+            "executive_summary": {
+                "text": "综述将 agent harness 作为围绕模型的系统工程对象，并用 ETCLOVG 组织设计空间。",
+                "evidence_ids": ["pdf-page-01", "pdf-page-07"],
+            },
             "key_points": [
                 {"text": "ETCLOVG 将 Harness 分为 Execution、Tooling、Context、Lifecycle、Observability、Verification、Governance 七层。", "evidence_ids": ["pdf-page-07"]},
                 {"text": "评测应连接任务、执行前检查、受控执行和反馈闭环。", "evidence_ids": ["pdf-page-33"]},
@@ -58,7 +61,8 @@ def test_review_workflow_imports_pdf_and_compiles_page_citations(tmp_path, monke
     assert result.delivery.disposition is DeliveryDisposition.PARTIAL
     assert len(result.evidence) == len(SELECTED_PAGES)
     assert result.evidence[0].locator["page"] == 1
-    assert len(result.citations) == 5
+    assert len(result.citations) == 7
     report = store.read_bytes(result.report_artifact).decode()
     assert "ETCLOVG" in report
+    assert "执行摘要" in report and "[1] [2]" in report
     assert "PDF 第 7 页" in report
