@@ -47,7 +47,7 @@ def test_review_workflow_imports_pdf_and_compiles_page_citations(tmp_path, monke
         def __init__(self, source):
             self.pages = [FakePage(page) for page in range(1, 72)]
 
-    monkeypatch.setattr("pypdf.PdfReader", FakePdfReader)
+    monkeypatch.setattr("conflux_weave.documents.PdfReader", FakePdfReader)
     pdf_path = tmp_path / "review.pdf"
     pdf_path.write_bytes(b"%PDF-local-fixture")
     store = LocalArtifactStore(tmp_path / "artifacts")
