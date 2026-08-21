@@ -185,3 +185,38 @@ def test_registration_requires_an_exact_discovered_owner_and_repo(tmp_path) -> N
         adapter.register(result, full_name="unknown/pi-agent")
 
     assert captured.value.code == "github_candidate_not_selected"
+
+
+def test_fetch_readme_creates_content_addressed_source_snapshot(tmp_path) -> None:
+    adapter, store, _, _ = adapter_for(
+        tmp_path,
+        {"total_count": 1, "items": [repository_item()]},
+    )
+    candidate = adapter.search("pi coding agent", limit=1).candidates[0]
+    readme = b"# Pi Agent Harness\n\nRepository documentation.\n"
+    adapter.transport = RecordedTransport(
+        HttpResponse(200, readme, {"Content-Type": "text/markdown; charset=utf-8"})
+    )
+
+    result = adapter.fetch_readme(candidate)
+
+    assert store.read_bytes(result.readme_artifact) == readme
+    assert result.source_snapshot.source_type == "github_repository_readme"
+    assert result.source_snapshot.canonical_uri.endswith("/main/README.md")
+    snapshot = json.loads(store.read_bytes(result.snapshot_artifact))
+    assert snapshot["artifact_ref"] == result.readme_artifact.artifact_id
+
+
+def test_fetch_readme_failure_preserves_raw_response(tmp_path) -> None:
+    adapter, _, _, _ = adapter_for(
+        tmp_path,
+        {"total_count": 1, "items": [repository_item()]},
+    )
+    candidate = adapter.search("pi coding agent", limit=1).candidates[0]
+    adapter.transport = RecordedTransport(HttpResponse(404, b"missing", {}))
+
+    with pytest.raises(SearchPortError) as captured:
+        adapter.fetch_readme(candidate)
+
+    assert captured.value.code == "github_readme_failed"
+    assert captured.value.artifact_ref

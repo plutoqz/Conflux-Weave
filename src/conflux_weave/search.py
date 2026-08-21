@@ -113,6 +113,14 @@ class RegisteredRepository:
     discovery_manifest_ref: str
 
 
+@dataclass(frozen=True, slots=True)
+class RepositoryReadmeResult:
+    repository: RepositoryCandidate
+    source_snapshot: SourceSnapshot
+    readme_artifact: ArtifactRef
+    snapshot_artifact: ArtifactRef
+
+
 class GitHubRepositorySearchAdapter:
     def __init__(
         self,
@@ -313,6 +321,98 @@ class GitHubRepositorySearchAdapter:
             source_artifact=source_artifact,
             snapshot_artifact=snapshot_artifact,
             discovery_manifest_ref=result.manifest_artifact.artifact_id,
+        )
+
+    def fetch_readme(
+        self, candidate: RepositoryCandidate
+    ) -> RepositoryReadmeResult:
+        request_url = f"{GITHUB_API}/repos/{candidate.full_name}/readme"
+        headers = {
+            "Accept": "application/vnd.github.raw+json",
+            "X-GitHub-Api-Version": GITHUB_API_VERSION,
+            "User-Agent": "Conflux-Weave/0.0.1",
+        }
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        try:
+            response = self.transport.get(
+                request_url,
+                headers=headers,
+                timeout_seconds=self.timeout_seconds,
+            )
+        except SearchPortError as exc:
+            failure_artifact = self._store_failure(
+                query=candidate.full_name,
+                code=exc.code,
+                message=str(exc),
+                retryable=exc.retryable,
+                status_code=exc.status_code,
+            )
+            exc.artifact_ref = failure_artifact.artifact_id
+            exc.recovery_action = "检查 GitHub README 访问条件后显式创建新 Run。"
+            raise
+
+        readme_artifact = self.artifact_store.put_bytes(
+            response.body,
+            media_type=response.headers.get("Content-Type", "text/markdown"),
+            producer_step_id="step-github-readme",
+            schema_version="github-api.repository-readme.response",
+        )
+        if response.status_code != 200:
+            raise SearchPortError(
+                code="github_readme_failed",
+                message=f"GitHub README returned HTTP {response.status_code}",
+                retryable=response.status_code >= 500 or response.status_code in {403, 429},
+                status_code=response.status_code,
+                artifact_ref=readme_artifact.artifact_id,
+                recovery_action="检查仓库 README 和 GitHub 服务状态后显式创建新 Run。",
+            )
+        try:
+            response.body.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise SearchPortError(
+                code="github_readme_invalid",
+                message=f"GitHub README is not UTF-8: {exc}",
+                retryable=False,
+                artifact_ref=readme_artifact.artifact_id,
+                recovery_action="保留原始响应并检查 README 编码，不要从无效文本生成回答。",
+            ) from exc
+
+        digest = readme_artifact.content_hash.removeprefix("sha256:")
+        snapshot = SourceSnapshot(
+            source_id=(
+                "github-readme-"
+                + candidate.full_name.casefold().replace("/", "-")
+                + f"-{digest[:12]}"
+            ),
+            source_type="github_repository_readme",
+            canonical_uri=(
+                f"https://github.com/{candidate.full_name}/blob/"
+                f"{candidate.default_branch}/README.md"
+            ),
+            acquired_at=self.acquired_at,
+            content_hash=readme_artifact.content_hash,
+            artifact_ref=readme_artifact.artifact_id,
+        )
+        snapshot_artifact = self.artifact_store.put_json(
+            {
+                "schema_version": "conflux-weave.source-snapshot.v1",
+                "source_id": snapshot.source_id,
+                "source_type": snapshot.source_type,
+                "canonical_uri": snapshot.canonical_uri,
+                "acquired_at": snapshot.acquired_at,
+                "content_hash": snapshot.content_hash,
+                "artifact_ref": snapshot.artifact_ref,
+                "repository": candidate.full_name,
+            },
+            producer_step_id="step-github-readme",
+            schema_version="conflux-weave.source-snapshot.v1",
+        )
+        return RepositoryReadmeResult(
+            repository=candidate,
+            source_snapshot=snapshot,
+            readme_artifact=readme_artifact,
+            snapshot_artifact=snapshot_artifact,
         )
 
     def _decode_response(

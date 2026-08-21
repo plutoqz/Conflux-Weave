@@ -4,11 +4,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Sequence
 
 from conflux_weave.documents import LocalDocumentImporter, UnsupportedDocumentError
+from conflux_weave.live_research import (
+    FixedRepositoryIdentityWorkflow,
+    LiveResearchValidationError,
+)
+from conflux_weave.provider import (
+    OpenAICompatibleChatAdapter,
+    ProviderConfig,
+    ProviderConfigurationError,
+    ProviderPortError,
+)
 from conflux_weave.runtime import (
     FixedOutcomeWorkflow,
     FixedValidationWorkflow,
@@ -80,6 +91,22 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("var") / "artifacts" / "sha256",
     )
+    live_repository = subparsers.add_parser(
+        "research-repository",
+        help="run the W1.5 live evidence-bound repository identity workflow",
+    )
+    live_repository.add_argument("--query", required=True)
+    live_repository.add_argument(
+        "--dotenv",
+        type=Path,
+        default=Path(".env"),
+        help="ignored local Provider configuration file",
+    )
+    live_repository.add_argument(
+        "--artifact-root",
+        type=Path,
+        default=Path("var") / "artifacts" / "sha256",
+    )
     return parser
 
 
@@ -87,6 +114,77 @@ def main(argv: Sequence[str] | None = None) -> int:
     _configure_stdout()
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.command == "research-repository":
+        try:
+            store = LocalArtifactStore(args.artifact_root)
+            config = ProviderConfig.from_environment(args.dotenv)
+            execution = FixedRepositoryIdentityWorkflow(
+                store,
+                GitHubRepositorySearchAdapter.from_environment(store),
+                OpenAICompatibleChatAdapter(store, config),
+                code_revision=_git_revision(),
+            ).execute(args.query)
+        except ProviderConfigurationError as exc:
+            _print_json(
+                {
+                    "status": "failed",
+                    "error_code": "provider_configuration_invalid",
+                    "message": str(exc),
+                    "recovery_action": "检查被 Git 忽略的本地 .env 配置。",
+                    "network_called": False,
+                    "provider_called": False,
+                }
+            )
+            return 2
+        except (SearchPortError, ProviderPortError, LiveResearchValidationError, ValueError) as exc:
+            _print_json(
+                {
+                    "status": "failed",
+                    "error_code": getattr(exc, "code", "live_output_invalid"),
+                    "message": str(exc),
+                    "retryable": getattr(exc, "retryable", False),
+                    "status_code": getattr(exc, "status_code", None),
+                    "request_artifact_ref": getattr(exc, "request_artifact_ref", None),
+                    "response_artifact_ref": getattr(exc, "response_artifact_ref", None),
+                    "artifact_ref": getattr(exc, "artifact_ref", None),
+                    "recovery_action": getattr(
+                        exc,
+                        "recovery_action",
+                        "检查原始 Artifact 和证据映射后显式创建新 Run。",
+                    ),
+                    "automatic_retry": False,
+                    "fallback": False,
+                }
+            )
+            return 1
+        _print_json(
+            {
+                "status": execution.final_run.status.value,
+                "run_id": execution.final_run.run_id,
+                "delivery_disposition": execution.delivery.disposition.value,
+                "selected_repository": execution.selected_repository.full_name,
+                "report_artifact_ref": execution.report_artifact.artifact_id,
+                "report_uri": execution.report_artifact.storage_uri,
+                "manifest_artifact_ref": execution.manifest_artifact.artifact_id,
+                "claim_count": len(execution.claims),
+                "evidence_count": len(execution.evidence),
+                "citation_count": len(execution.citations),
+                "provider_model": execution.provider_model,
+                "provider_response_id": execution.provider_response_id,
+                "usage": {
+                    "input_tokens": execution.input_tokens,
+                    "output_tokens": execution.output_tokens,
+                },
+                "limitations": list(execution.delivery.limitations),
+                "unmet_criteria": list(execution.delivery.unmet_criteria),
+                "network_called": True,
+                "provider_called": True,
+                "automatic_retry": False,
+                "fallback": False,
+            }
+        )
+        return 0
 
     if args.command == "validate-outcome":
         try:
@@ -270,3 +368,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     }
     _print_json(output)
     return 0 if execution.error is None else 1
+
+
+def _git_revision() -> str:
+    completed = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    revision = completed.stdout.strip()
+    return revision if completed.returncode == 0 and revision else "unknown"
