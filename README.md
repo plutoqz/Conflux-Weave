@@ -2,7 +2,8 @@
 
 Conflux-Weave is being initialized as an evidence-native, local-first Research
 Agent Workbench. W0 is validated offline and the W1 scope is frozen, but no
-Research Query product path or live capability has been delivered.
+Research Query product path or live capability has been delivered. W1.1 exposes
+only a deterministic runtime validation command.
 
 ## Project entry points
 
@@ -21,6 +22,16 @@ uv sync --frozen --python 3.12
 uv run --frozen pytest
 uv build
 ```
+
+Validate the W1.1 CLI and content-addressed Artifact path without source,
+network, or model calls:
+
+```powershell
+uv run --frozen conflux-weave validate-workflow --query "validate fixed workflow"
+```
+
+The command reports `validation_only: true`; it does not produce a research
+answer or a user Delivery.
 
 Local databases, artifacts, indexes, evaluation outputs, secrets, and private
 research data must not be committed. See `var/README.md` for the planned runtime

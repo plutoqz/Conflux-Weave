@@ -10,7 +10,7 @@ Planned layout:
 | Path | Contents | Authority |
 |---|---|---|
 | `var/db/weave.sqlite3` | Task, Run, Step, Evidence, and metadata | authoritative |
-| `var/artifacts/sha256/` | immutable source snapshots and outputs | content authority |
+| `var/artifacts/sha256/` | immutable source snapshots and outputs | content authority; W1.1 store implemented |
 | `var/indexes/` | FTS/vector indexes | derived, rebuildable |
 | `var/imports/` | staged legacy exports and import manifests | staging only |
 | `var/exports/` | explicit user exports | generated delivery |
@@ -18,6 +18,6 @@ Planned layout:
 | `var/evaluations/` | raw evaluation runs and reports | internal quality artifacts |
 
 Do not place secrets in `var/`. Do not commit any file from this tree by force.
-Artifact paths must become content-addressed and immutable when the W1/W3
-storage consumer is implemented; this README does not claim that behavior is
-already available.
+W1.1 implements SHA-256 content addressing, idempotent writes, and integrity
+checks for `var/artifacts/sha256/`. The database, indexes, imports, exports,
+logs, and evaluation paths remain planned until their named consumers exist.

@@ -17,6 +17,12 @@ FORBIDDEN_FRAMEWORKS = {
     "ragas",
     "uvicorn",
 }
+FORBIDDEN_W1_RUNTIME_DEPENDENCIES = FORBIDDEN_FRAMEWORKS | {
+    "anthropic",
+    "httpx",
+    "openai",
+    "requests",
+}
 
 
 def imported_modules(path: Path) -> set[str]:
@@ -56,5 +62,17 @@ def test_core_only_imports_its_own_project_namespace() -> None:
             if module.startswith("conflux_weave.") and not module.startswith(
                 "conflux_weave.core"
             ):
+                violations.append(f"{path.relative_to(PACKAGE_ROOT)} -> {module}")
+    assert violations == []
+
+
+def test_w1_runtime_shell_has_no_network_or_optional_framework_dependency() -> None:
+    violations: list[str] = []
+    paths = list((PACKAGE_ROOT / "runtime").rglob("*.py")) + [
+        PACKAGE_ROOT / "cli.py"
+    ]
+    for path in paths:
+        for module in imported_modules(path):
+            if module.split(".", 1)[0] in FORBIDDEN_W1_RUNTIME_DEPENDENCIES:
                 violations.append(f"{path.relative_to(PACKAGE_ROOT)} -> {module}")
     assert violations == []

@@ -54,7 +54,7 @@ def test_validation_cases_reference_existing_frozen_cases() -> None:
     assert referenced_ids <= frozen_case_ids
 
 
-def test_only_scope_freeze_is_accepted() -> None:
+def test_scope_records_acceptance_state_at_freeze_without_becoming_status() -> None:
     scope = load_json(SCOPE_PATH)
     points = scope["acceptance_points"]
 
@@ -66,9 +66,9 @@ def test_only_scope_freeze_is_accepted() -> None:
         "W1.4",
         "W1.5",
     ]
-    assert points[0]["status"] == "validated_offline"
-    assert all(point["status"] == "pending" for point in points[1:])
-    assert scope["next_acceptance_point"] == "W1.1"
+    assert points[0]["status_at_freeze"] == "validated_offline"
+    assert all(point["status_at_freeze"] == "pending" for point in points[1:])
+    assert scope["next_acceptance_point_at_freeze"] == "W1.1"
 
 
 def test_scope_freeze_does_not_authorize_implementation_or_live_calls() -> None:

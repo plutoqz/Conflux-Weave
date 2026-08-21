@@ -169,36 +169,36 @@
     {
       "id": "W1.0",
       "name": "范围、真实输入与授权冻结",
-      "status": "validated_offline",
+      "status_at_freeze": "validated_offline",
       "evidence": "本文件、W1 实施方案和冻结案例映射"
     },
     {
       "id": "W1.1",
       "name": "CLI、Fixed Workflow 与最小状态离线骨架",
-      "status": "pending"
+      "status_at_freeze": "pending"
     },
     {
       "id": "W1.2",
       "name": "本地文档 Source/Evidence/Citation 闭环",
-      "status": "pending"
+      "status_at_freeze": "pending"
     },
     {
       "id": "W1.3",
       "name": "官方仓库 SearchPort Adapter",
-      "status": "pending"
+      "status_at_freeze": "pending"
     },
     {
       "id": "W1.4",
       "name": "失败语义、引用确定性与可选框架解耦",
-      "status": "pending"
+      "status_at_freeze": "pending"
     },
     {
       "id": "W1.5",
       "name": "两次真实端到端使用验收",
-      "status": "pending"
+      "status_at_freeze": "pending"
     }
   ],
-  "next_acceptance_point": "W1.1",
+  "next_acceptance_point_at_freeze": "W1.1",
   "stop_conditions": [
     "需要多源综合、完整四对象比较、论文雷达或多 Agent 才能让首个真实任务通过。",
     "需要把 SQLite、服务端队列、Web UI、LangGraph 或评测框架变成黄金路径前置依赖。",

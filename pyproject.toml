@@ -11,6 +11,9 @@ requires-python = ">=3.11"
 authors = [{ name = "Conflux-Weave contributors" }]
 dependencies = []
 
+[project.scripts]
+conflux-weave = "conflux_weave.cli:main"
+
 [dependency-groups]
 dev = [
   "pytest>=8.3,<9",
