@@ -14,6 +14,7 @@ from conflux_weave.live_research import (
     FixedRepositoryIdentityWorkflow,
     LiveResearchValidationError,
 )
+from conflux_weave.review_live import FixedReviewReadingNoteWorkflow
 from conflux_weave.provider import (
     OpenAICompatibleChatAdapter,
     ProviderConfig,
@@ -107,6 +108,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("var") / "artifacts" / "sha256",
     )
+    live_review = subparsers.add_parser(
+        "review-document",
+        help="run the W1.5 live cited reading-note workflow for a local PDF/Markdown document",
+    )
+    live_review.add_argument("path", type=Path)
+    live_review.add_argument("--query", required=True)
+    live_review.add_argument("--dotenv", type=Path, default=Path(".env"))
+    live_review.add_argument(
+        "--artifact-root",
+        type=Path,
+        default=Path("var") / "artifacts" / "sha256",
+    )
     return parser
 
 
@@ -179,6 +192,68 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "limitations": list(execution.delivery.limitations),
                 "unmet_criteria": list(execution.delivery.unmet_criteria),
                 "network_called": True,
+                "provider_called": True,
+                "automatic_retry": False,
+                "fallback": False,
+            }
+        )
+        return 0
+
+    if args.command == "review-document":
+        try:
+            store = LocalArtifactStore(args.artifact_root)
+            config = ProviderConfig.from_environment(args.dotenv)
+            execution = FixedReviewReadingNoteWorkflow(
+                store,
+                OpenAICompatibleChatAdapter(store, config),
+                code_revision=_git_revision(),
+            ).execute(args.path, args.query)
+        except ProviderConfigurationError as exc:
+            _print_json(
+                {
+                    "status": "failed",
+                    "error_code": "provider_configuration_invalid",
+                    "message": str(exc),
+                    "network_called": False,
+                    "provider_called": False,
+                }
+            )
+            return 2
+        except (LiveResearchValidationError, ValueError, FileNotFoundError) as exc:
+            _print_json(
+                {
+                    "status": "failed",
+                    "error_code": getattr(exc, "code", "review_input_invalid"),
+                    "message": str(exc),
+                    "request_artifact_ref": getattr(exc, "request_artifact_ref", None),
+                    "response_artifact_ref": getattr(exc, "response_artifact_ref", None),
+                    "recovery_action": getattr(exc, "recovery_action", "检查输入和原始 Artifact 后显式创建新 Run。"),
+                    "automatic_retry": False,
+                    "fallback": False,
+                }
+            )
+            return 1
+        _print_json(
+            {
+                "status": execution.final_run.status.value,
+                "run_id": execution.final_run.run_id,
+                "delivery_disposition": execution.delivery.disposition.value,
+                "source_artifact_ref": execution.source_artifact.artifact_id,
+                "report_artifact_ref": execution.report_artifact.artifact_id,
+                "report_uri": execution.report_artifact.storage_uri,
+                "manifest_artifact_ref": execution.manifest_artifact.artifact_id,
+                "claim_count": len(execution.claims),
+                "evidence_count": len(execution.evidence),
+                "citation_count": len(execution.citations),
+                "provider_model": execution.provider_model,
+                "provider_response_id": execution.provider_response_id,
+                "usage": {
+                    "input_tokens": execution.input_tokens,
+                    "output_tokens": execution.output_tokens,
+                },
+                "limitations": list(execution.delivery.limitations),
+                "unmet_criteria": list(execution.delivery.unmet_criteria),
+                "network_called": False,
                 "provider_called": True,
                 "automatic_retry": False,
                 "fallback": False,
