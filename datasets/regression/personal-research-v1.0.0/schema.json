@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/plutoqz/Conflux-Weave/datasets/regression/personal-research-v1.0.0/schema.json",
+  "title": "Conflux-Weave representative research case",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "case_id",
+    "origin",
+    "task_family",
+    "scenario",
+    "input",
+    "deliverable",
+    "required_evidence",
+    "allowed_confirmation",
+    "acceptable_degradation",
+    "completion_criteria",
+    "source_policy",
+    "sensitivity",
+    "expected_outcome",
+    "annotation_status"
+  ],
+  "properties": {
+    "case_id": {
+      "type": "string",
+      "pattern": "^CW-PR-[0-9]{3}$"
+    },
+    "origin": {
+      "enum": ["user_seeded", "derived_boundary"]
+    },
+    "task_family": {
+      "enum": ["paper_discovery", "evidence_question_answering"]
+    },
+    "scenario": {
+      "type": "string",
+      "minLength": 1
+    },
+    "input": {
+      "type": "object",
+      "required": ["query_zh", "attachments"],
+      "properties": {
+        "query_zh": {"type": "string", "minLength": 1},
+        "attachments": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      },
+      "additionalProperties": true
+    },
+    "deliverable": {
+      "type": "object",
+      "required": ["format", "must_include"],
+      "properties": {
+        "format": {"type": "string", "minLength": 1},
+        "must_include": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        }
+      },
+      "additionalProperties": false
+    },
+    "required_evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "allowed_confirmation": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "acceptable_degradation": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "completion_criteria": {
+      "type": "array",
+      "minItems": 2,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "source_policy": {
+      "type": "object",
+      "required": ["priority", "time_boundary", "citation_granularity"],
+      "properties": {
+        "priority": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "time_boundary": {"type": "string", "minLength": 1},
+        "citation_granularity": {
+          "enum": ["claim", "item", "section"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "sensitivity": {
+      "enum": ["public", "user_provided_private"]
+    },
+    "expected_outcome": {
+      "enum": ["complete", "partial", "waiting_for_user", "no_answer"]
+    },
+    "annotation_status": {"const": "frozen"}
+  }
+}

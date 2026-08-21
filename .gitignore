@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.venv/
+dist/
+build/
+*.egg-info/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.key
+
+# IDE and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local runtime state. Keep var/README.md as the storage contract.
+var/*
+!var/README.md
+
+# Common runtime artifacts must never become source-controlled evidence.
+*.sqlite
+*.sqlite3
+*.db
+*.log

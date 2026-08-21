@@ -1,0 +1,99 @@
+{
+  "dataset_id": "personal-research-v1",
+  "version": "1.0.0",
+  "status": "frozen",
+  "layer": "regression",
+  "schema_version": "1.0.0",
+  "language": "zh-CN",
+  "created_at": "2026-08-21",
+  "frozen_at": "2026-08-21",
+  "supersedes": "../personal-research-v1/manifest.json",
+  "purpose": "Freeze representative user deliverables, evidence requirements, degradation behavior, and completion semantics before implementing the W1 Research Query workflow.",
+  "evidence_boundary": "Design-time case contract only. No case has been executed and no product capability, answer quality, or live behavior has been validated.",
+  "case_count": 12,
+  "case_ids": [
+    "CW-PR-001",
+    "CW-PR-002",
+    "CW-PR-003",
+    "CW-PR-004",
+    "CW-PR-005",
+    "CW-PR-006",
+    "CW-PR-007",
+    "CW-PR-008",
+    "CW-PR-009",
+    "CW-PR-010",
+    "CW-PR-011",
+    "CW-PR-012"
+  ],
+  "coverage": {
+    "origin": {
+      "user_seeded": 8,
+      "derived_boundary": 4
+    },
+    "task_family": {
+      "paper_discovery": 3,
+      "evidence_question_answering": 9
+    },
+    "expected_outcome": {
+      "complete": 9,
+      "partial": 1,
+      "waiting_for_user": 1,
+      "no_answer": 1
+    }
+  },
+  "source_lineage": [
+    {
+      "type": "user_requirements",
+      "date": "2026-08-21",
+      "case_ids": [
+        "CW-PR-001",
+        "CW-PR-002",
+        "CW-PR-003",
+        "CW-PR-004",
+        "CW-PR-005",
+        "CW-PR-006",
+        "CW-PR-007",
+        "CW-PR-008"
+      ],
+      "note": "Directly derived from eight recurring questions supplied by the user and refined by the user's freeze review."
+    },
+    {
+      "type": "design_boundary_derivation",
+      "date": "2026-08-21",
+      "case_ids": [
+        "CW-PR-009",
+        "CW-PR-010",
+        "CW-PR-011",
+        "CW-PR-012"
+      ],
+      "note": "Derived from the current design's no-answer, missing-input, source-failure, and partial-delivery requirements."
+    }
+  ],
+  "evaluation_admission": {
+    "Feature": "W1-W2 Research Query golden path",
+    "Risk": "The workflow may return broad, weakly sourced, fabricated, or unrecoverable outputs that do not match recurring user research tasks.",
+    "Question": "Does the frozen case set cover the user's normal deliverables and the minimum failure semantics needed before workflow implementation?",
+    "Metric": "Deterministic schema, count, lineage, coverage, and hash checks plus explicit user review; no answer-quality score is admitted at W0.",
+    "Decision": "Accept or revise the case contract before W1 implementation; later use frozen cases to select the smallest viable vertical slice.",
+    "ActionOnFail": "Create a new draft version, preserve this version, and revise missing or ambiguous case semantics before implementing the affected workflow behavior.",
+    "StopCondition": "All deterministic checks pass and the user explicitly accepts the task coverage, identities, inputs, deliverables, and failure semantics."
+  },
+  "execution_authorization": {
+    "provider_calls": false,
+    "network_retrieval": false,
+    "paid_evaluation": false,
+    "live_acceptance": false
+  },
+  "hash_policy": "sha256 over UTF-8 text normalized from CRLF or CR to LF",
+  "file_hashes": {
+    "README.md": "fd644d302ca6199e462cdca14ce68ca8dc3e2d6e89386334ad95aae2f23e13bb",
+    "cases.jsonl": "6f653f2e1c3db90f787d0a884998ccfedec8059e6aeacf88322060640f1da7b2",
+    "schema.json": "0572513cd3ad6e634e1d169401e3e2a55d5ac3f70fa5a0310e465bee74f1493c"
+  },
+  "review": {
+    "required": true,
+    "reviewed_by": "user",
+    "reviewed_at": "2026-08-21",
+    "decision": "approved_with_four_scope_decisions"
+  }
+}
