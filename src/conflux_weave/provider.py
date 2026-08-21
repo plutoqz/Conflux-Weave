@@ -11,7 +11,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 
 from conflux_weave.evidence import ArtifactRef
 from conflux_weave.runtime.artifacts import LocalArtifactStore
@@ -30,10 +30,17 @@ class ProviderConfig:
 
     @classmethod
     def from_environment(cls, dotenv_path: Path | None = None) -> ProviderConfig:
-        load_dotenv(dotenv_path=dotenv_path, override=False)
-        base_url = os.environ.get("CONFLUX_WEAVE_PROVIDER_BASE_URL", "").strip()
-        api_key = os.environ.get("CONFLUX_WEAVE_PROVIDER_API_KEY", "").strip()
-        model = os.environ.get("CONFLUX_WEAVE_PROVIDER_MODEL", "").strip()
+        dotenv_config = dotenv_values(dotenv_path) if dotenv_path else {}
+
+        def read_setting(name: str) -> str:
+            value = os.environ.get(name)
+            if value is None:
+                value = dotenv_config.get(name)
+            return value.strip() if isinstance(value, str) else ""
+
+        base_url = read_setting("CONFLUX_WEAVE_PROVIDER_BASE_URL")
+        api_key = read_setting("CONFLUX_WEAVE_PROVIDER_API_KEY")
+        model = read_setting("CONFLUX_WEAVE_PROVIDER_MODEL")
         missing = [
             name
             for name, value in (

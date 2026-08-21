@@ -61,6 +61,19 @@ uv run --frozen conflux-weave search-github --query "pi coding agent" --limit 10
 `GITHUB_TOKEN` is optional and read only from the local environment. It is never
 written to an Artifact or repository file.
 
+Run the W1.5 evidence-bound live repository identity workflow after creating an
+ignored local `.env` from `.env.example`:
+
+```powershell
+uv run --frozen conflux-weave research-repository --query "定位 pi coding agent 的规范名称、维护者、官方仓库 URL 和公开实现入口"
+```
+
+The live command performs one GitHub search, one README fetch, and one model
+call without automatic retry or fallback. Provider requests and raw responses
+are stored as ignored content-addressed Artifacts without the API key. A
+`partial` result means that useful cited claims were produced while an explicit
+acceptance criterion remains unmet.
+
 Local databases, artifacts, indexes, evaluation outputs, secrets, and private
 research data must not be committed. See `var/README.md` for the planned runtime
 layout.
