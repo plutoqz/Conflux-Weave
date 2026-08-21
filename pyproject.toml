@@ -9,7 +9,9 @@ description = "Evidence-native runtime for a local-first research agent workbenc
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Conflux-Weave contributors" }]
-dependencies = []
+dependencies = [
+  "pypdf>=5,<7",
+]
 
 [project.scripts]
 conflux-weave = "conflux_weave.cli:main"

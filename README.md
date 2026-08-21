@@ -3,7 +3,8 @@
 Conflux-Weave is being initialized as an evidence-native, local-first Research
 Agent Workbench. W0 is validated offline and the W1 scope is frozen, but no
 Research Query product path or live capability has been delivered. W1.1 exposes
-only a deterministic runtime validation command.
+a deterministic runtime validation command and W1.2 exposes local document
+import/report preparation; neither performs network or model calls.
 
 ## Project entry points
 
