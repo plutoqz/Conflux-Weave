@@ -5,11 +5,11 @@ Updated: 2026-08-24
 | Area | Status | Evidence boundary |
 |---|---|---|
 | Design v0.2 | `proposed` | Current design basis; not implementation proof |
-| Repository framework | `validated_offline` | Python 3.12.9; 153 tests passed; W3.3 checkpoint and replay-safety tests included |
+| Repository framework | `validated_offline` | Python 3.12.9; 160 tests passed; W3.4 budget hard-stop and structured diagnostic tests included |
 | W0 | `validated_offline` | W0.1-W0.5 passed; 12 frozen cases, runtime contracts, and read-only legacy inventory are consistent |
 | W1 | `validated_live` | W1.0-W1.5 passed at frozen boundaries; LIVE-01 review note and LIVE-02 repository identity both delivered explicit partial results with raw evidence retained |
 | W2 | `validated_live` | BM25/Web Fetch/Evidence delivery validated offline; three accepted live tasks across paper discovery and project evidence Q&A produced bounded partial deliveries |
-| W3 | `w3_3_validated_offline` | W3.1-W3.2 persistence plus five-Step paper-discovery checkpoints, cancel, and explicit recovery decisions passed fixture acceptance |
+| W3 | `w3_4_validated_offline` | Persistence, checkpoint recovery, transactional Budget ledger, hard stops, and structured errors passed fixture acceptance |
 | W4-W6 | `pending` | No later product slice has been implemented |
 | Live capability | `bounded_retrieval_evidence` | qwen3.7-flash completed bounded arXiv metadata/abstract discovery and GitHub evidence Q&A; failures and raw responses retained |
 
@@ -45,14 +45,22 @@ Committed search and Provider responses are reused; an unknown Provider outcome
 enters `waiting_for_user` with zero automatic replay until an explicit retry or
 fail decision. Queued and in-flight cancellation start no subsequent external
 Step. Validation used fixture transports and simulated process exit, not real
-subprocess kill, network, Provider, or paid calls. Current next acceptance point:
-W3.4 Budget ledger and structured diagnostics.
+subprocess kill, network, Provider, or paid calls.
+
+W3.4 is validated offline at implementation revision `5f31dfc`. External-call
+authorization and worst-case reservation are transactional; reported actual usage
+is settled with explicit release entries. Insufficient reservation or expired wall
+clock starts zero external calls. Actual output overage stops the Run before later
+Steps. Structured errors retain technical-detail and affected-Artifact lineage after
+Repository reopen. Monetary enforcement remains unavailable without a frozen price
+snapshot. Validation used fixtures only; current next acceptance point is W3.5 Trace
+and real subprocess fault injection.
 
 Latest framework verification:
 
 ```text
 uv sync --frozen --python 3.12       passed
-uv run --frozen pytest               153 passed
+uv run --frozen pytest               160 passed
 uv run --frozen python -m compileall passed
 uv build                             sdist and wheel built
 ```

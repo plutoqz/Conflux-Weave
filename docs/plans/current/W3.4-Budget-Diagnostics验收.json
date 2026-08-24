@@ -1,0 +1,138 @@
+{
+  "schema_version": "conflux-weave.w3.acceptance.v1",
+  "acceptance_point": "W3.4",
+  "name": "Budget ledger、硬停止与结构化诊断",
+  "status": "validated_offline",
+  "accepted_at": "2026-08-24",
+  "implementation_revision": "5f31dfc61060d30d445d2c840f6d3f8a605d3031",
+  "w3_freeze_revision": "e75eb684c36bba8892ffc828e49ac33345eb539b",
+  "w3_3_revision": "df6fe7e337aa4364dec6f6fdc67a0bbe61762204",
+  "scope": {
+    "implemented": [
+      "checksum-protected migration v4 with backfill for existing W3 Runs",
+      "immutable BudgetLimit snapshot for wall clock, tokens, calls, retrieval, concurrency, and cost metadata",
+      "transactional pre-call reservation and external-call authorization",
+      "actual usage settlement and unused reservation release ledger",
+      "pre-call wall-clock and resource hard stop with zero external calls",
+      "post-response actual-usage overage stop with zero subsequent external calls",
+      "structured ErrorRecord persistence with technical-detail and affected-Artifact lineage",
+      "explicit unknown-actual and release entries for unreported interrupted usage",
+      "cost_enforcement=unavailable when no frozen price snapshot exists"
+    ],
+    "deferred": [
+      "user-facing CLI status views for Budget and Error",
+      "optional OpenTelemetry or OpenInference Trace",
+      "real subprocess kill fault injection",
+      "network, real Provider, paid service, and live acceptance"
+    ]
+  },
+  "migration": {
+    "version": 4,
+    "name": "w3_budget_diagnostics",
+    "checksum": "sha256:3a78347c973b99fa57aa09c4c81e95960fe1362e50879fc7b892c16393191ffc",
+    "added_tables": [
+      "budget_limits",
+      "budget_reservations",
+      "budget_entries",
+      "errors",
+      "error_artifacts"
+    ],
+    "prior_checksums_unchanged": {
+      "v1": "sha256:ec9c9577cea23492915274f8a0f88056989ebee6cc937a81fcec8c16c8156ec7",
+      "v2": "sha256:404463aa8e3f9e22d3092a5bd5e52671e4f5608f314f66fe4e76711c48b3a63d",
+      "v3": "sha256:25b5539935abc7be73ae6a1bb2f575a2916d37b5245941726da1099dda08038d"
+    }
+  },
+  "budget_contract": {
+    "search_reservation": {
+      "tool_calls": 1,
+      "retrieval_rounds": 1
+    },
+    "provider_reservation": {
+      "tool_calls": 1,
+      "output_tokens": 2048
+    },
+    "input_tokens": "settled from Provider-reported actual usage",
+    "monetary_enforcement": "unavailable_without_frozen_price_snapshot",
+    "automatic_budget_expansion": false,
+    "local_finalization": "deterministic validation and publication do not consume the external-call ledger"
+  },
+  "acceptance_results": [
+    {
+      "criterion": "insufficient search reservation prevents the call",
+      "result": "passed",
+      "call_counts": {"arxiv": 0, "provider": 0}
+    },
+    {
+      "criterion": "expired wall-clock deadline prevents the call",
+      "result": "passed",
+      "call_counts": {"arxiv": 0, "provider": 0}
+    },
+    {
+      "criterion": "insufficient Provider output-token reservation prevents the Provider call",
+      "result": "passed",
+      "call_counts": {"arxiv": 1, "provider": 0}
+    },
+    {
+      "criterion": "normal search and Provider calls persist reservation, actual, and release entries across Repository reopen",
+      "result": "passed",
+      "call_counts": {"arxiv": 1, "provider": 1},
+      "actual_usage": {"input_tokens": 120, "output_tokens": 40, "tool_calls": 2, "retrieval_rounds": 1}
+    },
+    {
+      "criterion": "Provider output actual 3000 exceeds frozen limit 2048 and stops all later Steps",
+      "result": "passed",
+      "call_counts": {"arxiv": 1, "provider": 1, "subsequent_external": 0},
+      "run_status": "failed"
+    },
+    {
+      "criterion": "structured budget Error survives Repository reopen with readable technical detail, recovery action, and four affected Artifact refs",
+      "result": "passed"
+    },
+    {
+      "criterion": "in-flight cancellation leaves no active reservation",
+      "result": "passed"
+    },
+    {
+      "criterion": "migration v4 backfills the frozen BudgetLimit for an existing v3 Run",
+      "result": "passed"
+    }
+  ],
+  "verification": {
+    "w3_4_tests": {
+      "command": "uv run --frozen pytest tests/test_budget_diagnostics.py -q",
+      "result": "7 passed in 2.32s"
+    },
+    "focused_runtime_tests": {
+      "command": "uv run --frozen pytest tests/test_budget_diagnostics.py tests/test_sqlite_runtime.py tests/test_worker_leases.py tests/test_durable_paper_discovery.py -q",
+      "result": "29 passed in 7.24s"
+    },
+    "full_regression": {
+      "command": "uv run --frozen pytest -q",
+      "result": "160 passed in 10.63s"
+    },
+    "compileall": {
+      "command": "uv run --frozen python -m compileall -q src tests",
+      "result": "passed"
+    },
+    "build": {
+      "command": "uv build",
+      "result": "sdist and wheel built"
+    },
+    "diff_check": {
+      "command": "git diff --check",
+      "result": "passed"
+    }
+  },
+  "execution_boundary": {
+    "fixtures": "deterministic transports, temporary SQLite, and local filesystem",
+    "real_subprocess_kill_tests": 0,
+    "network_calls": 0,
+    "real_provider_calls": 0,
+    "paid_calls": 0,
+    "live_capability_claim": false,
+    "claim": "W3.4 proves bounded offline budget and diagnostic mechanisms; it does not prove live cost control, real process-kill recovery, or live paper-discovery quality."
+  },
+  "frozen_file_unchanged": "docs/plans/current/W3-scope-freeze.json",
+  "next_acceptance_point": "W3.5 Trace 与真实子进程故障注入"
+}

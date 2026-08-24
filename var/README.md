@@ -21,8 +21,8 @@ Do not place secrets in `var/`. Do not commit any file from this tree by force.
 W3.1 implements a checksum-protected SQLite migration plus SHA-256 content
 addressing, idempotent writes, integrity checks, and atomic Artifact publication.
 The current database schema covers Task, Run/Step, Delivery, Artifact metadata,
-W3.2 Attempt/Lease/Event records, and W3.3 Step policies and external-effect
-state. The durable paper-discovery path exchanges five JSON checkpoints through
-the Artifact store. Budget ledger, structured diagnostics and CLI status views,
-Trace, indexes, imports, exports, logs, and evaluation consumers remain planned
-for their named acceptance points.
+W3.2 Attempt/Lease/Event records, W3.3 Step policies and external-effect state,
+and W3.4 Budget limit/reservation/actual/release plus structured Error lineage.
+The durable paper-discovery path exchanges five JSON checkpoints through the
+Artifact store. User-facing CLI status views, Trace, indexes, imports, exports,
+logs, and evaluation consumers remain planned for their named acceptance points.
