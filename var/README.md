@@ -15,6 +15,7 @@ Runtime layout:
 | `var/imports/` | staged legacy exports and import manifests | staging only |
 | `var/exports/` | explicit user exports | generated delivery |
 | `var/logs/` | local diagnostic logs | non-authoritative |
+| `var/traces/` | optional exported spans | non-authoritative; never owns Run state |
 | `var/evaluations/` | raw evaluation runs and reports | internal quality artifacts |
 
 Do not place secrets in `var/`. Do not commit any file from this tree by force.
@@ -22,7 +23,10 @@ W3.1 implements a checksum-protected SQLite migration plus SHA-256 content
 addressing, idempotent writes, integrity checks, and atomic Artifact publication.
 The current database schema covers Task, Run/Step, Delivery, Artifact metadata,
 W3.2 Attempt/Lease/Event records, W3.3 Step policies and external-effect state,
-and W3.4 Budget limit/reservation/actual/release plus structured Error lineage.
+W3.4 Budget limit/reservation/actual/release plus structured Error lineage, and
+W3.5 sanitized telemetry-drop diagnostics. Optional Trace export remains outside
+the authoritative state and Artifact paths.
 The durable paper-discovery path exchanges five JSON checkpoints through the
-Artifact store. User-facing CLI status views, Trace, indexes, imports, exports,
-logs, and evaluation consumers remain planned for their named acceptance points.
+Artifact store. User-facing CLI status views, a deployed Trace backend, indexes,
+imports, exports, logs, and evaluation consumers remain planned for their named
+acceptance points.

@@ -1,0 +1,153 @@
+{
+  "schema_version": "conflux-weave.w3.acceptance.v1",
+  "acceptance_point": "W3.5",
+  "name": "可选 Trace 与真实子进程故障注入",
+  "status": "validated_offline",
+  "accepted_at": "2026-08-24",
+  "implementation_revision": "e85fdc1e9e941337f1d0b71a83e80cc94e8704f5",
+  "w3_freeze_revision": "e75eb684c36bba8892ffc828e49ac33345eb539b",
+  "w3_4_revision": "5f31dfc61060d30d445d2c840f6d3f8a605d3031",
+  "scope": {
+    "implemented": [
+      "framework-independent TraceExporter port and failure-isolating wrapper",
+      "optional dynamically loaded OpenTelemetry bridge with OpenInference span-kind semantics",
+      "task, Run, Step, Attempt, workflow, Provider/model, Budget, status, and Artifact span links",
+      "sanitized persistent telemetry-drop diagnostics without Trace ownership of Run state",
+      "checksum-protected migration v5 for telemetry drop records",
+      "real child-process termination at five frozen transaction and side-effect boundaries",
+      "recovery validation against the same SQLite database and content-addressed Artifact root",
+      "Citation-to-Evidence-to-SourceSnapshot closure after process-kill recovery"
+    ],
+    "deferred": [
+      "Phoenix development UI and production Trace backend deployment",
+      "user-facing CLI status views",
+      "network, real Provider, paid service, and W3.6 live non-regression"
+    ]
+  },
+  "migration": {
+    "version": 5,
+    "name": "w3_trace_diagnostics",
+    "checksum": "sha256:8991671d02cde6a37b1ac5469af2ef1d0ff80fdd80e67f20b5b3461c448b98d2",
+    "added_tables": ["telemetry_drops"],
+    "prior_checksums_unchanged": {
+      "v1": "sha256:ec9c9577cea23492915274f8a0f88056989ebee6cc937a81fcec8c16c8156ec7",
+      "v2": "sha256:404463aa8e3f9e22d3092a5bd5e52671e4f5608f314f66fe4e76711c48b3a63d",
+      "v3": "sha256:25b5539935abc7be73ae6a1bb2f575a2916d37b5245941726da1099dda08038d",
+      "v4": "sha256:3a78347c973b99fa57aa09c4c81e95960fe1362e50879fc7b892c16393191ffc"
+    }
+  },
+  "trace_contract": {
+    "authority": "non_authoritative_quality_support",
+    "core_dependency": false,
+    "opentelemetry_dependency": "optional_dynamic_load",
+    "openinference_semantics": "openinference.span.kind",
+    "span_count_per_successful_fixture_run": 5,
+    "prohibited_content_checked": [
+      "Provider secret",
+      "complete source or prompt body",
+      "raw exporter exception message"
+    ],
+    "failure_results": [
+      {
+        "fault": "Exporter TimeoutError",
+        "delivery_equal_to_baseline": true,
+        "drop_count": 5,
+        "persisted_reason": "TimeoutError"
+      },
+      {
+        "fault": "OpenTelemetry dependency missing",
+        "delivery_equal_to_baseline": true,
+        "drop_count": 5,
+        "persisted_reason": "TraceDependencyUnavailable"
+      }
+    ]
+  },
+  "real_process_fault_matrix": [
+    {
+      "id": "W3-KILL-BEFORE-CALL",
+      "termination": "subprocess.Popen.kill",
+      "calls_at_kill": {"arxiv": 0, "provider": 0},
+      "recovery": "expired Attempt fenced; new Attempt succeeded",
+      "final_calls": {"arxiv": 1, "provider": 1},
+      "result": "passed"
+    },
+    {
+      "id": "W3-SEARCH-RESPONSE-COMMITTED",
+      "termination": "subprocess.Popen.kill",
+      "calls_at_kill": {"arxiv": 1, "provider": 0},
+      "recovery": "committed search checkpoint reused",
+      "final_calls": {"arxiv": 1, "provider": 1},
+      "result": "passed"
+    },
+    {
+      "id": "W3-PROVIDER-OUTCOME-UNKNOWN",
+      "termination": "subprocess.Popen.kill during fixture transport call",
+      "calls_at_kill": {"arxiv": 1, "provider": 1},
+      "recovery": "waiting_for_user with zero automatic Provider replay",
+      "final_calls": {"arxiv": 1, "provider": 1},
+      "result": "passed"
+    },
+    {
+      "id": "W3-PROVIDER-RESPONSE-COMMITTED",
+      "termination": "subprocess.Popen.kill",
+      "calls_at_kill": {"arxiv": 1, "provider": 1},
+      "recovery": "committed Provider checkpoint reused",
+      "final_calls": {"arxiv": 1, "provider": 1},
+      "result": "passed"
+    },
+    {
+      "id": "W3-PUBLISH-ATOMICITY",
+      "termination": "subprocess.Popen.kill after Artifact rename and before SQLite publication",
+      "state_at_kill": {"run": "running", "delivery_visible": false},
+      "recovery": "same content-addressed files reused and Delivery atomically published",
+      "final_status": "partial",
+      "result": "passed"
+    }
+  ],
+  "cross_stage_matrix": {
+    "idempotent_submit": "passed in focused Runtime suite",
+    "fenced_attempt": "passed in focused Runtime suite",
+    "cancel": "passed in focused Runtime suite",
+    "budget_stop": "passed in focused Runtime suite",
+    "citation_after_recovery": "every Citation resolved through Evidence to the recovered SourceSnapshot"
+  },
+  "verification": {
+    "trace_and_real_process_tests": {
+      "command": "uv run --frozen pytest tests/test_fault_injection_subprocess.py tests/test_durable_paper_discovery.py --junitxml=var/evaluations/w3/fault-injection/w3.5-results.xml -q",
+      "result": "15 passed in 11.70s"
+    },
+    "focused_w3_matrix": {
+      "command": "uv run --frozen pytest tests/test_sqlite_runtime.py tests/test_worker_leases.py tests/test_durable_paper_discovery.py tests/test_budget_diagnostics.py tests/test_fault_injection_subprocess.py -q",
+      "result": "37 passed in 15.79s"
+    },
+    "full_regression": {
+      "command": "uv run --frozen pytest",
+      "result": "168 passed in 19.31s"
+    },
+    "compileall": {
+      "command": "uv run --frozen python -m compileall -q src tests",
+      "result": "passed"
+    },
+    "build": {
+      "command": "uv build",
+      "result": "sdist and wheel built"
+    },
+    "diff_check": {
+      "command": "git diff --check",
+      "result": "passed"
+    },
+    "local_raw_evidence": "var/evaluations/w3/fault-injection/w3.5-results.xml"
+  },
+  "execution_boundary": {
+    "fixtures": "deterministic transports, temporary SQLite, local filesystem, and real child processes",
+    "real_subprocess_kill_tests": 5,
+    "simulated_exception_kill_tests": 0,
+    "network_calls": 0,
+    "real_provider_calls": 0,
+    "paid_calls": 0,
+    "live_capability_claim": false,
+    "claim": "W3.5 proves offline Trace failure isolation and bounded real-process recovery semantics; it does not prove live Provider behavior, live task quality, or production reliability."
+  },
+  "frozen_file_unchanged": "docs/plans/current/W3-scope-freeze.json",
+  "next_acceptance_point": "W3.6 配对 live 非回归；需要新的显式授权"
+}
