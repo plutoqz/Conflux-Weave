@@ -5,11 +5,11 @@ Updated: 2026-08-24
 | Area | Status | Evidence boundary |
 |---|---|---|
 | Design v0.2 | `proposed` | Current design basis; not implementation proof |
-| Repository framework | `validated_live` | Python 3.12.9; 172 tests passed; W3 durable CLI and paired live paper-discovery non-regression included |
+| Repository framework | `validated_live` | Python 3.12.9; 172 tests passed; post-refactor W3 durable CLI paired live non-regression included |
 | W0 | `validated_offline` | W0.1-W0.5 passed; 12 frozen cases, runtime contracts, and read-only legacy inventory are consistent |
 | W1 | `validated_live` | W1.0-W1.5 passed at frozen boundaries; LIVE-01 review note and LIVE-02 repository identity both delivered explicit partial results with raw evidence retained |
 | W2 | `validated_live` | BM25/Web Fetch/Evidence delivery validated offline; three accepted live tasks across paper discovery and project evidence Q&A produced bounded partial deliveries |
-| W3 | `validated_live` | Persistence/recovery passed offline; 2/2 frozen paired live Runs produced bounded partial deliveries through the durable CLI |
+| W3 | `validated_live` | Persistence/recovery passed offline; original W3.6 and post-refactor R1 each passed 2/2 frozen paired live Runs through the durable CLI |
 | W4-W6 | `pending` | No later product slice has been implemented |
 | Live capability | `bounded_retrieval_evidence` | qwen3.7-flash completed bounded arXiv metadata/abstract discovery and GitHub evidence Q&A; failures and raw responses retained |
 
@@ -74,6 +74,15 @@ The reports retain arXiv metadata/abstract and unverified publication/full-text/
 cross-database limitations. Raw SQLite, requests, responses, reports, manifests,
 hashes, and the secret scan are retained under the ignored W3 live evidence root.
 This proves only the two frozen live tasks, not production or general Agent capability.
+
+W3.6-R1 is validated live at execution revision `89019d2` after the responsibility-based
+CLI, SQLite Repository, and Durable Runtime split in `ecc5ffc`. It did not inherit the old
+source hashes: 20 current source files were frozen again and matched at execution. Both
+paired Runs completed five first Attempts and five released Leases with one arXiv and one
+qwen3.7-flash call each, no retry/fallback, and usable `partial` reports. The two Runs contain
+12 closed Claims, 16 Evidence records resolving to SourceSnapshots, 32 hash-valid Artifact
+files, no SQLite foreign-key failures, no Error/telemetry drop, and no Secret scan hit. This
+revalidates the refactored current implementation only for the same two bounded tasks.
 
 Latest framework verification:
 

@@ -1,0 +1,148 @@
+{
+  "schema_version": "conflux-weave.w3.acceptance.v1",
+  "acceptance_point": "W3.6-R1",
+  "name": "职责拆分后配对 live 非回归复验",
+  "status": "validated_live",
+  "accepted_at": "2026-08-24",
+  "implementation_revision": "ecc5ffc9ed55791ff517e2feded6b01c5df1cae7",
+  "freeze_revision": "89019d287590f9c5d2b9b373aa877709884b2460",
+  "execution_revision": "89019d287590f9c5d2b9b373aa877709884b2460",
+  "reason": "职责拆分改变了原 W3.6 冻结源码 hash，因此以新冻结、新 SQLite 和新 Artifact 根重新执行原两条 live 任务",
+  "provider": {
+    "host": "www.dmxapi.cn",
+    "model": "qwen3.7-flash",
+    "prompt_version": "arxiv-relevance-claims-zh-v3",
+    "cost_enforcement": "unavailable",
+    "secret_recorded": false
+  },
+  "preflight": {
+    "source_files_frozen": 20,
+    "source_hash_mismatches": 0,
+    "w3_focused_tests": "41 passed",
+    "full_regression": "172 passed",
+    "local_equals_origin_main": true
+  },
+  "runs": [
+    {
+      "id": "W3.6-R1-LIVE-01",
+      "baseline_id": "W3.6-LIVE-01",
+      "task_id": "task-e4c583a7-7666-4796-9a68-58be22516f85",
+      "run_id": "run-00adbfa1-cbcb-4701-baa6-69f6ec28b17c",
+      "status": "partial",
+      "step_statuses": ["succeeded", "succeeded", "succeeded", "succeeded", "succeeded"],
+      "attempts": 5,
+      "leases": 5,
+      "all_attempts_first_and_succeeded": true,
+      "all_leases_released": true,
+      "fencing_tokens": [1, 2, 3, 4, 5],
+      "actual_calls": {"arxiv": 1, "provider": 1, "automatic_retry": 0, "fallback": 0},
+      "usage": {"input_tokens": 4345, "output_tokens": 397, "tool_calls": 2, "retrieval_rounds": 1},
+      "counts": {
+        "selected": 8,
+        "claims": 4,
+        "evidence": 8,
+        "citations": 4,
+        "claim_citation_closure": 1.0,
+        "evidence_snapshot_closure": 1.0
+      },
+      "w3_6_comparison": {
+        "selected": "8 -> 8",
+        "claims": "3 -> 4",
+        "evidence": "8 -> 8",
+        "citations": "3 -> 4",
+        "provider_calls": "1 -> 1",
+        "accepted": true
+      },
+      "artifacts": {
+        "config": "artifact-sha256-41780614ff6379d46eeadbf2b9b9eab39bbc72258580e8297d939bde093d178a",
+        "search_response": "artifact-sha256-c5949f60a3ac9a1af4866fe1cdb8eaaac1d7ee71f8cb14de24a8ca0e64b3b298",
+        "source_snapshot": "artifact-sha256-e0830885e493a3f21fc9e43c722627f6562162e0a894dcded5ec317a9af0e574",
+        "provider_request": "artifact-sha256-551962609c805b0fdfbcae05bd0e6cede110d4580031476016f1cebbaa5c0052",
+        "provider_response": "artifact-sha256-2bc36d78c98cebc1bd8d014bbbeb7c78149eb8a9a21bf634925e8a3f3dc86bc5",
+        "report": "artifact-sha256-61bbf3b6748811851dde03733f878a9b9f008abef4b412d7912756f0566d8c2c",
+        "delivery_manifest": "artifact-sha256-d174fbca1c22ed7ef8cb4156256c16e013b9a1a69bd4fc196a7b7a5e516b166d"
+      },
+      "sqlite": {
+        "path": "var/evaluations/w3/live-acceptance/W3.6-R1-LIVE-01/runtime.sqlite3",
+        "sha256": "977223449215ee9b052d1ad9563cf10e3fb1963d7d1ae63540757fb11cc7a528",
+        "foreign_key_check": "passed"
+      }
+    },
+    {
+      "id": "W3.6-R1-LIVE-03-R3",
+      "baseline_id": "W3.6-LIVE-03-R3",
+      "task_id": "task-cf3556a1-3568-498b-ab1f-10bebf51e95a",
+      "run_id": "run-3a85db9e-fbd4-4f49-a4de-90810cde39af",
+      "status": "partial",
+      "step_statuses": ["succeeded", "succeeded", "succeeded", "succeeded", "succeeded"],
+      "attempts": 5,
+      "leases": 5,
+      "all_attempts_first_and_succeeded": true,
+      "all_leases_released": true,
+      "fencing_tokens": [1, 2, 3, 4, 5],
+      "actual_calls": {"arxiv": 1, "provider": 1, "automatic_retry": 0, "fallback": 0},
+      "usage": {"input_tokens": 3888, "output_tokens": 712, "tool_calls": 2, "retrieval_rounds": 1},
+      "counts": {
+        "selected": 8,
+        "claims": 8,
+        "evidence": 8,
+        "citations": 8,
+        "claim_citation_closure": 1.0,
+        "evidence_snapshot_closure": 1.0
+      },
+      "w3_6_comparison": {
+        "selected": "8 -> 8",
+        "claims": "8 -> 8",
+        "evidence": "8 -> 8",
+        "citations": "8 -> 8",
+        "provider_calls": "1 -> 1",
+        "accepted": true
+      },
+      "artifacts": {
+        "config": "artifact-sha256-d49cf3ec1bbb79b432c691e4a96f240433cbe1ea6dce244e8771936e066bf176",
+        "search_response": "artifact-sha256-f19405b1d66ef087d9a60a3c3ff296d83e9aa53370d5837fb54bed103d469edc",
+        "source_snapshot": "artifact-sha256-08d9f3f77888f56bf8439c5700e4ee789ec0bd5d9c8292e813938c1741eb56a9",
+        "provider_request": "artifact-sha256-b0f5e0b7b465a72d7b909ae22cec9be7ac979c4c1f5c5f4328f75e51bf8072d9",
+        "provider_response": "artifact-sha256-4dcfebcd1ef277c58bafd6a7961c49a180456355344873e08636fe69a7d9dd90",
+        "report": "artifact-sha256-4b4de0f500d5433ae6ed1c60be05363f5805911d43acd82fe6fe710eba93b18d",
+        "delivery_manifest": "artifact-sha256-5734892643a85f5af0a0eb731d3a02b62a46519d6af60586301d18d202d7af9c"
+      },
+      "sqlite": {
+        "path": "var/evaluations/w3/live-acceptance/W3.6-R1-LIVE-03-R3/runtime.sqlite3",
+        "sha256": "5ebe338e36ff0fd822dbe3428d73f56125b1d4725bce28d3bb2c42a87ecb5759",
+        "foreign_key_check": "passed"
+      }
+    }
+  ],
+  "content_audit": {
+    "live_01": "四条 Claim 均直接说明与 Agent 上下文窗口、分层管理、决策上下文或 RAG 上下文结构的关系；相比原 W3.6 增加一条有 Evidence 的 CTIFoundry Claim。",
+    "live_03_r3": "八条 Claim 继续区分直接多智能体 GIS、城市地理 grounding、地理过滤、遥感推理、位置型农业辅助、GIS benchmark、FAIR 地理数据评估和灾害多模态管道。",
+    "unsupported_publication_assertions": 0,
+    "source_and_full_text_limitations_preserved": true,
+    "human_readable_reports": true
+  },
+  "integrity_audit": {
+    "artifact_files": 32,
+    "artifact_hash_mismatches": 0,
+    "database_artifacts_resolve": true,
+    "claim_citation_closure": "12/12",
+    "evidence_snapshot_closure": "16/16",
+    "errors": 0,
+    "trace_exporter": "not_configured_optional",
+    "telemetry_drops": 0,
+    "secret_scan_hits": 0,
+    "raw_audit": "var/evaluations/w3/live-acceptance/W3.6-R1-live-audit.json",
+    "raw_audit_sha256": "12eb4d431923cf745c9f259a2d4a0a32824ae95a8334acef4db9769aefc1d8d3"
+  },
+  "acceptance": {
+    "paired_runs": "2/2 accepted partial",
+    "external_call_nonregression": "passed",
+    "claim_evidence_citation_closure": "passed",
+    "source_boundary_nonregression": "passed",
+    "current_source_hash_binding": "passed",
+    "overall": "passed"
+  },
+  "evidence_boundary": "两条真实 arXiv 与 qwen3.7-flash Run 证明职责拆分后的冻结实现对原 W3.6 两条任务无行为回归；不证明生产可靠性、金额硬限制、全文核验、跨数据库召回或一般化 Agent 能力。",
+  "frozen_scope_unchanged": "docs/plans/current/W3-scope-freeze.json",
+  "next_acceptance_point": "W3 治理收尾完成；W4 未进入且需要新的范围与实施授权"
+}
