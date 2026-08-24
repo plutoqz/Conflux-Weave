@@ -1,0 +1,112 @@
+{
+  "schema_version": "conflux-weave.w3.6-r1-live-freeze.v1",
+  "status": "frozen_authorized",
+  "frozen_at": "2026-08-24T17:55:07+08:00",
+  "authorization": "用户明确指令：解决 W3 当前 HEAD 的 live 证据和文档状态收尾问题",
+  "purpose": "对职责拆分后的当前 HEAD 重新执行原 W3.6 两条配对 live 非回归，不继承旧源码 hash 作为当前证据",
+  "source_revision": {
+    "implementation_revision": "ecc5ffc9ed55791ff517e2feded6b01c5df1cae7",
+    "local_equals_origin_main": true,
+    "worktree_before_freeze": "clean",
+    "execution_revision_rule": "本冻结文件提交并推送后执行；执行期间不得修改源码、Provider、模型、Prompt、预算或输入",
+    "relevant_file_sha256": {
+      "src/conflux_weave/cli.py": "9ff71b008af9f27fface9d9073e8294d49b5e78a7ea3bd75d0488258e6ece632",
+      "src/conflux_weave/cli_commands/durable_paper.py": "f054fd9cc5e7bf48160d0469591b53885727ffe3ce38fc7e18c5309de14ff89d",
+      "src/conflux_weave/cli_commands/live_research.py": "7f65ab57cab0818b7e8c9b2d4e6f0ef3b056a1cc48cee08268d49780fbc1707f",
+      "src/conflux_weave/cli_commands/local_validation.py": "5211dfd261dc43b440e73c1c8e3288824cd6a9ffac6748efd853a4332707994c",
+      "src/conflux_weave/cli_commands/source_ingestion.py": "259542b8561791f8f7313208ad345f06444c712eb4f030f8336bb9e11cbbe667",
+      "src/conflux_weave/runtime/durable_paper_discovery.py": "f81c5a8060f0746b8813c4bc6f4d7fd07d3ac3650e91c952b8da4d9f7162ab81",
+      "src/conflux_weave/runtime/durable_paper_runtime.py": "b70861921618583161278573b51402522178b786b8a5bce95021238288aef900",
+      "src/conflux_weave/runtime/durable_paper_shared.py": "94f41e3765412a5a392ccc6b21983509b0f4712d1dd0bbe0bbfeb52719650916",
+      "src/conflux_weave/runtime/durable_paper_steps.py": "e03c53177bbff500376f705c592dbedc730ee012a5414ad737201fcdde5dca26",
+      "src/conflux_weave/runtime/durable_paper_trace.py": "a859099d5351c9925d47601351ab0f90098b108c486ce2385284482591bb1784",
+      "src/conflux_weave/runtime/sqlite.py": "a69bdfd4f4b2a9b0958e1bda002d3db43cd258882e9b879d50ca0ec3b3ba462d",
+      "src/conflux_weave/runtime/sqlite_base.py": "fae9697e9186ab5253696ecbb10d0bdd76009ddd857b6870dd3575a38ca96d32",
+      "src/conflux_weave/runtime/sqlite_budget.py": "5de12b9b432744bc7733634d306973cf50dd31a18722b7c595ef986e8f8086b8",
+      "src/conflux_weave/runtime/sqlite_contracts.py": "68f24f7263eada47b72cc872f6bfd474200578b95376d06275bdbd4ab8bbe4d2",
+      "src/conflux_weave/runtime/sqlite_delivery.py": "a368234496493e20678d675d96893c6b7ff16653350c40e467099abb2f48d95a",
+      "src/conflux_weave/runtime/sqlite_leases.py": "4885e53dd19ddf5f46e9f3edeade7efffe158796475a799722d4cd4a662d2d82",
+      "src/conflux_weave/runtime/sqlite_migrations.py": "d292aa35c52934f4af4d2e36b73cfe80947bd8050524c50f45ac302e8e31dc53",
+      "src/conflux_weave/runtime/sqlite_task_runs.py": "d9d5114ec8f1f8f43c1bf75e3aa20ba70068d0c1ea00142a008ca6f95af691ef",
+      "src/conflux_weave/runtime/sqlite_telemetry.py": "85fe46907b1c87812b07bc5781d8fb78d938820ba3490752383e566ce4d2eeed",
+      "src/conflux_weave/paper_discovery.py": "d6d422e798a84bcdcc1e49fa72c3fe0cc8233ec6e1035d36c794fbf84313b298"
+    }
+  },
+  "preflight": {
+    "w3_focused_tests": "41 passed",
+    "offline_full_regression": "172 passed",
+    "provider_host": "www.dmxapi.cn",
+    "provider_model": "qwen3.7-flash",
+    "provider_api_key_configured": true,
+    "prompt_version": "arxiv-relevance-claims-zh-v3",
+    "secrets_must_not_be_recorded": true
+  },
+  "runtime_contract": {
+    "entrypoint": "conflux-weave durable-paper",
+    "workflow_version": "fixed-arxiv-paper-discovery-durable-v1",
+    "worker_policy": "submit 不外调；每次 worker --once 最多执行一个 Step；每 Run 最多五个 worker 调用",
+    "automatic_retry": false,
+    "fallback": false,
+    "parallel_calls": false
+  },
+  "budget_per_run": {
+    "wall_clock_seconds": 180,
+    "input_tokens": 20000,
+    "output_tokens": 2048,
+    "tool_calls": 2,
+    "retrieval_rounds": 1,
+    "concurrency": 1,
+    "estimated_cost_limit": "provider-price-not-frozen",
+    "cost_enforcement": "unavailable",
+    "maximum_arxiv_calls": 1,
+    "maximum_provider_calls": 1,
+    "temperature": 0.0,
+    "enable_thinking": false,
+    "automatic_budget_expansion": false
+  },
+  "runs": [
+    {
+      "run_order": 1,
+      "id": "W3.6-R1-LIVE-01",
+      "baseline_id": "W3.6-LIVE-01",
+      "query": "查找与 Agent/LLM 上下文管理直接相关的论文，说明每篇论文为什么相关，并明确预印本、摘要级证据和召回范围限制。",
+      "search_query": "all:agent AND all:context AND all:management",
+      "max_results": 15,
+      "database": "var/evaluations/w3/live-acceptance/W3.6-R1-LIVE-01/runtime.sqlite3",
+      "artifact_root": "var/evaluations/w3/live-acceptance/W3.6-R1-LIVE-01/artifacts/sha256",
+      "expected_disposition": "partial",
+      "accepted_baseline": {"selected": 8, "claims": 3, "evidence": 8, "citations": 3, "provider_calls": 1}
+    },
+    {
+      "run_order": 2,
+      "id": "W3.6-R1-LIVE-03-R3",
+      "baseline_id": "W3.6-LIVE-03-R3",
+      "query": "查找将 LLM Agent 用于 GIS 或地理空间分析的论文；区分真正执行空间分析或调用 GIS 工具的工作，与仅处理地理文本、遥感识别或泛化多模态 Agent 的论文。",
+      "search_query": "all:geospatial AND all:agent",
+      "max_results": 15,
+      "database": "var/evaluations/w3/live-acceptance/W3.6-R1-LIVE-03-R3/runtime.sqlite3",
+      "artifact_root": "var/evaluations/w3/live-acceptance/W3.6-R1-LIVE-03-R3/artifacts/sha256",
+      "expected_disposition": "partial",
+      "accepted_baseline": {"selected": 8, "claims": 8, "evidence": 8, "citations": 8, "provider_calls": 1}
+    }
+  ],
+  "acceptance_criteria": [
+    "2/2 新 Run 形成可理解、可用且不弱于对应 W3.6 结果的 partial。",
+    "每个 Run 最多一次 arXiv 和一次 Provider 调用，无 retry、fallback、查询改写或预算扩大。",
+    "Claim/Citation/Evidence/SourceSnapshot 闭合率均为 100%。",
+    "报告保持预印本、摘要级证据、未核验正式发表/全文和跨数据库召回限制。",
+    "SQLite、Attempt/Lease、Budget、Error、Delivery、Artifact、报告和 hash 完整保留。",
+    "冻结文件、运行证据和验收文档中的 Provider API key 扫描为 0。"
+  ],
+  "failure_semantics": {
+    "single_run_failure": "立即停止并保留状态，不 retry、fallback、改查询、扩预算或覆盖历史",
+    "overall_failure": "任一 Run 未接受则 R1 不通过，不执行替代任务制造通过",
+    "allowed_next_action": "仅审计已保留证据并报告；新的外部调用需重新冻结和授权"
+  },
+  "evidence_boundary": "本复验只证明职责拆分后的当前实现对两条冻结 live 任务无行为回归，不扩大 W3 能力边界。",
+  "non_goals": [
+    "不修改 W3-scope-freeze.json 或原 W3.6 验收记录。",
+    "不新增功能、自动恢复、多 Worker、Web/UI、检索策略或其他工作流。",
+    "不以测试、HTTP 成功或结构计数替代报告内容审计。"
+  ]
+}
