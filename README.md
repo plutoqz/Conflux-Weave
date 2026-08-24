@@ -10,6 +10,7 @@ cross-database review, general multi-source RAG, or production capability.
 ## Project entry points
 
 - [Current design](docs/design/current/Conflux-Weave设计文档v0.2.md)
+- [Current W3 implementation plan](docs/plans/current/W3-实施方案.md)
 - [Completed W2 implementation plan](docs/plans/archive/W2-实施方案.md)
 - [Completed W1 implementation plan](docs/plans/archive/W1-实施方案.md)
 - [W0 implementation plan](docs/plans/archive/W0-实施方案.md)

@@ -1,0 +1,382 @@
+{
+  "scope_version": "1.0.0",
+  "status": "scope_frozen",
+  "frozen_at": "2026-08-24",
+  "design_basis": "docs/design/current/Conflux-Weave设计文档v0.2.md",
+  "implementation_plan": "docs/plans/current/W3-实施方案.md",
+  "verification_base_revision": "e9137f39d3a55254dced02c086b3844f250720fd",
+  "milestone": {
+    "id": "W3",
+    "name": "耐用运行、恢复与质量支撑",
+    "goal": "围绕已经可用的研究查询补齐单机长时运行的持久状态、中断恢复、取消、预算硬停止和结构化诊断",
+    "evidence_target": "bounded_validated_live",
+    "current_status": "scope_frozen",
+    "implementation_authorized_by_this_freeze": false
+  },
+  "stage_claim": {
+    "claim": "迁移后的 discover-papers Fixed Workflow 可以在单机进程中断、Worker 重启、lease 过期、超时或取消后从 SQLite 和 Artifact 恢复，或进入明确终态；恢复不静默重复结果未知的 Provider 调用。",
+    "durable_consumer": "discover-papers",
+    "claim_boundary": [
+      "只覆盖 W3 明确迁移的论文发现 Fixed Workflow。",
+      "review-document 和 research-repository 保留同步入口，不声明跨进程恢复能力。",
+      "不证明通用 Runtime、生产服务、多 Worker、分布式恢复或所有工作流耐用。"
+    ],
+    "falsifiers": [
+      "同一幂等键创建多个逻辑 Task。",
+      "Worker 恢复导致已提交 Step 或 Provider 调用静默重复。",
+      "旧 attempt 在 lease 过期后覆盖新 attempt 的状态或 Artifact 引用。",
+      "预算耗尽、取消或最终 Artifact 缺失时 Run 仍进入完整成功。",
+      "Trace 依赖或 Exporter 故障阻断研究任务。",
+      "迁移后冻结 live 任务的交付、Evidence/Citation 或来源边界弱于 W2。"
+    ]
+  },
+  "selected_approach": {
+    "id": "single_sqlite_single_worker_stepwise_fixed_workflow",
+    "authority": "one_sqlite_database",
+    "execution": "one_worker_concurrency_1",
+    "workflow": "stepwise_fixed_paper_discovery",
+    "artifact_store": "local_sha256_atomic_publish",
+    "observability": "optional_otel_openinference_non_blocking",
+    "reason": "覆盖真实搜索、Provider 和发布副作用，同时保持首版复杂度预算，不提前建设平台。",
+    "rejected_alternatives": [
+      {
+        "id": "monolithic_workflow_snapshot",
+        "reason": "没有 Step checkpoint，无法避免结果未知的 Provider 调用重复。"
+      },
+      {
+        "id": "fastapi_multi_worker_general_scheduler",
+        "reason": "提前引入服务、并发和分布式复杂度，超出 W3 用户问题。"
+      }
+    ]
+  },
+  "workflow_contract": {
+    "task_kind": "paper_discovery",
+    "idempotency": "相同规范化 query、search_query、workflow version 和 policy 生成同一逻辑 Task；显式重跑创建带 predecessor 的新 Run。",
+    "steps": [
+      {
+        "id": "search_arxiv",
+        "side_effect": "external_read",
+        "recovery": "完整响应 Artifact 存在时复用；没有响应时允许新 attempt 重放。"
+      },
+      {
+        "id": "rank_candidates",
+        "side_effect": "none",
+        "recovery": "根据冻结输入确定性重放。"
+      },
+      {
+        "id": "synthesize_claims",
+        "side_effect": "paid_external_call_unknown_outcome_possible",
+        "recovery": "完整响应 Artifact 或可核验 response ID 存在时复用；结果未知时等待显式恢复决定，禁止自动重放。"
+      },
+      {
+        "id": "validate_delivery",
+        "side_effect": "none",
+        "recovery": "确定性重放；结构失败保留 Provider 响应和 Error。"
+      },
+      {
+        "id": "publish_delivery",
+        "side_effect": "idempotent_local_write",
+        "recovery": "内容地址文件可复用；Delivery、Artifact 元数据和 Run 终态原子提交。"
+      }
+    ],
+    "automatic_retry": false,
+    "fallback": false,
+    "unknown_provider_outcome": "waiting_for_user_or_structured_failure"
+  },
+  "persistence_contract": {
+    "database": "SQLite",
+    "runtime_path": "var/db/conflux-weave.sqlite3",
+    "authoritative_records": [
+      "schema_migrations",
+      "tasks",
+      "runs",
+      "steps",
+      "attempts",
+      "leases",
+      "run_events",
+      "budget_limits",
+      "budget_entries",
+      "artifacts",
+      "deliveries",
+      "errors",
+      "source_snapshots",
+      "evidence",
+      "claims",
+      "citations"
+    ],
+    "principles": [
+      "业务模块只依赖 Repository，不持有裸 SQLite connection。",
+      "Migration 单向、带版本和 checksum；修正使用新版本。",
+      "启用 foreign keys 和 busy timeout；单 Worker 保持单写入通道。",
+      "领取 Step 创建 attempt 和单调 fencing token；旧 attempt 不能提交。",
+      "最终 Artifact 元数据、Delivery 和 Run 终态在同一数据库事务可见。",
+      "原始来源、Provider 请求响应和报告正文保存在文件 Artifact Store，SQLite 不保存 Secret 或无界原文。",
+      "不导入旧 Conflux 数据库，不把 W2 历史记录伪装成 W3 原生 Run。"
+    ]
+  },
+  "artifact_contract": {
+    "root": "var/artifacts/sha256/",
+    "write_protocol": "same_directory_temp_write_flush_fsync_atomic_rename",
+    "integrity": "最终文件内容 SHA-256 必须与内容地址一致",
+    "database_visibility": "数据库不得引用不存在、损坏或未发布的 Artifact",
+    "orphan_semantics": "文件 rename 后数据库事务前的孤立内容地址文件不构成业务成功，可由相同内容安全复用。"
+  },
+  "worker_contract": {
+    "worker_count": 1,
+    "concurrency": 1,
+    "claim": "transactional_step_claim_with_lease",
+    "heartbeat": "只延长当前 attempt lease",
+    "fencing": "lease 过期后旧 attempt 的状态、预算和 Artifact 提交全部被拒绝",
+    "cancel": "协作式取消；in-flight 网络调用不承诺立即中止，但返回后不启动新外部调用且不发布成功",
+    "resume": "只恢复非终态 Run；终态重跑创建新 Run"
+  },
+  "budget_contract": {
+    "objects": [
+      "BudgetLimit",
+      "BudgetReservation",
+      "BudgetUsage"
+    ],
+    "dimensions": [
+      "wall_clock_deadline",
+      "input_tokens",
+      "output_tokens",
+      "estimated_cost",
+      "tool_calls",
+      "retrieval_rounds",
+      "concurrency"
+    ],
+    "pre_call_rule": "可在调用前确定的资源必须成功预留，否则不得发起调用。",
+    "post_call_rule": "Provider 报告的实际使用超限时禁止后续调用，以预算失败或有 Evidence 的 partial 关闭。",
+    "cost_boundary": "没有冻结价格快照时记录 cost_enforcement=unavailable，不声明金额硬上限。",
+    "finalization_reserve": "为确定性校验、Citation 编译和 Artifact 发布保留独立本地预算。"
+  },
+  "diagnostic_contract": {
+    "error_fields": [
+      "code",
+      "category",
+      "stage",
+      "retryable",
+      "user_message",
+      "technical_detail_ref",
+      "affected_artifact_refs",
+      "recovery_action"
+    ],
+    "user_view": "默认显示原因、影响和下一动作，技术详情通过 Artifact 展开。",
+    "adapter_boundary": "外部异常类型不得成为稳定 CLI 合同。"
+  },
+  "observability_contract": {
+    "protocols": [
+      "OpenTelemetry",
+      "necessary_OpenInference_semantics"
+    ],
+    "status": "optional_non_blocking_adapter",
+    "required_span_links": [
+      "task_id",
+      "run_id",
+      "step_id",
+      "attempt_id",
+      "workflow_version",
+      "provider_model",
+      "budget",
+      "artifact_refs"
+    ],
+    "prohibited_content": [
+      "secrets",
+      "complete_sensitive_documents",
+      "unauthorized_user_paths"
+    ],
+    "failure_semantics": "依赖缺失、Exporter 超时或抛错不改变 Run 终态，记录 telemetry drop 计数。",
+    "phoenix": "optional_local_development_only",
+    "deepeval": "not_admitted_no_bounded_planner_in_W3"
+  },
+  "user_capabilities": [
+    "submit：提交冻结任务并返回 task_id/run_id。",
+    "worker：启动单 Worker 处理 SQLite 队列。",
+    "status：查看 Run、Step、预算、Error、Delivery 和 Artifact。",
+    "cancel：请求取消并显示 in-flight 调用状态。",
+    "resume：恢复可恢复非终态 Run，或说明不能自动恢复的原因。"
+  ],
+  "in_scope": [
+    "单 SQLite 权威状态、单 Worker 和并发度 1。",
+    "Task 幂等、Run/Step/Attempt/Lease/Event 和 fencing。",
+    "discover-papers 五个 Step 的 checkpoint 与恢复。",
+    "Artifact 临时写、fsync、原子 rename 和终态事务。",
+    "Budget limit/reservation/usage 与调用前硬停止。",
+    "取消、超时、lease 过期和显式 resume。",
+    "结构化 Error、恢复动作和 Artifact lineage。",
+    "可选 OTel/OpenInference Trace，且故障不阻断 Runtime。",
+    "真实 SQLite、文件系统和子进程 kill 的 deterministic 故障注入。",
+    "经另行授权的两个 W2 论文发现任务配对 live 非回归。"
+  ],
+  "out_of_scope": [
+    "FastAPI、SSE、Web UI 或完整历史 Runs 产品体验。",
+    "多 Worker、远程执行、分布式数据库、消息队列或公平调度。",
+    "review-document 和 research-repository 的持久化迁移。",
+    "LangGraph、Planner、Agent Strategy、动态 Workflow 或 DeepEval。",
+    "自动 retry、fallback、预算自动扩大或未知 Provider 调用静默重放。",
+    "Phoenix 生产依赖、评测看板或独立 Trace 产品。",
+    "W2 检索策略扩展、Dense/RRF/Reranker、跨数据库或全文核验。",
+    "旧 Conflux 数据库或历史 Run 导入。",
+    "生产可用性、HA、多租户、安全认证或性能扩容声明。"
+  ],
+  "runtime_paths": {
+    "database": "var/db/conflux-weave.sqlite3",
+    "artifacts": "var/artifacts/sha256/",
+    "exports": "var/exports/",
+    "traces": "var/traces/",
+    "fault_injection": "var/evaluations/w3/fault-injection/",
+    "live_acceptance": "var/evaluations/w3/live-acceptance/",
+    "git_boundary": "SQLite、Artifact、Trace、live 响应、报告、Secret 和私有数据均不进入 Git。"
+  },
+  "validation_cases": [
+    {
+      "id": "W3-IDEMPOTENT-SUBMIT",
+      "expected": "相同幂等键串行或并发重复提交只创建一个逻辑 Task。"
+    },
+    {
+      "id": "W3-KILL-BEFORE-CALL",
+      "expected": "Worker 在外部调用前终止；lease 过期后新 attempt 安全接管。"
+    },
+    {
+      "id": "W3-SEARCH-RESPONSE-COMMITTED",
+      "expected": "arXiv 响应 Artifact 已提交后终止；恢复复用响应，不再次搜索。"
+    },
+    {
+      "id": "W3-PROVIDER-OUTCOME-UNKNOWN",
+      "expected": "Provider 请求发出但响应未提交；Run 暂停或结构化失败，Provider 自动重放次数为 0。"
+    },
+    {
+      "id": "W3-PROVIDER-RESPONSE-COMMITTED",
+      "expected": "Provider 响应 Artifact 已提交后终止；恢复复用响应，第二次 Provider 调用数为 0。"
+    },
+    {
+      "id": "W3-PUBLISH-ATOMICITY",
+      "expected": "报告 rename 后数据库发布前终止；Run 不提前成功，恢复后原子发布。"
+    },
+    {
+      "id": "W3-FENCED-ATTEMPT",
+      "expected": "lease 过期后的旧 Worker 不能覆盖新 attempt。"
+    },
+    {
+      "id": "W3-CANCEL",
+      "expected": "取消后不启动新的搜索、Provider 或其他外部调用。"
+    },
+    {
+      "id": "W3-BUDGET-STOP",
+      "expected": "预留不足时不调用；实际超限后停止后续调用；Run 不完整成功。"
+    },
+    {
+      "id": "W3-TRACE-DOWN",
+      "expected": "Trace 依赖缺失或 Exporter 抛错时 deterministic Delivery 仍完成。"
+    },
+    {
+      "id": "W3-CITATION-AFTER-RECOVERY",
+      "expected": "恢复后每个 Citation 仍解析到 Evidence 和 SourceSnapshot。"
+    }
+  ],
+  "acceptance_points": [
+    {
+      "id": "W3.0",
+      "name": "范围、恢复、预算和副作用合同冻结",
+      "status_at_freeze": "scope_frozen",
+      "evidence": "W3 实施方案和 W3 scope freeze"
+    },
+    {
+      "id": "W3.1",
+      "name": "SQLite Repository 与原子 Artifact/终态提交",
+      "status_at_freeze": "pending",
+      "planned_evidence": "Migration、Repository、幂等和原子发布聚焦测试"
+    },
+    {
+      "id": "W3.2",
+      "name": "单 Worker、Lease、Heartbeat 与 Fencing",
+      "status_at_freeze": "pending",
+      "planned_evidence": "Worker 领取、过期接管和旧 attempt 拒绝测试"
+    },
+    {
+      "id": "W3.3",
+      "name": "论文发现 Step checkpoint、取消与恢复",
+      "status_at_freeze": "pending",
+      "planned_evidence": "五 Step workflow、恢复矩阵和调用计数测试"
+    },
+    {
+      "id": "W3.4",
+      "name": "Budget ledger 与结构化诊断",
+      "status_at_freeze": "pending",
+      "planned_evidence": "预留、actual usage、硬停止和 Error/Artifact 测试"
+    },
+    {
+      "id": "W3.5",
+      "name": "可选 Trace 与真实子进程故障注入",
+      "status_at_freeze": "pending",
+      "planned_evidence": "Trace 故障隔离、SQLite/文件系统/进程 kill 报告"
+    },
+    {
+      "id": "W3.6",
+      "name": "两个 W2 论文发现任务配对 live 非回归",
+      "status_at_freeze": "pending",
+      "planned_evidence": "另行授权的 W2.5-LIVE-01 和 W2.5-LIVE-03-R3 新 Run"
+    }
+  ],
+  "live_acceptance": {
+    "authorization_required": true,
+    "paired_tasks": [
+      {
+        "baseline_id": "W2.5-LIVE-01",
+        "task_type": "paper_discovery_context_management",
+        "required_new_runs": 1
+      },
+      {
+        "baseline_id": "W2.5-LIVE-03-R3",
+        "task_type": "paper_discovery_gis_geospatial",
+        "required_new_runs": 1
+      }
+    ],
+    "acceptance": [
+      "2/2 新 Run 形成不弱于 W2 对照的可用 partial。",
+      "每个 Run 的搜索和 Provider 调用数不高于 W2 对照，automatic_retry=false，fallback=false。",
+      "关键 Claim/Evidence/Citation 闭合率为 100%，来源和全文限制不减弱。",
+      "原始响应、Budget usage、SQLite 状态、Attempt/Lease、报告和 hash 完整保留。",
+      "用户不依赖源码即可理解状态、交付、失败和恢复动作。"
+    ],
+    "failure_semantics": "任一新 Run 未接受时 W3.6 不通过；保留失败并另行分析，不自动重试或扩大范围。"
+  },
+  "authorization": {
+    "scope_and_plan_changes": "authorized_by_current_user_instruction",
+    "implementation": "not_authorized_by_this_acceptance_point",
+    "deterministic_fixtures": "not_authorized_until_W3.1_implementation_instruction",
+    "subprocess_fault_injection": "not_authorized_until_W3.5_explicit_entry",
+    "public_network_search": "explicit_live_run_authorization_required",
+    "model_provider_calls": "provider_model_budget_and_live_run_authorization_required",
+    "paid_services": "not_authorized",
+    "phoenix": "optional_local_only_not_authorized_as_runtime_dependency",
+    "deepeval": "not_admitted_in_W3",
+    "secrets": "local_environment_only_never_git_trace_or_artifact"
+  },
+  "milestone_completion_criteria": [
+    "重复提交不会创建多个逻辑 Task。",
+    "Worker 强制终止、重启、lease 过期、超时和取消后，Run 可恢复或进入明确终态。",
+    "恢复不静默重复未知 Provider 副作用，旧 attempt 不能覆盖新 attempt。",
+    "预算耗尽或取消后不启动新的外部调用，也不伪装为完整成功。",
+    "最终 Artifact、Delivery 和 Run 终态原子可见。",
+    "Trace 后端不可用不影响同一 deterministic 研究任务完成。",
+    "恢复后 Citation/Evidence/SourceSnapshot 关系保持闭合。",
+    "现有 W0-W2 回归全部通过。",
+    "经另行授权的两个配对 live 任务完成率和交付质量不低于 W2。"
+  ],
+  "rollback": {
+    "application": "W3 新路径通过独立 CLI/Repository 边界接入；W3.6 前保留 W2 同步命令。",
+    "on_regression": "禁用持久入口并恢复 W2 同步路径，不覆盖 SQLite、Artifact 或失败记录。",
+    "migration": "只向前修正，不回写已执行 migration。"
+  },
+  "stop_conditions": [
+    "恢复要求第二套调度器、多 Worker 协调、远程执行或复杂分布式存储。",
+    "为了统一所有工作流而扩大到 review-document、research-repository 或新任务类型。",
+    "Provider 结果未知却必须自动重试才能通过。",
+    "预算或取消问题只能通过 Prompt、延长超时、自动扩预算或 fallback 掩盖。",
+    "Trace、Phoenix、评测或故障看板成为 Runtime 成功依赖。",
+    "真实任务交付、Evidence/Citation、来源边界或可读性相对 W2 下降。",
+    "发现必须改变产品目标或 W3 成功标准才能继续。"
+  ],
+  "next_acceptance_point_at_freeze": "W3.1 SQLite Repository、幂等 Task、最小 migration 和原子 Artifact/终态提交"
+}
