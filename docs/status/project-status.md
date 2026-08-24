@@ -5,11 +5,11 @@ Updated: 2026-08-24
 | Area | Status | Evidence boundary |
 |---|---|---|
 | Design v0.2 | `proposed` | Current design basis; not implementation proof |
-| Repository framework | `validated_offline` | Python 3.12.9; 146 tests passed; W3.2 Worker lease and fencing tests included |
+| Repository framework | `validated_offline` | Python 3.12.9; 153 tests passed; W3.3 checkpoint and replay-safety tests included |
 | W0 | `validated_offline` | W0.1-W0.5 passed; 12 frozen cases, runtime contracts, and read-only legacy inventory are consistent |
 | W1 | `validated_live` | W1.0-W1.5 passed at frozen boundaries; LIVE-01 review note and LIVE-02 repository identity both delivered explicit partial results with raw evidence retained |
 | W2 | `validated_live` | BM25/Web Fetch/Evidence delivery validated offline; three accepted live tasks across paper discovery and project evidence Q&A produced bounded partial deliveries |
-| W3 | `w3_2_validated_offline` | W3.1 persistence plus single Worker, Attempt/Lease, heartbeat, expiry takeover, and fencing passed local deterministic acceptance |
+| W3 | `w3_3_validated_offline` | W3.1-W3.2 persistence plus five-Step paper-discovery checkpoints, cancel, and explicit recovery decisions passed fixture acceptance |
 | W4-W6 | `pending` | No later product slice has been implemented |
 | Live capability | `bounded_retrieval_evidence` | qwen3.7-flash completed bounded arXiv metadata/abstract discovery and GitHub evidence Q&A; failures and raw responses retained |
 
@@ -37,14 +37,22 @@ Worker path enforces global concurrency 1, ordered Step claims, heartbeat,
 lease-expiry takeover, monotonic fencing tokens, and current-Attempt ownership
 for state, Artifact, and Delivery publication. Tests used in-process Workers;
 no subprocess kill, workflow checkpoint, cancel/resume, Budget ledger, Trace,
-network, or Provider execution was performed. Current next acceptance point:
-W3.3 paper-discovery Step checkpoint, cancel, and recovery.
+network, or Provider execution was performed in that acceptance point.
+
+W3.3 is validated offline at implementation revision `df6fe7e`. The durable
+paper-discovery path persists five Artifact checkpoints and external-call intent.
+Committed search and Provider responses are reused; an unknown Provider outcome
+enters `waiting_for_user` with zero automatic replay until an explicit retry or
+fail decision. Queued and in-flight cancellation start no subsequent external
+Step. Validation used fixture transports and simulated process exit, not real
+subprocess kill, network, Provider, or paid calls. Current next acceptance point:
+W3.4 Budget ledger and structured diagnostics.
 
 Latest framework verification:
 
 ```text
 uv sync --frozen --python 3.12       passed
-uv run --frozen pytest               146 passed
+uv run --frozen pytest               153 passed
 uv run --frozen python -m compileall passed
 uv build                             sdist and wheel built
 ```

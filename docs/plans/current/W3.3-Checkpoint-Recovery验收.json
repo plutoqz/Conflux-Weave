@@ -1,0 +1,132 @@
+{
+  "schema_version": "conflux-weave.w3.acceptance.v1",
+  "acceptance_point": "W3.3",
+  "name": "论文发现 Step checkpoint、取消与恢复",
+  "status": "validated_offline",
+  "accepted_at": "2026-08-24",
+  "implementation_revision": "df6fe7e337aa4364dec6f6fdc67a0bbe61762204",
+  "w3_freeze_revision": "e75eb684c36bba8892ffc828e49ac33345eb539b",
+  "w3_2_revision": "6069491a8a5fa24f256f17b622a7aba3f8b226bb",
+  "scope": {
+    "implemented": [
+      "checksum-protected migration v3 for Step side-effect policies and per-Attempt effect state",
+      "durable five-Step paper-discovery path using Artifact checkpoints",
+      "call intent persistence before arXiv or Provider invocation",
+      "committed checkpoint reuse without repeated search or Provider calls",
+      "safe replay of an interrupted uncommitted arXiv read after lease expiry",
+      "waiting_for_user gate for Provider request_started without a committed response",
+      "explicit retry-or-fail recovery decision with automatic replay disabled",
+      "queued and in-flight cooperative cancellation with zero subsequent external calls"
+    ],
+    "deferred": [
+      "Budget limit, reservation, actual usage, and hard-stop ledger",
+      "structured ErrorRecord and user-facing diagnostic CLI status",
+      "optional OpenTelemetry or OpenInference Trace",
+      "real subprocess kill fault injection",
+      "network, real Provider, paid service, and live acceptance"
+    ]
+  },
+  "migration": {
+    "version": 3,
+    "name": "w3_workflow_checkpoints",
+    "checksum": "sha256:25b5539935abc7be73ae6a1bb2f575a2916d37b5245941726da1099dda08038d",
+    "added_tables": [
+      "step_policies",
+      "attempt_effects"
+    ],
+    "prior_checksums_unchanged": {
+      "v1": "sha256:ec9c9577cea23492915274f8a0f88056989ebee6cc937a81fcec8c16c8156ec7",
+      "v2": "sha256:404463aa8e3f9e22d3092a5bd5e52671e4f5608f314f66fe4e76711c48b3a63d"
+    }
+  },
+  "workflow": {
+    "version": "fixed-arxiv-paper-discovery-durable-v1",
+    "steps": [
+      "search_arxiv",
+      "rank_candidates",
+      "synthesize_claims",
+      "validate_delivery",
+      "publish_delivery"
+    ],
+    "checkpoint_transport": "content-addressed JSON Artifacts with authoritative SQLite registrations",
+    "automatic_retry": false,
+    "fallback": false
+  },
+  "acceptance_results": [
+    {
+      "criterion": "five committed Steps survive Repository reconstruction and form one atomic partial Delivery",
+      "result": "passed",
+      "call_counts": {
+        "arxiv": 1,
+        "provider": 1
+      }
+    },
+    {
+      "criterion": "interrupted arXiv read without a committed response is safely replayed after lease expiry",
+      "result": "passed",
+      "call_counts": {
+        "arxiv": 2,
+        "provider": 1
+      }
+    },
+    {
+      "criterion": "unknown Provider outcome enters waiting_for_user and performs zero automatic replay",
+      "result": "passed",
+      "provider_calls_before_decision": 1,
+      "provider_calls_after_no_decision": 1
+    },
+    {
+      "criterion": "explicit retry decision permits exactly one new Provider attempt while preserving the unknown Attempt",
+      "result": "passed",
+      "provider_calls_after_explicit_retry": 2
+    },
+    {
+      "criterion": "explicit fail decision closes the Run without another Provider call",
+      "result": "passed",
+      "provider_calls": 1
+    },
+    {
+      "criterion": "queued or in-flight cancellation starts no subsequent external Step",
+      "result": "passed"
+    },
+    {
+      "criterion": "Task idempotency freezes workflow, Prompt, code revision, Provider/model, and parameters",
+      "result": "passed"
+    }
+  ],
+  "verification": {
+    "focused_tests": {
+      "command": "uv run --frozen pytest tests/test_sqlite_runtime.py tests/test_worker_leases.py tests/test_durable_paper_discovery.py -q",
+      "result": "22 passed in 4.56s"
+    },
+    "full_regression": {
+      "command": "uv run --frozen pytest",
+      "result": "153 passed in 9.22s"
+    },
+    "compileall": {
+      "command": "uv run --frozen python -m compileall -q src tests scripts",
+      "result": "passed"
+    },
+    "build": {
+      "command": "uv build",
+      "result": "sdist and wheel built"
+    },
+    "diff_check": {
+      "command": "git diff --check",
+      "result": "passed"
+    },
+    "corrective_iteration": "A lineage-manifest scope error caused the publish Step to fail in an intermediate focused run; it was corrected and the complete focused and full suites were rerun successfully."
+  },
+  "execution_boundary": {
+    "fixtures": "deterministic transports, temporary SQLite, and local filesystem",
+    "process_exit_simulation": "BaseException escapes the Worker to preserve an in-flight lease",
+    "real_subprocess_kill_tests": 0,
+    "network_calls": 0,
+    "real_provider_calls": 0,
+    "paid_calls": 0,
+    "live_capability_claim": false,
+    "claim": "W3.3 proves bounded checkpoint and replay-safety semantics with fixtures; it does not prove real process-kill recovery or live paper-discovery quality."
+  },
+  "frozen_file_unchanged": "docs/plans/current/W3-scope-freeze.json",
+  "next_acceptance_point": "W3.4 Budget ledger 与结构化诊断"
+}
