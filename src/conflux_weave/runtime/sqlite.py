@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import hashlib
 import json
 from pathlib import Path
@@ -50,6 +50,10 @@ class RecordNotFound(PersistenceError):
     """Raised when a requested authoritative record does not exist."""
 
 
+class LeaseConflict(PersistenceInvariantError):
+    """Raised when an Attempt no longer owns the active Step lease."""
+
+
 @dataclass(frozen=True, slots=True)
 class SubmissionResult:
     task_id: str
@@ -63,6 +67,32 @@ class MigrationRecord:
     name: str
     checksum: str
     applied_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class LeaseClaim:
+    attempt_id: str
+    step_id: str
+    run_id: str
+    worker_id: str
+    attempt_number: int
+    fencing_token: int
+    acquired_at: str
+    heartbeat_at: str
+    expires_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class AttemptRecord:
+    attempt_id: str
+    step_id: str
+    worker_id: str
+    attempt_number: int
+    fencing_token: int
+    status: str
+    started_at: str
+    finished_at: str | None
+    error_ref: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,6 +202,74 @@ _MIGRATIONS = (
                 PRIMARY KEY (run_id, ordinal),
                 UNIQUE (run_id, registration_id)
             )
+            """,
+        ),
+    ),
+    _Migration(
+        version=2,
+        name="w3_worker_leases",
+        statements=(
+            """
+            CREATE TABLE attempts (
+                attempt_id TEXT PRIMARY KEY,
+                step_id TEXT NOT NULL REFERENCES steps(step_id) ON DELETE RESTRICT,
+                attempt_number INTEGER NOT NULL CHECK (attempt_number >= 1),
+                worker_id TEXT NOT NULL,
+                fencing_token INTEGER NOT NULL UNIQUE CHECK (fencing_token >= 1),
+                status TEXT NOT NULL CHECK (status IN (
+                    'running', 'succeeded', 'failed', 'fenced'
+                )),
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                error_ref TEXT,
+                UNIQUE (step_id, attempt_number)
+            )
+            """,
+            """
+            CREATE INDEX attempts_step_idx
+            ON attempts(step_id, attempt_number)
+            """,
+            """
+            CREATE TABLE leases (
+                attempt_id TEXT PRIMARY KEY
+                    REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
+                worker_id TEXT NOT NULL,
+                fencing_token INTEGER NOT NULL UNIQUE,
+                acquired_at TEXT NOT NULL,
+                heartbeat_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                released_at TEXT
+            )
+            """,
+            """
+            CREATE INDEX leases_expiry_idx
+            ON leases(released_at, expires_at)
+            """,
+            """
+            CREATE TABLE attempt_artifacts (
+                attempt_id TEXT NOT NULL
+                    REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
+                registration_id INTEGER NOT NULL
+                    REFERENCES artifact_registrations(registration_id) ON DELETE RESTRICT,
+                ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+                PRIMARY KEY (attempt_id, ordinal),
+                UNIQUE (attempt_id, registration_id)
+            )
+            """,
+            """
+            CREATE TABLE run_events (
+                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE RESTRICT,
+                step_id TEXT REFERENCES steps(step_id) ON DELETE RESTRICT,
+                attempt_id TEXT REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
+                event_type TEXT NOT NULL,
+                detail_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE INDEX run_events_run_idx
+            ON run_events(run_id, event_id)
             """,
         ),
     ),
@@ -411,6 +509,363 @@ class SQLiteRuntimeRepository:
             ).fetchall()
         return tuple(_step_from_row(row) for row in rows)
 
+    def claim_next_step(
+        self,
+        worker_id: str,
+        *,
+        lease_seconds: int,
+        now: str | None = None,
+    ) -> LeaseClaim | None:
+        _validate_worker_request(worker_id, lease_seconds)
+        claimed_at = _normalize_timestamp(now or self.clock())
+        expires_at = _add_seconds(claimed_at, lease_seconds)
+        with self._connect() as connection:
+            with _transaction(connection):
+                active_lease = connection.execute(
+                    """
+                    SELECT 1 FROM leases
+                    WHERE released_at IS NULL AND expires_at > ?
+                    LIMIT 1
+                    """,
+                    (claimed_at,),
+                ).fetchone()
+                if active_lease is not None:
+                    return None
+                row = connection.execute(
+                    """
+                    SELECT s.*, r.status AS run_status
+                    FROM steps s
+                    JOIN runs r ON r.run_id = s.run_id
+                    WHERE r.status IN ('queued', 'running')
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM steps prior
+                          WHERE prior.run_id = s.run_id
+                            AND prior.ordinal < s.ordinal
+                            AND prior.status NOT IN ('succeeded', 'skipped')
+                      )
+                      AND (
+                          (
+                              s.status = 'pending'
+                              AND NOT EXISTS (
+                                  SELECT 1 FROM attempts a
+                                  WHERE a.step_id = s.step_id
+                              )
+                          )
+                          OR (
+                              s.status = 'running'
+                              AND EXISTS (
+                                  SELECT 1
+                                  FROM attempts a
+                                  JOIN leases l ON l.attempt_id = a.attempt_id
+                                  WHERE a.step_id = s.step_id
+                                    AND a.attempt_number = s.attempt
+                                    AND a.status = 'running'
+                                    AND l.released_at IS NULL
+                                    AND l.expires_at <= ?
+                              )
+                          )
+                      )
+                    ORDER BY r.created_at, r.run_id, s.ordinal
+                    LIMIT 1
+                    """,
+                    (claimed_at,),
+                ).fetchone()
+                if row is None:
+                    return None
+
+                attempt_number = int(row["attempt"])
+                if row["status"] == StepStatus.RUNNING.value:
+                    previous = connection.execute(
+                        """
+                        SELECT a.attempt_id, a.worker_id, a.fencing_token
+                        FROM attempts a
+                        JOIN leases l ON l.attempt_id = a.attempt_id
+                        WHERE a.step_id = ? AND a.attempt_number = ?
+                          AND a.status = 'running' AND l.released_at IS NULL
+                          AND l.expires_at <= ?
+                        """,
+                        (row["step_id"], attempt_number, claimed_at),
+                    ).fetchone()
+                    if previous is None:
+                        raise LeaseConflict("expired Step lease changed during claim")
+                    connection.execute(
+                        """
+                        UPDATE attempts
+                        SET status = 'fenced', finished_at = ?
+                        WHERE attempt_id = ? AND status = 'running'
+                        """,
+                        (claimed_at, previous["attempt_id"]),
+                    )
+                    connection.execute(
+                        """
+                        UPDATE leases SET released_at = ?
+                        WHERE attempt_id = ? AND released_at IS NULL
+                        """,
+                        (claimed_at, previous["attempt_id"]),
+                    )
+                    self._append_run_event(
+                        connection,
+                        run_id=str(row["run_id"]),
+                        step_id=str(row["step_id"]),
+                        attempt_id=str(previous["attempt_id"]),
+                        event_type="attempt_fenced",
+                        detail={
+                            "previous_worker_id": str(previous["worker_id"]),
+                            "previous_fencing_token": int(
+                                previous["fencing_token"]
+                            ),
+                            "reason": "lease_expired",
+                        },
+                        created_at=claimed_at,
+                    )
+                    attempt_number += 1
+
+                fencing_token = int(
+                    connection.execute(
+                        "SELECT COALESCE(MAX(fencing_token), 0) + 1 FROM attempts"
+                    ).fetchone()[0]
+                )
+                attempt_id = f"{row['step_id']}:attempt:{attempt_number}"
+                connection.execute(
+                    """
+                    INSERT INTO attempts(
+                        attempt_id, step_id, attempt_number, worker_id,
+                        fencing_token, status, started_at, finished_at, error_ref
+                    ) VALUES (?, ?, ?, ?, ?, 'running', ?, NULL, NULL)
+                    """,
+                    (
+                        attempt_id,
+                        row["step_id"],
+                        attempt_number,
+                        worker_id,
+                        fencing_token,
+                        claimed_at,
+                    ),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO leases(
+                        attempt_id, worker_id, fencing_token, acquired_at,
+                        heartbeat_at, expires_at, released_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, NULL)
+                    """,
+                    (
+                        attempt_id,
+                        worker_id,
+                        fencing_token,
+                        claimed_at,
+                        claimed_at,
+                        expires_at,
+                    ),
+                )
+                connection.execute(
+                    """
+                    UPDATE steps
+                    SET status = 'running', attempt = ?
+                    WHERE step_id = ?
+                    """,
+                    (attempt_number, row["step_id"]),
+                )
+                if row["run_status"] == RunStatus.QUEUED.value:
+                    connection.execute(
+                        """
+                        UPDATE runs SET status = 'running', updated_at = ?
+                        WHERE run_id = ? AND status = 'queued'
+                        """,
+                        (claimed_at, row["run_id"]),
+                    )
+                self._append_run_event(
+                    connection,
+                    run_id=str(row["run_id"]),
+                    step_id=str(row["step_id"]),
+                    attempt_id=attempt_id,
+                    event_type="step_claimed",
+                    detail={
+                        "attempt_number": attempt_number,
+                        "fencing_token": fencing_token,
+                        "worker_id": worker_id,
+                    },
+                    created_at=claimed_at,
+                )
+        return LeaseClaim(
+            attempt_id=attempt_id,
+            step_id=str(row["step_id"]),
+            run_id=str(row["run_id"]),
+            worker_id=worker_id,
+            attempt_number=attempt_number,
+            fencing_token=fencing_token,
+            acquired_at=claimed_at,
+            heartbeat_at=claimed_at,
+            expires_at=expires_at,
+        )
+
+    def heartbeat_attempt(
+        self,
+        claim: LeaseClaim,
+        *,
+        lease_seconds: int,
+        now: str | None = None,
+    ) -> LeaseClaim:
+        _validate_worker_request(claim.worker_id, lease_seconds)
+        heartbeat_at = _normalize_timestamp(now or self.clock())
+        expires_at = _add_seconds(heartbeat_at, lease_seconds)
+        with self._connect() as connection:
+            with _transaction(connection):
+                self._require_active_attempt(connection, claim, heartbeat_at)
+                connection.execute(
+                    """
+                    UPDATE leases
+                    SET heartbeat_at = ?, expires_at = ?
+                    WHERE attempt_id = ? AND fencing_token = ?
+                      AND worker_id = ? AND released_at IS NULL
+                      AND heartbeat_at <= ?
+                    """,
+                    (
+                        heartbeat_at,
+                        expires_at,
+                        claim.attempt_id,
+                        claim.fencing_token,
+                        claim.worker_id,
+                        heartbeat_at,
+                    ),
+                )
+        return LeaseClaim(
+            attempt_id=claim.attempt_id,
+            step_id=claim.step_id,
+            run_id=claim.run_id,
+            worker_id=claim.worker_id,
+            attempt_number=claim.attempt_number,
+            fencing_token=claim.fencing_token,
+            acquired_at=claim.acquired_at,
+            heartbeat_at=heartbeat_at,
+            expires_at=expires_at,
+        )
+
+    def complete_attempt(
+        self,
+        claim: LeaseClaim,
+        artifacts: Sequence[ArtifactRef] = (),
+        *,
+        now: str | None = None,
+    ) -> StepRecord:
+        completed_at = _normalize_timestamp(now or self.clock())
+        artifact_ids = tuple(artifact.artifact_id for artifact in artifacts)
+        if len(artifact_ids) != len(set(artifact_ids)):
+            raise PersistenceInvariantError("Step output Artifact ids must be unique")
+        for artifact in artifacts:
+            if artifact.producer_step_id != claim.step_id:
+                raise PersistenceInvariantError(
+                    "Step output Artifact producer does not match claimed Step"
+                )
+            self._validate_artifact(artifact)
+
+        with self._connect() as connection:
+            with _transaction(connection):
+                self._require_active_attempt(connection, claim, completed_at)
+                registrations = [
+                    self._register_artifact(connection, artifact)
+                    for artifact in artifacts
+                ]
+                for ordinal, registration_id in enumerate(registrations):
+                    connection.execute(
+                        """
+                        INSERT INTO attempt_artifacts(
+                            attempt_id, registration_id, ordinal
+                        ) VALUES (?, ?, ?)
+                        """,
+                        (claim.attempt_id, registration_id, ordinal),
+                    )
+                changed = connection.execute(
+                    """
+                    UPDATE steps
+                    SET status = 'succeeded', output_refs_json = ?, error_ref = NULL
+                    WHERE step_id = ? AND status = 'running' AND attempt = ?
+                    """,
+                    (
+                        _canonical_json(artifact_ids),
+                        claim.step_id,
+                        claim.attempt_number,
+                    ),
+                ).rowcount
+                if changed != 1:
+                    raise LeaseConflict("claimed Step is no longer current")
+                self._finish_attempt(
+                    connection,
+                    claim,
+                    status="succeeded",
+                    finished_at=completed_at,
+                    error_ref=None,
+                )
+                self._append_run_event(
+                    connection,
+                    run_id=claim.run_id,
+                    step_id=claim.step_id,
+                    attempt_id=claim.attempt_id,
+                    event_type="step_succeeded",
+                    detail={"artifact_refs": artifact_ids},
+                    created_at=completed_at,
+                )
+                row = connection.execute(
+                    "SELECT * FROM steps WHERE step_id = ?", (claim.step_id,)
+                ).fetchone()
+        return _step_from_row(row)
+
+    def fail_attempt(
+        self,
+        claim: LeaseClaim,
+        error_ref: str,
+        *,
+        now: str | None = None,
+    ) -> StepRecord:
+        if not error_ref.strip():
+            raise PersistenceInvariantError("failed Attempt requires an error_ref")
+        failed_at = _normalize_timestamp(now or self.clock())
+        with self._connect() as connection:
+            with _transaction(connection):
+                self._require_active_attempt(connection, claim, failed_at)
+                changed = connection.execute(
+                    """
+                    UPDATE steps
+                    SET status = 'failed', error_ref = ?
+                    WHERE step_id = ? AND status = 'running' AND attempt = ?
+                    """,
+                    (error_ref, claim.step_id, claim.attempt_number),
+                ).rowcount
+                if changed != 1:
+                    raise LeaseConflict("claimed Step is no longer current")
+                self._finish_attempt(
+                    connection,
+                    claim,
+                    status="failed",
+                    finished_at=failed_at,
+                    error_ref=error_ref,
+                )
+                self._append_run_event(
+                    connection,
+                    run_id=claim.run_id,
+                    step_id=claim.step_id,
+                    attempt_id=claim.attempt_id,
+                    event_type="step_failed",
+                    detail={"error_ref": error_ref},
+                    created_at=failed_at,
+                )
+                row = connection.execute(
+                    "SELECT * FROM steps WHERE step_id = ?", (claim.step_id,)
+                ).fetchone()
+        return _step_from_row(row)
+
+    def get_attempts(self, step_id: str) -> tuple[AttemptRecord, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM attempts
+                WHERE step_id = ? ORDER BY attempt_number
+                """,
+                (step_id,),
+            ).fetchall()
+        return tuple(_attempt_from_row(row) for row in rows)
+
     def transition_run(
         self,
         run_id: str,
@@ -456,9 +911,10 @@ class SQLiteRuntimeRepository:
         delivery: DeliveryRecord,
         artifacts: Sequence[ArtifactRef],
         *,
+        claim: LeaseClaim | None = None,
         published_at: str | None = None,
     ) -> RunRecord:
-        timestamp = published_at or self.clock()
+        timestamp = _normalize_timestamp(published_at or self.clock())
         _validate_publication(run_id, target, delivery, artifacts)
         for artifact in artifacts:
             self._validate_artifact(artifact)
@@ -472,6 +928,23 @@ class SQLiteRuntimeRepository:
                     raise RecordNotFound("Run not found")
                 current = RunStatus(row["status"])
                 require_transition(current, target)
+                managed_attempts = int(
+                    connection.execute(
+                        """
+                        SELECT COUNT(*)
+                        FROM attempts a
+                        JOIN steps s ON s.step_id = a.step_id
+                        WHERE s.run_id = ?
+                        """,
+                        (run_id,),
+                    ).fetchone()[0]
+                )
+                if managed_attempts:
+                    if claim is None or claim.run_id != run_id:
+                        raise LeaseConflict(
+                            "lease-managed Delivery publication requires the current claim"
+                        )
+                    self._require_active_attempt(connection, claim, timestamp)
 
                 registrations = [
                     self._register_artifact(connection, artifact)
@@ -521,6 +994,53 @@ class SQLiteRuntimeRepository:
                 if changed != 1:
                     raise PersistenceInvariantError(
                         "Run status changed during Delivery publication"
+                    )
+                if claim is not None:
+                    step_changed = connection.execute(
+                        """
+                        UPDATE steps
+                        SET status = 'succeeded', output_refs_json = ?, error_ref = NULL
+                        WHERE step_id = ? AND status = 'running' AND attempt = ?
+                        """,
+                        (
+                            _canonical_json(
+                                tuple(artifact.artifact_id for artifact in artifacts)
+                            ),
+                            claim.step_id,
+                            claim.attempt_number,
+                        ),
+                    ).rowcount
+                    if step_changed != 1:
+                        raise LeaseConflict("claimed publish Step is no longer current")
+                    for ordinal, registration_id in enumerate(registrations):
+                        connection.execute(
+                            """
+                            INSERT INTO attempt_artifacts(
+                                attempt_id, registration_id, ordinal
+                            ) VALUES (?, ?, ?)
+                            """,
+                            (claim.attempt_id, registration_id, ordinal),
+                        )
+                    self._finish_attempt(
+                        connection,
+                        claim,
+                        status="succeeded",
+                        finished_at=timestamp,
+                        error_ref=None,
+                    )
+                    self._append_run_event(
+                        connection,
+                        run_id=run_id,
+                        step_id=claim.step_id,
+                        attempt_id=claim.attempt_id,
+                        event_type="delivery_published",
+                        detail={
+                            "artifact_refs": tuple(
+                                artifact.artifact_id for artifact in artifacts
+                            ),
+                            "run_status": target.value,
+                        },
+                        created_at=timestamp,
                     )
                 updated = connection.execute(
                     "SELECT * FROM runs WHERE run_id = ?", (run_id,)
@@ -588,6 +1108,109 @@ class SQLiteRuntimeRepository:
                 schema_version=str(row["schema_version"]),
             )
             for row in rows
+        )
+
+    def _require_active_attempt(
+        self,
+        connection: sqlite3.Connection,
+        claim: LeaseClaim,
+        at: str,
+    ) -> None:
+        row = connection.execute(
+            """
+            SELECT
+                a.step_id, a.attempt_number, a.worker_id, a.fencing_token,
+                a.status, l.heartbeat_at, l.expires_at, l.released_at
+            FROM attempts a
+            JOIN leases l ON l.attempt_id = a.attempt_id
+            WHERE a.attempt_id = ?
+            """,
+            (claim.attempt_id,),
+        ).fetchone()
+        if row is None:
+            raise LeaseConflict("Attempt lease does not exist")
+        if (
+            row["step_id"] != claim.step_id
+            or int(row["attempt_number"]) != claim.attempt_number
+            or row["worker_id"] != claim.worker_id
+            or int(row["fencing_token"]) != claim.fencing_token
+            or row["status"] != "running"
+            or row["released_at"] is not None
+            or row["heartbeat_at"] > at
+            or row["expires_at"] <= at
+        ):
+            raise LeaseConflict("Attempt is expired, released, or fenced")
+        current = connection.execute(
+            "SELECT status, attempt FROM steps WHERE step_id = ?",
+            (claim.step_id,),
+        ).fetchone()
+        if (
+            current is None
+            or current["status"] != StepStatus.RUNNING.value
+            or int(current["attempt"]) != claim.attempt_number
+        ):
+            raise LeaseConflict("Attempt no longer owns the current Step")
+
+    @staticmethod
+    def _finish_attempt(
+        connection: sqlite3.Connection,
+        claim: LeaseClaim,
+        *,
+        status: str,
+        finished_at: str,
+        error_ref: str | None,
+    ) -> None:
+        changed = connection.execute(
+            """
+            UPDATE attempts
+            SET status = ?, finished_at = ?, error_ref = ?
+            WHERE attempt_id = ? AND status = 'running'
+              AND fencing_token = ? AND worker_id = ?
+            """,
+            (
+                status,
+                finished_at,
+                error_ref,
+                claim.attempt_id,
+                claim.fencing_token,
+                claim.worker_id,
+            ),
+        ).rowcount
+        if changed != 1:
+            raise LeaseConflict("Attempt was fenced during completion")
+        connection.execute(
+            """
+            UPDATE leases SET released_at = ?
+            WHERE attempt_id = ? AND released_at IS NULL
+            """,
+            (finished_at, claim.attempt_id),
+        )
+
+    @staticmethod
+    def _append_run_event(
+        connection: sqlite3.Connection,
+        *,
+        run_id: str,
+        step_id: str,
+        attempt_id: str,
+        event_type: str,
+        detail: object,
+        created_at: str,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO run_events(
+                run_id, step_id, attempt_id, event_type, detail_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                step_id,
+                attempt_id,
+                event_type,
+                _canonical_json(detail),
+                created_at,
+            ),
         )
 
     def _register_artifact(
@@ -749,6 +1372,20 @@ def _step_from_row(row: sqlite3.Row) -> StepRecord:
     )
 
 
+def _attempt_from_row(row: sqlite3.Row) -> AttemptRecord:
+    return AttemptRecord(
+        attempt_id=str(row["attempt_id"]),
+        step_id=str(row["step_id"]),
+        worker_id=str(row["worker_id"]),
+        attempt_number=int(row["attempt_number"]),
+        fencing_token=int(row["fencing_token"]),
+        status=str(row["status"]),
+        started_at=str(row["started_at"]),
+        finished_at=row["finished_at"],
+        error_ref=row["error_ref"],
+    )
+
+
 def _canonical_json(value: object) -> str:
     return json.dumps(
         value,
@@ -756,6 +1393,25 @@ def _canonical_json(value: object) -> str:
         sort_keys=True,
         separators=(",", ":"),
     )
+
+
+def _validate_worker_request(worker_id: str, lease_seconds: int) -> None:
+    if not worker_id.strip():
+        raise PersistenceInvariantError("worker_id must not be empty")
+    if lease_seconds <= 0:
+        raise PersistenceInvariantError("lease_seconds must be positive")
+
+
+def _normalize_timestamp(value: str) -> str:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+        raise PersistenceInvariantError("lease timestamps must use UTC")
+    return parsed.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _add_seconds(value: str, seconds: int) -> str:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return (parsed + timedelta(seconds=seconds)).isoformat().replace("+00:00", "Z")
 
 
 @contextmanager

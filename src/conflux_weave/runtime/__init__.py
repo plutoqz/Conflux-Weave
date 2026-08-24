@@ -16,8 +16,11 @@ from conflux_weave.runtime.outcome_workflow import (
     OutcomeScenario,
 )
 from conflux_weave.runtime.sqlite import (
+    AttemptRecord,
     ArtifactMetadataConflict,
     IdempotencyConflict,
+    LeaseClaim,
+    LeaseConflict,
     MigrationChecksumError,
     MigrationRecord,
     PersistenceError,
@@ -26,14 +29,18 @@ from conflux_weave.runtime.sqlite import (
     SQLiteRuntimeRepository,
     SubmissionResult,
 )
+from conflux_weave.runtime.worker import SQLiteStepWorker
 
 __all__ = [
     "ArtifactIntegrityError",
+    "AttemptRecord",
     "ArtifactMetadataConflict",
     "DeterministicValidationAdapter",
     "FixedValidationWorkflow",
     "FixedOutcomeWorkflow",
     "IdempotencyConflict",
+    "LeaseClaim",
+    "LeaseConflict",
     "LocalArtifactStore",
     "MigrationChecksumError",
     "MigrationRecord",
@@ -43,6 +50,7 @@ __all__ = [
     "PersistenceInvariantError",
     "RecordNotFound",
     "SQLiteRuntimeRepository",
+    "SQLiteStepWorker",
     "SubmissionResult",
     "ValidationAdapter",
     "WorkflowExecution",

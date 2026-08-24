@@ -20,7 +20,8 @@ Runtime layout:
 Do not place secrets in `var/`. Do not commit any file from this tree by force.
 W3.1 implements a checksum-protected SQLite migration plus SHA-256 content
 addressing, idempotent writes, integrity checks, and atomic Artifact publication.
-The current database schema is limited to Task, initial Run/Step, Delivery, and
-Artifact metadata needed by W3.1. Worker, Attempt/Lease, checkpoint recovery,
-Budget ledger, structured diagnostics, Trace, indexes, imports, exports, logs,
-and evaluation consumers remain planned for their named acceptance points.
+The current database schema covers Task, Run/Step, Delivery, Artifact metadata,
+and the W3.2 Attempt/Lease/Event records used by the single Worker. Checkpoint
+recovery, Budget ledger, structured diagnostics, Trace, indexes, imports,
+exports, logs, and evaluation consumers remain planned for their named
+acceptance points.
