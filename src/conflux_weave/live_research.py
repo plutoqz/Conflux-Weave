@@ -23,10 +23,14 @@ from conflux_weave.core import (
     require_transition,
 )
 from conflux_weave.evidence import (
+    AnswerBlock,
     ArtifactRef,
     Citation,
     Claim,
     EvidenceRef,
+    EvidenceSupportStatus,
+    SourceTrustLevel,
+    render_evidence_report,
     require_closed_citations,
 )
 from conflux_weave.provider import OpenAICompatibleChatAdapter
@@ -454,35 +458,31 @@ def _render_report(
     citations: tuple[Citation, ...],
     model_limitations: tuple[str, ...],
 ) -> str:
-    by_claim: dict[str, list[Citation]] = {}
-    for citation in citations:
-        by_claim.setdefault(citation.claim_id, []).append(citation)
-    lines = [
-        "# 仓库身份核验",
-        "",
-        f"> 查询：{query}",
-        f"> 自动选择：[{selected.full_name}]({selected.html_url})（GitHub 搜索第 1 位）",
-        "",
-        "## 证据约束结论",
-        "",
-    ]
-    for claim in claims:
-        markers = "".join(f"[{item.display_index}]" for item in by_claim[claim.claim_id])
-        lines.append(f"- {claim.text} {markers}")
-    lines.extend(("", "## 限制", ""))
-    for limitation in model_limitations:
-        lines.append(f"- {limitation}")
-    lines.append("- 搜索排名只用于发现；仓库 README 的自述不能单独证明维护组织的独立官方身份。")
-    lines.extend(("", "## 引用", ""))
-    evidence_by_id = {item.evidence_id: item for item in evidence}
-    for citation in citations:
-        item = evidence_by_id[citation.evidence_id]
-        locator = json.dumps(item.locator, ensure_ascii=False, sort_keys=True)
-        lines.append(
-            f"[{citation.display_index}] `{item.evidence_id}`，SourceSnapshot "
-            f"`{item.source_snapshot_id}`，locator `{locator}`。"
-        )
-    return "\n".join(lines).rstrip() + "\n"
+    conclusion = "\n".join(f"- {claim.text}" for claim in claims)
+    return render_evidence_report(
+        title="仓库身份核验",
+        intro_lines=(
+            f"> 查询：{query}",
+            f"> 自动选择：[{selected.full_name}]({selected.html_url})（GitHub 搜索第 1 位）",
+        ),
+        blocks=(
+            AnswerBlock(
+                heading="证据约束结论",
+                body=conclusion,
+                support_status=EvidenceSupportStatus.PARTIAL_SUPPORT,
+                claim_ids=tuple(claim.claim_id for claim in claims),
+            ),
+        ),
+        claims=claims,
+        evidence=evidence,
+        citations=citations,
+        evidence_trust={
+            item.evidence_id: SourceTrustLevel.UNVERIFIED_SOURCE
+            for item in evidence
+        },
+        limitations=model_limitations
+        + ("搜索排名只用于发现；仓库 README 的自述不能单独证明维护组织的独立官方身份。",),
+    )
 
 
 def _idempotency_key(query: str) -> str:

@@ -1,0 +1,46 @@
+{
+  "acceptance_point": "W2.3",
+  "status": "validated_offline",
+  "evaluated_at": "2026-08-24",
+  "feature": "Claim support, source trust and low-interference evidence delivery",
+  "implementation": {
+    "contracts": "src/conflux_weave/evidence/delivery.py",
+    "support_status": [
+      "cited",
+      "partial_support",
+      "uncited_context",
+      "conflicting",
+      "unsupported_claim"
+    ],
+    "source_trust": [
+      "authoritative",
+      "credible_secondary",
+      "general_source",
+      "unverified_source"
+    ],
+    "migrated_consumers": [
+      "FixedRepositoryIdentityWorkflow report",
+      "FixedReviewReadingNoteWorkflow report"
+    ]
+  },
+  "display_decision": {
+    "body": "answer-block support and source-trust markers only",
+    "citation_detail": "one Evidence summary after the readable answer",
+    "forbidden": "sentence-level or paragraph-level citation suffixes",
+    "integrity": "registered fact Claims still require closed Claim -> Citation -> Evidence mappings"
+  },
+  "validation": {
+    "focused_test_count": 16,
+    "covered": [
+      "cited and uncited-context blocks are distinct",
+      "citation presence and source trust are independent",
+      "uncited context cannot register fact Claims",
+      "every Evidence receives an explicit trust classification",
+      "repository identity report uses block-level markers",
+      "PDF reading-note report uses block-level markers",
+      "Citation closure remains enforced"
+    ]
+  },
+  "evidence_boundary": "validated_offline; migrated workflows used deterministic fixture transports, not new public network or Provider runs.",
+  "next_acceptance_point": "W2.4"
+}

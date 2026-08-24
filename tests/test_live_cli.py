@@ -14,6 +14,22 @@ def test_live_repository_parser_defaults_to_ignored_dotenv() -> None:
     assert args.query == "pi coding agent"
 
 
+def test_paper_discovery_parser_freezes_explicit_search_query() -> None:
+    args = build_parser().parse_args(
+        [
+            "discover-papers",
+            "--query",
+            "查找 Agent 上下文管理论文",
+            "--search-query",
+            "agent context management",
+        ]
+    )
+
+    assert str(args.dotenv) == ".env"
+    assert args.search_query == "agent context management"
+    assert args.max_results == 15
+
+
 def test_live_repository_cli_fails_before_network_without_provider_config(
     tmp_path, monkeypatch, capsys
 ) -> None:

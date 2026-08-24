@@ -1,17 +1,17 @@
 # Conflux-Weave
 
-Conflux-Weave is being initialized as an evidence-native, local-first Research
-Agent Workbench. W0 and W1.0-W1.4 are validated at their stated evidence
-boundaries, but no end-to-end Research Query capability has been delivered.
-W1.1 exposes a deterministic runtime validation command, W1.2 exposes local
-document import/report preparation, and W1.3 adds explicit GitHub repository
-discovery and source registration. W1.4 adds offline outcome and citation
-validation; it never calls a network or model Provider.
+Conflux-Weave is an evidence-native, local-first Research Agent Workbench under
+bounded development. W0 is validated offline; W1 and W2 are validated live at
+their frozen source, task, and budget boundaries. The accepted live slices cover
+local review-note generation, GitHub project evidence Q&A, and arXiv
+metadata/abstract paper discovery. They do not establish full-text verification,
+cross-database review, general multi-source RAG, or production capability.
 
 ## Project entry points
 
 - [Current design](docs/design/current/Conflux-Weave设计文档v0.2.md)
-- [Current W1 implementation plan](docs/plans/current/W1-实施方案.md)
+- [Completed W2 implementation plan](docs/plans/archive/W2-实施方案.md)
+- [Completed W1 implementation plan](docs/plans/archive/W1-实施方案.md)
 - [W0 implementation plan](docs/plans/archive/W0-实施方案.md)
 - [Project status](docs/status/project-status.md)
 - [Documentation governance](docs/README.md)
@@ -80,10 +80,20 @@ Create a cited Chinese reading note from an authorized local review PDF:
 uv run --frozen conflux-weave review-document "path/to/review.pdf" --query "总结综述，解释术语并指出展开不足的点"
 ```
 
-The W1 implementation milestone is validated live at its frozen scope. This
-means the bounded local-document and repository-identity slices ran with real
-inputs and the configured Provider; it does not establish full-document review,
-independent verification of every source, or general research-agent capability.
+Run the W2 bounded arXiv metadata/abstract paper-discovery workflow:
+
+```powershell
+uv run --frozen conflux-weave discover-papers --query "研究问题" --search-query "arXiv search terms"
+```
+
+The command preserves source and Provider responses as ignored Artifacts,
+compiles Claim/Evidence/Citation mappings, and reports explicit source and
+full-text limitations. It performs no automatic retry or fallback.
+
+The W1 and W2 implementation milestones are validated live at their frozen
+scopes. See the project status and archived acceptance records for accepted,
+rejected, and failed runs; deterministic tests or HTTP success are not treated
+as substitutes for those bounded live results.
 
 Local databases, artifacts, indexes, evaluation outputs, secrets, and private
 research data must not be committed. See `var/README.md` for the planned runtime

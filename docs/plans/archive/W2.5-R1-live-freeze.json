@@ -1,0 +1,62 @@
+{
+  "schema_version": "conflux-weave.w2.5-live-revalidation-freeze.v1",
+  "status": "frozen_authorized",
+  "frozen_at": "2026-08-24T10:25:34+08:00",
+  "authorization": "用户在 W2.5 失败验收与窄修复后明确指令：继续",
+  "predecessor": {
+    "freeze_ref": "docs/plans/archive/W2.5-live-freeze.json",
+    "acceptance_ref": "docs/plans/archive/W2.5-live验收.json",
+    "failed_run_id": "run-c74e7e50f0cf4b3f8f4f5352ee80deda",
+    "failure": "arXiv 元数据无法支持的同行评审与正式发表状态声明",
+    "failed_run_preserved": true
+  },
+  "source_revision": {
+    "git_head": "da2c82c39cfcbf438af2e98c73ad7c216f6f2f8a",
+    "worktree_dirty": true,
+    "relevant_file_sha256": {
+      "src/conflux_weave/paper_discovery.py": "26cf7cc471f9c2b694b05afe241ea1d806ecd545f39e48936b25021874402dd0",
+      "src/conflux_weave/cli.py": "80284c8119e58501f25717c13ee98583a532c98fb0b70f814a78b5e2ead3bce4"
+    }
+  },
+  "repair_under_test": {
+    "error_code": "paper_publication_status_unsupported",
+    "contract": "Provider 生成的 claims 或 limitations 一旦断言同行评审、期刊出版或正式发表状态，工作流必须拒绝交付并保留 Provider 原始响应",
+    "offline_evidence": "tests/test_paper_discovery.py；全量 125 passed"
+  },
+  "run": {
+    "id": "W2.5-LIVE-03-R1",
+    "task_type": "paper_discovery",
+    "query": "查找将 LLM Agent 用于 GIS 或地理空间分析的论文；区分真正执行空间分析或调用 GIS 工具的工作，与仅处理地理文本、遥感识别或泛化多模态 Agent 的论文。",
+    "search_query": "all:geospatial AND all:agent",
+    "max_results": 15,
+    "source_boundary": "arXiv Atom API 的元数据与摘要；相关性边界只能依据标题和摘要判断",
+    "expected_disposition": "partial"
+  },
+  "provider_budget": {
+    "provider_base_url": "https://www.dmxapi.cn/v1",
+    "model": "qwen3.7-flash",
+    "maximum_calls": 1,
+    "maximum_output_tokens": 2048,
+    "temperature": 0.0,
+    "enable_thinking": false,
+    "automatic_retry": false,
+    "fallback": false
+  },
+  "acceptance_criteria": [
+    "形成 complete 或 partial 的任务级回答；partial 必须包含明确限制和未满足条件。",
+    "回答按摘要内容区分 GIS 工具/空间分析、地理空间约束集成、基准评估及非核心 GIS 工作，不把弱相关候选统一提升为直接 GIS 分析能力。",
+    "不得断言 arXiv 记录的正式发表、期刊出版或同行评审状态；若 Provider 输出此类内容，工作流应以 paper_publication_status_unsupported 拒绝而不是交付。",
+    "关键事实 Claim 与 Evidence/Citation 闭合，原始 arXiv 和 Provider 响应均保存为 SHA-256 Artifact。",
+    "正文仅使用回答块级支持与可信度标记，不在逐句或逐段后附 Citation。",
+    "Artifact 秘密扫描结果为 0。"
+  ],
+  "failure_semantics": {
+    "on_failure": "保留错误、请求、原始响应及已有 Artifact；不自动重试、不更换检索式、不放宽校验、不 fallback",
+    "stage_effect": "本次失败则 W2.5 继续保持 executed_live_not_accepted"
+  },
+  "non_goals": [
+    "不增加第二次 Provider 调用。",
+    "不接入 Dense、RRF、Reranker、Ragas 或 Agent RAG。",
+    "不覆盖原始失败 Run 或将离线修复测试作为 live 证据。"
+  ]
+}

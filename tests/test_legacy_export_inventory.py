@@ -5,7 +5,7 @@ from typing import Any
 
 ROOT = Path(__file__).parents[1]
 INVENTORY = (
-    ROOT / "docs" / "plans" / "current" / "W0-legacy-export-inventory.json"
+    ROOT / "docs" / "plans" / "archive" / "W0-legacy-export-inventory.json"
 )
 
 

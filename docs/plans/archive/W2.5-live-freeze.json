@@ -1,0 +1,91 @@
+{
+  "schema_version": "conflux-weave.w2.5-live-freeze.v1",
+  "status": "frozen_authorized",
+  "frozen_at": "2026-08-24T10:16:19+08:00",
+  "authorization": "用户明确指令：进入 W2.5",
+  "purpose": "用两个任务类型的三次真实运行验收 W2 的可用回答、证据追溯、来源可信度区分和低干扰阅读体验",
+  "source_revision": {
+    "git_head": "da2c82c39cfcbf438af2e98c73ad7c216f6f2f8a",
+    "worktree_dirty": true,
+    "relevant_file_sha256": {
+      "src/conflux_weave/paper_discovery.py": "bec2b5f6e21731d78f68866f336c9d50ba99842a3cf220bf3d56a4d2f25df671",
+      "src/conflux_weave/cli.py": "80284c8119e58501f25717c13ee98583a532c98fb0b70f814a78b5e2ead3bce4",
+      "src/conflux_weave/live_research.py": "c8940965f6388c1b57bcad4fd41de4643d4148efa7c2c51a73bf08ec9a2ff906",
+      "src/conflux_weave/evidence/delivery.py": "b8c03123731b64b2f652edcea2e1c10136d4ab8f65d3e5ea341b6f334f6fbb6e"
+    }
+  },
+  "preflight": {
+    "offline_tests": "124 passed",
+    "provider_base_url": "https://www.dmxapi.cn/v1",
+    "provider_model": "qwen3.7-flash",
+    "provider_api_key_configured": true,
+    "secrets_must_not_be_recorded": true
+  },
+  "provider_budget": {
+    "maximum_total_calls": 3,
+    "maximum_calls_per_run": 1,
+    "maximum_output_tokens_per_call": 2048,
+    "temperature": 0.0,
+    "enable_thinking": false,
+    "automatic_retry": false,
+    "fallback": false,
+    "parallel_calls": false
+  },
+  "runs": [
+    {
+      "run_order": 1,
+      "id": "W2.5-LIVE-01",
+      "task_type": "paper_discovery",
+      "query": "查找与 Agent/LLM 上下文管理直接相关的论文，说明每篇论文为什么相关，并明确预印本、摘要级证据和召回范围限制。",
+      "search_query": "all:agent AND all:context AND all:management",
+      "max_results": 15,
+      "source_boundary": "arXiv Atom API 的元数据与摘要；不扩展到出版社、Crossref、会议页面或全文",
+      "expected_disposition": "partial"
+    },
+    {
+      "run_order": 2,
+      "id": "W2.5-LIVE-02",
+      "task_type": "project_evidence_qa",
+      "query": "定位 pi coding agent 的规范名称、维护者、仓库 URL 和公开实现入口，并区分 GitHub 可定位证据与尚未独立核验的官方关系。",
+      "search_query_policy": "existing fixed workflow derives ASCII entity terms: pi coding agent",
+      "source_boundary": "GitHub repository search API、候选仓库元数据和 README；不以搜索排名证明官方关系",
+      "expected_disposition": "partial"
+    },
+    {
+      "run_order": 3,
+      "id": "W2.5-LIVE-03",
+      "task_type": "paper_discovery",
+      "query": "查找将 LLM Agent 用于 GIS 或地理空间分析的论文；区分真正执行空间分析或调用 GIS 工具的工作，与仅处理地理文本、遥感识别或泛化多模态 Agent 的论文。",
+      "search_query": "all:geospatial AND all:agent",
+      "max_results": 15,
+      "source_boundary": "arXiv Atom API 的元数据与摘要；相关性边界只能依据标题和摘要判断",
+      "expected_disposition": "partial"
+    }
+  ],
+  "acceptance_criteria": [
+    "三次 Run 覆盖 paper_discovery 和 project_evidence_qa 两种任务类型，并各自只有一次 Provider 调用。",
+    "每次 Run 交付 complete 或 partial 的任务级回答；partial 必须列出 limitations 和 unmet_criteria。",
+    "关键事实 Claim 通过 Evidence/Citation 闭合校验，Evidence 可追溯到不可变 SourceSnapshot 和原始响应 Artifact。",
+    "回答块使用支持符号和来源可信度符号；正文不在每句话或每段后追加 Citation 编号。",
+    "报告明确区分可定位、来源可信度、预印本/README 自述和未独立核验边界。",
+    "保存查询、候选、选中来源、Provider 请求与原始响应、usage、报告、manifest 及 SHA-256 内容地址。",
+    "Artifact 和文档不得包含 Provider API key。"
+  ],
+  "failure_semantics": {
+    "single_run_failure": "保留错误输出和已产生的原始 Artifact；不得自动重试、放宽检索式、切换来源或 fallback；该 Run 不计为通过",
+    "overall_failure": "任一冻结 Run 未形成可验收交付时，W2.5 和 W2 保持未通过 live 验收",
+    "allowed_next_action": "检查已保留证据后，另行冻结新的 Run；不得覆盖失败历史"
+  },
+  "stop_conditions": [
+    "Provider 配置、模型或预算与冻结值不一致。",
+    "相关源文件 hash 与冻结值不一致。",
+    "需要第四次 Provider 调用、自动 retry、fallback 或放宽来源边界才能制造成功。",
+    "原始响应、请求、来源 Snapshot、Evidence/Citation 映射或报告任一关键 Artifact 未保存。",
+    "发现 API key 或其他秘密进入 Artifact、日志或验收文档。"
+  ],
+  "non_goals": [
+    "Dense、RRF、Reranker、多向量库、Ragas 或 Agent RAG 平台建设。",
+    "跨数据库系统综述、全文实验结论核验或仓库官方所有权认证。",
+    "以三次 bounded live run 声称通用 RAG 或生产能力。"
+  ]
+}

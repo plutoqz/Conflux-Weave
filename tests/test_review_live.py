@@ -64,5 +64,7 @@ def test_review_workflow_imports_pdf_and_compiles_page_citations(tmp_path, monke
     assert len(result.citations) == 7
     report = store.read_bytes(result.report_artifact).decode()
     assert "ETCLOVG" in report
-    assert "执行摘要" in report and "[1] [2]" in report
-    assert "PDF 第 7 页" in report
+    assert "### ◐ G 执行摘要" in report
+    assert "[1] [2]" not in report
+    assert '"page": 7' in report
+    assert "## Evidence 汇总" in report

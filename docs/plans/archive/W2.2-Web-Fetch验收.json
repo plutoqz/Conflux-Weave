@@ -1,0 +1,37 @@
+{
+  "acceptance_point": "W2.2",
+  "status": "validated_offline",
+  "evaluated_at": "2026-08-24",
+  "feature": "minimal Web Search + Fetch and Evidence Locator v1",
+  "risk": "A web result could be used without preserving the raw source, immutable snapshot, decodable text, or reproducible locator.",
+  "implementation": {
+    "search": "existing GitHubRepositorySearchAdapter",
+    "fetch": "src/conflux_weave/web.py::WebFetchAdapter",
+    "locator": "text_range with start_char, end_char and text_sha256",
+    "raw_source": "content-addressed Artifact",
+    "normalized_source": "UTF-8 text Artifact",
+    "snapshot": "SourceSnapshot linked to raw and normalized/segments Artifacts"
+  },
+  "validation": {
+    "test_file": "tests/test_web.py",
+    "test_count": 5,
+    "covered": [
+      "HTML extraction excludes script/style and preserves block segments",
+      "plain-text normalization preserves paragraph boundaries",
+      "raw response and snapshot artifacts are retained",
+      "HTTP failure retains the raw response reference",
+      "invalid URL and oversized response fail closed"
+    ]
+  },
+  "decision": {
+    "selected_chain": "GitHub discovery -> explicit source selection -> bounded URL fetch -> normalized text -> stable segments",
+    "not_included": [
+      "generic multi-provider web search",
+      "JavaScript/browser rendering",
+      "automatic fallback or retry",
+      "answer generation or Citation compilation"
+    ]
+  },
+  "evidence_boundary": "validated_offline; fixture transport only, no public network request or Provider call was made.",
+  "next_acceptance_point": "W2.3"
+}

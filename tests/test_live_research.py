@@ -147,7 +147,9 @@ def test_live_repository_workflow_compiles_closed_cited_partial_delivery(tmp_pat
     assert provider_transport.calls == 1
     assert "q=pi+coding+agent" in github_transport.urls[0]
     report = store.read_bytes(result.report_artifact).decode()
-    assert "该仓库将项目自述为 Pi Agent Harness。 [1]" in report
+    assert "### ◐ ? 证据约束结论" in report
+    assert "该仓库将项目自述为 Pi Agent Harness。 [1]" not in report
+    assert "## Evidence 汇总" in report
     manifest = store.read_bytes(result.manifest_artifact)
     assert b"fixture-secret" not in manifest
     assert json.loads(manifest)["usage"]["total_tokens"] == 140

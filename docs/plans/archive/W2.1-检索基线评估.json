@@ -1,0 +1,52 @@
+{
+  "acceptance_point": "W2.1",
+  "status": "validated_offline",
+  "evaluated_at": "2026-08-24",
+  "base_revision": "da2c82c39cfcbf438af2e98c73ad7c216f6f2f8a",
+  "feature": "W2 retrieval baseline",
+  "risk": "W1 has no reproducible ranking baseline, so retrieval changes could not be compared or tied to a product decision.",
+  "question": "Does the current frozen lexical task slice require Dense or RRF, or is a deterministic BM25 baseline sufficient for the next W2 acceptance point?",
+  "dataset": {
+    "source": "tests/test_retrieval.py",
+    "case_count": 2,
+    "case_types": [
+      "context and memory retrieval",
+      "messaging workflow retrieval"
+    ],
+    "annotation": "Each query has an explicitly relevant document id; the fixture is deterministic and does not claim live retrieval capability."
+  },
+  "strategies": {
+    "bm25": {
+      "status": "implemented_and_evaluated",
+      "recall_at_2": 1.0,
+      "mrr": 1.0,
+      "implementation": "src/conflux_weave/retrieval.py"
+    },
+    "dense": {
+      "status": "not_evaluated",
+      "reason": "No embedding model, vector store, semantic held-out corpus, or authorized provider is present in W2.1."
+    },
+    "rrf": {
+      "status": "not_evaluated",
+      "reason": "RRF requires two independently justified ranked lists; adding a fusion layer before Dense or a second real retriever exists would add complexity without evidence."
+    }
+  },
+  "decision": {
+    "selected_strategy": "bm25",
+    "decision": "Use deterministic BM25 as the single W2.1 retrieval strategy.",
+    "basis": [
+      "The frozen W2.1 slice has explicit lexical entities and terminology.",
+      "The deterministic fixture reaches recall@2=1.0 and MRR=1.0.",
+      "Dense and RRF cannot be fairly claimed or compared without a semantic corpus and an independent embedding/retrieval implementation.",
+      "BM25 is small, reproducible, dependency-free, and preserves source locator metadata for the next Evidence step."
+    ],
+    "rejected_for_now": ["dense", "rrf"],
+    "reconsider_when": [
+      "A held-out case demonstrates lexical failure that a semantic retriever could plausibly fix.",
+      "A real embedding provider and model configuration are explicitly authorized and frozen.",
+      "Two independently ranked lists exist and RRF can change a concrete retrieval decision."
+    ]
+  },
+  "stop_condition": "Do not add Dense, RRF, Ragas, or a second retrieval adapter until a frozen held-out failure and a concrete product decision require it.",
+  "evidence_boundary": "validated_offline; no network, provider, embedding model, or live user task was run."
+}

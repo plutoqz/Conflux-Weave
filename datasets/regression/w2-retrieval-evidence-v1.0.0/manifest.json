@@ -1,0 +1,75 @@
+{
+  "dataset_id": "w2-retrieval-evidence",
+  "version": "1.0.0-provisional",
+  "status": "provisional",
+  "layer": "regression",
+  "schema_version": "1.0.0",
+  "created_at": "2026-08-24",
+  "purpose": "W2.4 deterministic retrieval and evidence-delivery comparison.",
+  "evidence_boundary": "The 30 legacy records are candidate annotations, not Weave answer-quality gold. corpus.jsonl is constructed from legacy source ids and must_contain terms and proves only deterministic ranking mechanics.",
+  "case_count": 35,
+  "retrieval_case_count": 30,
+  "executable_retrieval_case_count": 27,
+  "boundary_case_count": 5,
+  "coverage": {
+    "case_kind": {
+      "retrieval": 30,
+      "outcome": 5
+    },
+    "split": {
+      "regression": 24,
+      "held_out": 6,
+      "boundary": 5
+    },
+    "language": {
+      "en-en": 10,
+      "zh-en": 10,
+      "zh-zh": 15
+    },
+    "source_status": {
+      "available": 29,
+      "missing": 3,
+      "not_applicable": 2,
+      "partial": 1
+    }
+  },
+  "source_lineage": {
+    "asset_id": "legacy.rag_eval.multilingual_v1",
+    "inventory_hash": "a9ca3f27953a4a35cb6febe866cd8c9305355a7a256539d5c0adadf4f5067f04",
+    "source_file_hashes": {
+      "en_en.yaml": "8878dfa3233b9ae8b906405c06acf8e5c7c3d54bf8c08a29b3b8f9de3307e92c",
+      "zh_en.yaml": "5603dda77ea759abaf763f9c85244bded17dfdef194ab6b94fa15a03b60461d4",
+      "zh_zh.yaml": "f07d0bdef2a92c7c089e21c8fe6c0cb3623b71b2ecdafa8419ef3335d038cab3"
+    },
+    "direct_import_allowed_at_w0": false,
+    "migration_review": "schema normalized; source existence and hashes recorded; semantic labels still require independent human review"
+  },
+  "evaluation_admission": {
+    "Feature": "W2 BM25 retrieval and evidence-delivery contracts",
+    "Risk": "Chinese lexical tokenization, missing sources, or display changes may produce silent retrieval and evidence regressions.",
+    "Question": "Does the W2 implementation improve deterministic regression and held-out retrieval while preserving explicit outcome and trust semantics?",
+    "Metric": "Recall@3, MRR, outcome exact match, support exact match, trust exact match and inline-citation count.",
+    "Decision": "Keep the smallest strategy that improves held-out cases; admit Dense/RRF/Ragas only when deterministic evidence cannot answer the product question.",
+    "ActionOnFail": "Attribute failure to corpus, tokenization, retrieval, Evidence or rendering before changing strategy or adding a framework.",
+    "StopCondition": "Metrics answer the current BM25 and delivery decision; further framework work cannot change it."
+  },
+  "execution_authorization": {
+    "provider_calls": false,
+    "network_retrieval": false,
+    "paid_evaluation": false,
+    "live_acceptance": false
+  },
+  "hash_policy": "sha256 over UTF-8 text normalized from CRLF or CR to LF",
+  "file_hashes": {
+    "README.md": "266e0a9371c72fd2a9d5cbca86d278e93da28576e0275858192718dbc7c1add2",
+    "cases.jsonl": "b5a350df40d1e4189474c2a36596c0c4f51cfe5fbe6852d3579b476d18541aa0",
+    "corpus.jsonl": "dfdd923a2803b4e0e60ff3db232d8078213472910fbd584b10866f0afd933a3c",
+    "schema.json": "e8f68132036eec47c2ca9f4d3833f64808667f6e1ee6cbaa7e6343d898d46500"
+  },
+  "review": {
+    "required": true,
+    "reviewed_by": null,
+    "reviewed_at": null,
+    "decision": "awaiting_independent_human_review"
+  }
+}

@@ -1,0 +1,148 @@
+{
+  "schema_version": "conflux-weave.w2.5-live-acceptance.v1",
+  "evaluated_at": "2026-08-24",
+  "freeze_ref": "docs/plans/archive/W2.5-live-freeze.json",
+  "status": "validated_live_after_revalidation",
+  "stage_decision": "accept_with_bounded_partial_deliveries",
+  "reason": "原始 LIVE-03 和 R1/R2 失败均保留；claims-only Prompt v3 的 LIVE-03-R3 形成可用 partial 交付，与 LIVE-01、LIVE-02 共同满足三次真实任务和两类任务验收",
+  "provider_execution": {
+    "provider_base_url": "https://www.dmxapi.cn/v1",
+    "requested_model": "qwen3.7-flash",
+    "returned_model": "qwen3.7-flash",
+    "calls": 3,
+    "maximum_calls": 3,
+    "automatic_retry": false,
+    "fallback": false,
+    "total_input_tokens": 10240,
+    "total_output_tokens": 1882,
+    "total_tokens": 12122
+  },
+  "runs": [
+    {
+      "id": "W2.5-LIVE-01",
+      "run_id": "run-4ff01bfe03304e4ebbea90894f3648c2",
+      "task_type": "paper_discovery",
+      "runtime_disposition": "partial",
+      "content_acceptance": "accepted",
+      "selected_count": 8,
+      "claim_count": 3,
+      "evidence_count": 8,
+      "citation_count": 3,
+      "provider_response_id": "chatcmpl-396a8ac5-1afc-99fc-880e-0d33f61e445f",
+      "usage": {
+        "input_tokens": 4344,
+        "output_tokens": 499,
+        "total_tokens": 4843
+      },
+      "report_artifact_ref": "artifact-sha256-d800927a842308e7f7990380990dbabf6ebc2df954691b0f3f8adeeb58bc7a0d",
+      "manifest_artifact_ref": "artifact-sha256-b65d3563e4ddf4731da275d3938461fb8914c3edede77168a9dd32ea28cfd932",
+      "source_response_artifact_ref": "artifact-sha256-1ba9224bff2874507652f96194eb2bb3169517d32b0d52d1d472c3a96acb37db",
+      "provider_request_artifact_ref": "artifact-sha256-50c4c5677d7ef047d808f12e81230d9d79a1db4c5526d29f5072231a8131e08b",
+      "provider_response_artifact_ref": "artifact-sha256-e43d37494e0b072c39235bb868bf5b395221abb912e126cd630da32e756bcb78",
+      "readability_audit": "pass: 正文仅在回答块显示一次 ◐ G，逐句 Citation 数为 0，完整映射集中在 Evidence 汇总",
+      "evidence_boundary_audit": "pass: 只交付 3 个直接相关候选，其余候选进入限制；明确摘要级与跨数据库边界"
+    },
+    {
+      "id": "W2.5-LIVE-02",
+      "run_id": "run-cef1ca6c156b4b4590a6b63d423b931b",
+      "task_type": "project_evidence_qa",
+      "runtime_disposition": "partial",
+      "content_acceptance": "accepted",
+      "selected_repository": "earendil-works/pi",
+      "claim_count": 4,
+      "evidence_count": 2,
+      "citation_count": 5,
+      "provider_response_id": "chatcmpl-056bfba5-8503-951a-ba8b-bc65f8478a55",
+      "usage": {
+        "input_tokens": 2009,
+        "output_tokens": 350,
+        "total_tokens": 2359
+      },
+      "report_artifact_ref": "artifact-sha256-88d2d6e9d61aae861edf3a8ddab0e7ff11816318cd5c4fbb28b07a4d6af1baea",
+      "manifest_artifact_ref": "artifact-sha256-4f1e123013f875188fc0b1e1ff6b4f5492f83a1d9add110fe404dd07ac581a8f",
+      "source_response_artifact_ref": "artifact-sha256-10d303f4837f93b718243a2cbb82f252c6f8e80e89621f0fbd5a5ab19aa67cb8",
+      "provider_request_artifact_ref": "artifact-sha256-f6a834b5168ebd5e6f06ff27327f049f63c454ffb0230b1a56c896dcb1457a5d",
+      "provider_response_artifact_ref": "artifact-sha256-75c9c8935eb9d0c0fbc78019c1ff896ec5607d678c9432fff7ab68cf18a5dbc3",
+      "readability_audit": "pass: 正文仅在回答块显示一次 ◐ ?，逐句 Citation 数为 0",
+      "evidence_boundary_audit": "pass: 回答名称、仓库路径、URL 和实现入口，同时明确 GitHub 排名与 README 自述不能证明独立官方关系"
+    },
+    {
+      "id": "W2.5-LIVE-03",
+      "run_id": "run-c74e7e50f0cf4b3f8f4f5352ee80deda",
+      "task_type": "paper_discovery",
+      "runtime_disposition": "partial",
+      "content_acceptance": "rejected",
+      "selected_count": 8,
+      "claim_count": 8,
+      "evidence_count": 8,
+      "citation_count": 8,
+      "provider_response_id": "chatcmpl-4dfccee6-6205-905f-ac9d-9f484d65f7bd",
+      "usage": {
+        "input_tokens": 3887,
+        "output_tokens": 1033,
+        "total_tokens": 4920
+      },
+      "report_artifact_ref": "artifact-sha256-c21080be6b42e024f5db8c73c4579818ecc46a16cdffc9a931355168c60a5d65",
+      "manifest_artifact_ref": "artifact-sha256-78119f22b1636c654664f07556e042a63be335a6538b3e369c9fc0c6b3b4a017",
+      "source_response_artifact_ref": "artifact-sha256-fddf26f9d1b3f5c5fad36ea69a5c4b68b984d4af9aae2e70bbd16bb07b22759b",
+      "provider_request_artifact_ref": "artifact-sha256-4d9338f85ab302ff288b14a3be2da04ccd4a9a5d21bd55991ec51b07c85c767a",
+      "provider_response_artifact_ref": "artifact-sha256-91a106221a25acffa73b20118850d9351ffb90c53b21436a21dc08494af848f4",
+      "readability_audit": "pass: 正文仅在回答块显示一次 ◐ G，逐句 Citation 数为 0",
+      "evidence_boundary_audit": "fail: limitation 声称所有记录尚未经历正式同行评审或期刊出版；arXiv Atom 元数据不能证明该状态，且冻结 Prompt 明确禁止补充发表或同行评审状态",
+      "failure_preserved": true,
+      "retry_performed": false
+    }
+  ],
+  "artifact_audit": {
+    "referenced_artifacts_missing": 0,
+    "secret_match_count": 0,
+    "content_address_algorithm": "sha256",
+    "raw_source_responses_preserved": true,
+    "raw_provider_requests_preserved": true,
+    "raw_provider_responses_preserved": true
+  },
+  "root_cause": {
+    "category": "generation_contract_validation",
+    "fact": "SYSTEM_PROMPT 已禁止补充发表状态或同行评审状态，但结构解析只校验 JSON、Evidence ID 和 Citation 闭合，没有确定性拒绝该类语义",
+    "not_supported_as_root_cause": [
+      "retrieval recall",
+      "arXiv network",
+      "Provider availability",
+      "Citation closure"
+    ]
+  },
+  "bounded_repair": {
+    "implementation": "在 paper_discovery 结构解析中确定性拒绝同行评审、期刊出版或正式发表状态声明",
+    "new_error_code": "paper_publication_status_unsupported",
+    "focused_test": "5 passed",
+    "post_repair_file_sha256": {
+      "src/conflux_weave/paper_discovery.py": "26cf7cc471f9c2b694b05afe241ea1d806ecd545f39e48936b25021874402dd0"
+    },
+    "live_revalidated": false,
+    "boundary": "修复发生在三次冻结 live 调用之后；离线测试不能替代新的 live 复验"
+  },
+  "acceptance_summary": {
+    "initial_runs_executed": 3,
+    "revalidation_runs_executed": 3,
+    "historical_provider_calls": 6,
+    "task_types_covered": 2,
+    "accepted_task_runs": [
+      "W2.5-LIVE-01",
+      "W2.5-LIVE-02",
+      "W2.5-LIVE-03-R3"
+    ],
+    "content_accepted_runs": 3,
+    "rejected_or_failed_attempts_preserved": 3,
+    "w2_5_validated_live": true,
+    "w2_validated_live": true
+  },
+  "revalidation_refs": [
+    "docs/plans/archive/W2.5-R1-live-freeze.json",
+    "docs/plans/archive/W2.5-R1-live验收.json",
+    "docs/plans/archive/W2.5-R2-live-freeze.json",
+    "docs/plans/archive/W2.5-R2-live验收.json",
+    "docs/plans/archive/W2.5-R3-live-freeze.json",
+    "docs/plans/archive/W2.5-R3-live验收.json"
+  ],
+  "next_acceptance_point": "W3 范围、耐用运行、恢复与质量支撑合同冻结"
+}

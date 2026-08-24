@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Conflux-Weave W2 retrieval/evidence case",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "case_id",
+    "origin",
+    "case_kind",
+    "split",
+    "language",
+    "query",
+    "relevant_source_ids",
+    "must_contain",
+    "source_status",
+    "expected_outcome",
+    "expected_support_status",
+    "expected_source_trust",
+    "annotation_status"
+  ],
+  "properties": {
+    "case_id": {
+      "type": "string",
+      "pattern": "^W2-(RAG|BND)-"
+    },
+    "origin": {
+      "type": "string"
+    },
+    "case_kind": {
+      "enum": [
+        "retrieval",
+        "outcome"
+      ]
+    },
+    "split": {
+      "enum": [
+        "regression",
+        "held_out",
+        "boundary"
+      ]
+    },
+    "language": {
+      "enum": [
+        "en-en",
+        "zh-en",
+        "zh-zh"
+      ]
+    },
+    "query": {
+      "type": "string",
+      "minLength": 1
+    },
+    "relevant_source_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "must_contain": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "source_status": {
+      "enum": [
+        "available",
+        "missing",
+        "partial",
+        "not_applicable"
+      ]
+    },
+    "expected_outcome": {
+      "enum": [
+        "retrievable",
+        "complete",
+        "partial",
+        "no_answer"
+      ]
+    },
+    "expected_support_status": {
+      "enum": [
+        "cited",
+        "partial_support",
+        "uncited_context",
+        "conflicting",
+        "unsupported_claim"
+      ]
+    },
+    "expected_source_trust": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "authoritative",
+          "credible_secondary",
+          "general_source",
+          "unverified_source"
+        ]
+      }
+    },
+    "annotation_status": {
+      "const": "provisional"
+    }
+  }
+}

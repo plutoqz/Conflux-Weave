@@ -1,0 +1,75 @@
+{
+  "schema_version": "conflux-weave.w2.5-live-revalidation-acceptance.v1",
+  "evaluated_at": "2026-08-24",
+  "freeze_ref": "docs/plans/archive/W2.5-R1-live-freeze.json",
+  "status": "contract_rejection_validated_live_task_delivery_failed",
+  "stage_decision": "reject",
+  "run": {
+    "id": "W2.5-LIVE-03-R1",
+    "run_id": "not_exposed_by_pre-repair_failure_path",
+    "runtime_status": "failed",
+    "error_code": "paper_publication_status_unsupported",
+    "retryable": false,
+    "automatic_retry": false,
+    "fallback": false,
+    "provider_response_id": "chatcmpl-6422101d-c08c-9cf3-8421-6a1f18684d52",
+    "usage": {
+      "input_tokens": 3887,
+      "output_tokens": 1118,
+      "total_tokens": 5005
+    }
+  },
+  "content_audit": {
+    "trigger_text": "所有证据均来自预印本（arXiv），发表年份标注为 2026 年，尚未经历正式同行评审或期刊/会议出版流程",
+    "decision": "reject",
+    "reason": "arXiv Atom 元数据不能证明正式发表、会议/期刊出版或同行评审状态",
+    "incorrect_content_delivered": false,
+    "task_level_answer_delivered": false
+  },
+  "contract_result": {
+    "paper_publication_status_unsupported": "validated_live",
+    "raw_provider_response_retention": "validated_live",
+    "no_automatic_retry": "validated_live",
+    "no_fallback": "validated_live",
+    "usable_gis_paper_discovery_delivery": "failed"
+  },
+  "artifacts": {
+    "config_artifact_ref": "artifact-sha256-dcf1400bffcfb7f7b1941f3090f8c84e84f7dec5bb2535cb752afd377e0fd950",
+    "search_response_artifact_ref": "artifact-sha256-fddf26f9d1b3f5c5fad36ea69a5c4b68b984d4af9aae2e70bbd16bb07b22759b",
+    "search_snapshot_artifact_ref": "artifact-sha256-6d1845d835ab0ca0a7be599aa8ec2436013f240e87df9c10480b2d5e683081d8",
+    "search_manifest_artifact_ref": "artifact-sha256-a15bbf3e49afdae357277c57c271ff9f3ddaca10b517fd9fee51f7ee33203ece",
+    "provider_request_artifact_ref": "artifact-sha256-4d9338f85ab302ff288b14a3be2da04ccd4a9a5d21bd55991ec51b07c85c767a",
+    "provider_response_artifact_ref": "artifact-sha256-05b8228b4da1dd867021d60070eaae065562bfeb4edd0a8c3d58138b83d39514",
+    "referenced_artifacts_missing": 0,
+    "secret_match_count": 0,
+    "failure_manifest_created": false,
+    "failure_manifest_boundary": "R1 执行版本只把 Provider 请求/响应附到异常，未提交统一失败 manifest；原始 Artifact 均保留但 run_id 未从 CLI 暴露"
+  },
+  "root_cause_update": {
+    "fact": "确定性拒绝校验已正确工作；旧 user prompt 中的‘保留预印本边界’持续诱导模型生成同行评审/出版状态判断，与 system prompt 的禁止条款形成语义张力",
+    "category": "prompt_contract_conflict_and_failure_observability",
+    "retrieval_failure": false,
+    "provider_failure": false
+  },
+  "post_run_repairs": [
+    {
+      "change": "将 user prompt 改为只说明证据来自 arXiv 元数据与摘要，不得推断正式发表或同行评审状态",
+      "prompt_version": "arxiv-relevance-claims-zh-v2"
+    },
+    {
+      "change": "结构校验失败时提交包含 run_id、配置、来源、Provider 请求/响应、usage 和错误码的 failure manifest",
+      "cli_surface": "artifact_ref"
+    }
+  ],
+  "post_repair_validation": {
+    "focused_tests": "5 passed",
+    "paper_discovery_sha256": "d41de708693feb7548f13377289f052d4479263449c0af14ee3a78b17c051d4b",
+    "live_revalidated": false
+  },
+  "stage_effect": {
+    "w2_5_validated_live": false,
+    "w2_validated_live": false,
+    "reason": "安全拒绝已获 live 证据，但冻结 GIS 用户任务没有形成可用交付"
+  },
+  "next_acceptance_point": "另行冻结 W2.5-LIVE-03-R2，以 Prompt v2 和 failure manifest 合同执行一次 GIS 论文发现 live 复验"
+}

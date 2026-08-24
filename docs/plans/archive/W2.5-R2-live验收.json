@@ -1,0 +1,81 @@
+{
+  "schema_version": "conflux-weave.w2.5-live-revalidation-acceptance.v2",
+  "evaluated_at": "2026-08-24",
+  "freeze_ref": "docs/plans/archive/W2.5-R2-live-freeze.json",
+  "status": "failure_manifest_validated_live_task_delivery_failed",
+  "stage_decision": "reject",
+  "run": {
+    "id": "W2.5-LIVE-03-R2",
+    "run_id": "run-69e3855a813f4339b11794a8f2c90ea5",
+    "runtime_status": "failed",
+    "error_code": "paper_publication_status_unsupported",
+    "retryable": false,
+    "automatic_retry": false,
+    "fallback": false,
+    "provider_response_id": "chatcmpl-57fb4854-0d0c-90e6-8246-b442ae64e21c",
+    "usage": {
+      "input_tokens": 3903,
+      "output_tokens": 984,
+      "total_tokens": 4887
+    }
+  },
+  "content_audit": {
+    "trigger_text": "所有证据均仅基于 arXiv 元数据与摘要，未包含实验详细结果或同行评审状态",
+    "direct_claim_that_papers_are_unreviewed": false,
+    "contract_violation": "Provider 仍生成了冻结合同禁止由模型生成的同行评审状态 limitation",
+    "decision": "reject",
+    "incorrect_content_delivered": false,
+    "task_level_answer_delivered": false,
+    "claim_payload_boundary": "8 条相关性 Claim 本身未触发发表状态校验；失败仅来自 Provider limitations"
+  },
+  "contract_result": {
+    "publication_status_guard": "validated_live",
+    "failure_manifest_creation": "validated_live",
+    "failure_run_id_exposure": "validated_live",
+    "source_and_provider_lineage_on_failure": "validated_live",
+    "no_automatic_retry": "validated_live",
+    "no_fallback": "validated_live",
+    "usable_gis_paper_discovery_delivery": "failed"
+  },
+  "artifacts": {
+    "failure_manifest_artifact_ref": "artifact-sha256-c02329b5d4d95a69edd0d3a2e763a579af368bfe5e84cca3c63f63cea4194293",
+    "config_artifact_ref": "artifact-sha256-8c51fcef3a300b6cd8f19bad3e9c813ded7a88a2105808d1b85004314303ab92",
+    "search_response_artifact_ref": "artifact-sha256-fddf26f9d1b3f5c5fad36ea69a5c4b68b984d4af9aae2e70bbd16bb07b22759b",
+    "search_snapshot_artifact_ref": "artifact-sha256-0f5515cf5442781679d0383180a08b0ed1bbd75adb53f72e2a950af6d2ce57e8",
+    "search_manifest_artifact_ref": "artifact-sha256-8d294b649d56d355d1a413118498306bad4cb5c4f7bde9087b0eb1c2632411cc",
+    "provider_request_artifact_ref": "artifact-sha256-95bdf6efe298a1998a403cdd6a56e2a02fe766a1a649e8463b6bf7b6f82fe73a",
+    "provider_response_artifact_ref": "artifact-sha256-7c42b3bc9e82669b51b7042d3a57f362a1bb101abcddc4a95d3f7e166f63e596",
+    "referenced_artifacts_missing": 0,
+    "secret_match_count": 0
+  },
+  "root_cause_update": {
+    "fact": "Prompt v2 的否定约束未阻止模型继续生成 limitations；反复调整否定措辞不能稳定交付，而 8 条相关性 Claim 已满足结构要求",
+    "category": "unnecessary_model_owned_limitations",
+    "decision": "从 Provider 输出合同移除 limitations，由工作流根据来源边界确定性生成限制",
+    "retrieval_failure": false,
+    "provider_availability_failure": false
+  },
+  "post_run_repair": {
+    "prompt_version": "arxiv-relevance-claims-zh-v3",
+    "provider_output_schema": {
+      "allowed_keys": [
+        "claims"
+      ],
+      "model_generated_limitations": false
+    },
+    "deterministic_limitations": [
+      "仅检索 arXiv 元数据和摘要",
+      "未核验正式发表版本、全文实验或跨数据库召回"
+    ],
+    "publication_status_guard_retained": true,
+    "focused_tests": "6 passed",
+    "paper_discovery_sha256": "b314bf19024ef3b45e6536655e4ff153e75ed1dc47ab115a8abbb86b65c93c40",
+    "live_revalidated": false
+  },
+  "stage_effect": {
+    "w2_5_validated_live": false,
+    "w2_validated_live": false,
+    "reason": "失败可追溯合同已通过 live 验证，但 GIS 用户任务仍没有可用交付"
+  },
+  "next_acceptance_point": "另行冻结 W2.5-LIVE-03-R3，以 claims-only Prompt v3 执行一次 GIS 论文发现 live 复验"
+}

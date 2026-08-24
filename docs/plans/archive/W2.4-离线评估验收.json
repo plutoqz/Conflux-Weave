@@ -1,0 +1,92 @@
+{
+  "acceptance_point": "W2.4",
+  "status": "validated_offline",
+  "evaluated_at": "2026-08-24",
+  "feature": "versioned cases, deterministic evaluation and case-level before/after comparison",
+  "dataset": {
+    "manifest": "datasets/regression/w2-retrieval-evidence-v1.0.0/manifest.json",
+    "status": "provisional",
+    "cases": 35,
+    "legacy_cases_preserved": 30,
+    "executable_retrieval_cases": 27,
+    "held_out_cases": 6,
+    "boundary_cases": 5,
+    "missing_source_cases": [
+      "W2-RAG-en-en-004",
+      "W2-RAG-en-en-005",
+      "W2-RAG-en-en-006"
+    ],
+    "review_boundary": "Schema, source existence and hashes were reviewed during migration; semantic labels and constructed corpus still await independent human review."
+  },
+  "rejected_preflight": {
+    "result": "CJK unigram/bigram initially reduced overall Recall@3 from 0.7778 to 0.7037.",
+    "defects": [
+      "mixed-language Chinese tokens introduced unrelated Chinese-corpus noise",
+      "zero-score documents were incorrectly included in top-k and created identifier-order hits"
+    ],
+    "decision": "Reject the result, preserve it as failed evidence, remove zero-score hits and prefer explicit Latin entities for mixed-language queries before rerunning."
+  },
+  "accepted_comparison": {
+    "k": 3,
+    "before": {
+      "overall_recall": 0.7037037037,
+      "overall_mrr": 0.5987654321,
+      "held_out_recall": 0.8333333333,
+      "held_out_mrr": 0.5555555556,
+      "zh_zh_recall": 0.6,
+      "zh_zh_mrr": 0.55
+    },
+    "after": {
+      "overall_recall": 0.7777777778,
+      "overall_mrr": 0.6851851852,
+      "held_out_recall": 0.8333333333,
+      "held_out_mrr": 0.6388888889,
+      "zh_zh_recall": 0.8,
+      "zh_zh_mrr": 0.7333333333
+    },
+    "unretrieved_after": [
+      "W2-RAG-zh-en-001",
+      "W2-RAG-zh-en-003",
+      "W2-RAG-zh-en-005",
+      "W2-RAG-zh-en-008",
+      "W2-RAG-zh-zh-002",
+      "W2-RAG-zh-zh-009"
+    ]
+  },
+  "delivery_evaluation": {
+    "case_count": 5,
+    "outcome_exact_match": 1.0,
+    "support_exact_match": 1.0,
+    "trust_exact_match": 1.0,
+    "readability_before_inline_citations": 2,
+    "readability_after_inline_citations": 0,
+    "boundary": "Contract fixture results only; not human answer-quality scores."
+  },
+  "framework_admission": {
+    "ragas": {
+      "decision": "not_admitted",
+      "reason": "Deterministic retrieval and case-level results already answer the current product decision; Ragas would not diagnose missing retrieval hits."
+    },
+    "dense": {
+      "decision": "deferred_candidate",
+      "reason": "Cross-language and semantic misses are plausible consumers, but the corpus is constructed and provisional and no embedding configuration is frozen.",
+      "reconsider_when": "Independent review plus a real W2.5 task reproduces the miss with an authorized embedding model and budget."
+    },
+    "rrf": {
+      "decision": "not_admitted",
+      "reason": "There is still only one justified ranked list."
+    },
+    "reranker": {
+      "decision": "not_admitted",
+      "reason": "Observed failures are missing recall rather than a demonstrated top-rank ordering problem."
+    }
+  },
+  "product_decision": "Keep BM25 with zero-score filtering, CJK unigram/bigram tokenization and Latin-entity preference for mixed queries for W2.5. Observe the six misses in real tasks before admitting Dense.",
+  "raw_evaluation": {
+    "path": "var/evaluations/w2.4/offline-comparison.json",
+    "bytes": 8852,
+    "sha256": "6272ad56849d9bc1c91765830d730045b73adb471ae79680cf9aeefcded1bc71"
+  },
+  "evidence_boundary": "validated_offline against a provisional constructed fixture; no network, Provider, embedding model, Ragas or live task was run.",
+  "next_acceptance_point": "W2.5"
+}

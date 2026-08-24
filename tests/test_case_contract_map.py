@@ -8,7 +8,7 @@ import conflux_weave.evidence as evidence_contracts
 
 ROOT = Path(__file__).parents[1]
 FROZEN_DATASET = ROOT / "datasets" / "regression" / "personal-research-v1.0.0"
-CONTRACT_MAP = ROOT / "docs" / "plans" / "current" / "W0-case-contract-map.json"
+CONTRACT_MAP = ROOT / "docs" / "plans" / "archive" / "W0-case-contract-map.json"
 
 
 def normalized_sha256(path: Path) -> str:

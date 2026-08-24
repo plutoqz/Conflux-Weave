@@ -1,0 +1,282 @@
+{
+  "scope_version": "1.0.0",
+  "status": "scope_frozen",
+  "frozen_at": "2026-08-24",
+  "design_basis": "docs/design/current/Conflux-Weave设计文档v0.2.md",
+  "verification_base_revision": "da2c82c39cfcbf438af2e98c73ad7c216f6f2f8a",
+  "milestone": {
+    "id": "W2",
+    "name": "Retrieval、Evidence 与 Citation 的质量和可读交付",
+    "goal": "在 W1 固定工作流上尽可能搜集足够信息、回答用户问题，并分别标注证据支持状态与来源可信度",
+    "evidence_target": "validated_live",
+    "current_status": "scope_frozen",
+    "implementation_authorized_by_this_freeze": false
+  },
+  "semantic_boundaries": {
+    "answer_disposition": [
+      {
+        "id": "complete",
+        "meaning": "在冻结任务范围内完成主要交付，关键事实 Claim 有足够 Evidence 支持"
+      },
+      {
+        "id": "partial",
+        "meaning": "存在可交付回答或证据片段，但仍有明确未满足条件；不得把未满足部分写成已确认事实"
+      },
+      {
+        "id": "no_answer",
+        "meaning": "在当前任务合同、来源范围和硬约束下无法负责任地完成任务级回答"
+      }
+    ],
+    "evidence_support": [
+      {
+        "id": "cited",
+        "meaning": "关键事实 Claim 可反向定位到 Evidence、SourceSnapshot 和稳定 locator"
+      },
+      {
+        "id": "partial_support",
+        "meaning": "有相关 Evidence，但覆盖不完整、范围受限或只能支持较弱表述"
+      },
+      {
+        "id": "uncited_context",
+        "meaning": "背景解释、方法建议或一般性信息，不作为当前来源已证明的事实交付"
+      },
+      {
+        "id": "conflicting",
+        "meaning": "可用 Evidence 之间存在冲突，必须展示冲突或降低结论强度"
+      },
+      {
+        "id": "unsupported_claim",
+        "meaning": "当前来源不能支持该事实 Claim；不得以确定语气交付"
+      }
+    ],
+    "source_trust": [
+      {
+        "id": "authoritative",
+        "meaning": "官方、一手资料或明确责任主体发布的来源"
+      },
+      {
+        "id": "credible_secondary",
+        "meaning": "可核验的同行评审、机构或专业二手来源"
+      },
+      {
+        "id": "general_source",
+        "meaning": "可定位但权威性有限的一般来源"
+      },
+      {
+        "id": "unverified_source",
+        "meaning": "来源身份、维护关系或质量尚未独立核验"
+      }
+    ],
+    "rules": [
+      "没有声明级 Citation 不自动等于 no_answer。",
+      "uncited_context 可以出现在回答中，但必须与来源事实区分，不能伪装成当前来源结论。",
+      "有 Evidence 但覆盖不完整时优先使用 partial，并列出未满足条件。",
+      "引用存在只证明可定位，不等于来源可信；Citation 状态与 source_trust 必须独立记录和展示。",
+      "已交付为事实 Claim 的内容必须通过内部 Evidence/Citation 闭合校验；该校验不要求每句话或每个段落都附标记。",
+      "只有在当前约束下无法负责任地回答任务核心问题时才使用 no_answer。"
+    ]
+  },
+  "display_contract": {
+    "principle": "正文优先可读，引用和可信度可清楚分辨但不打断阅读",
+    "placement": "以回答块、主要结论或小节为单位展示低干扰标记；不在每句话或每个段落后附 Citation",
+    "support_markers": {
+      "cited": "●",
+      "partial_support": "◐",
+      "uncited_context": "○",
+      "conflicting": "!",
+      "unsupported_claim": "?"
+    },
+    "trust_markers": {
+      "authoritative": "A",
+      "credible_secondary": "C",
+      "general_source": "G",
+      "unverified_source": "?"
+    },
+    "required_views": [
+      "报告开头或结果摘要中的一次符号图例",
+      "正文中的回答块级支持状态标记",
+      "报告末尾或独立 Evidence 汇总中的 Claim、Evidence、SourceSnapshot、locator 和来源可信度",
+      "从标记或汇总项打开精确定位的引用入口"
+    ],
+    "readability_constraint": "同一回答块内的多个声明共享必要标记；不得因 Citation 数量造成正文断裂、重复或主要结论不可读。"
+  },
+  "selected_approach": {
+    "id": "bounded_retrieval_evidence_delivery",
+    "user_entry": "retain_w1_local_cli",
+    "workflow": "retain_w1_fixed_workflow",
+    "retrieval_strategy": "select_one_of_bm25_dense_rrf_after_baseline",
+    "source_ingress": [
+      "w1_local_document",
+      "one_web_search_and_fetch_adapter"
+    ],
+    "evidence_model": "extend_w1_source_snapshot_evidence_claim_citation_with_support_and_trust_status",
+    "reason": "先解决真实检索、证据覆盖和可读交付问题；不因 W2 引入多 Agent、通用平台或评测产品。"
+  },
+  "in_scope": [
+    "W1 本地文档和 GitHub 入口的检索基线与案例级回归",
+    "在 BM25、Dense、RRF 中根据真实案例选择一个实际需要的检索策略",
+    "一个最小 Web Search + Fetch 适配链路，保留原始响应、来源身份、时间和 hash",
+    "Evidence Locator v1，支持稳定块/段落定位和定位失败的显式语义",
+    "关键事实 Claim 的 Evidence/Citation 闭合，以及 uncited_context 的独立标注",
+    "来源可信度分级，且与 Citation 状态分开记录",
+    "回答块级低干扰符号、图例、Evidence 汇总和可打开定位",
+    "迁移版 30 题集、独立 held-out 案例和无答案案例",
+    "确定性检索、证据覆盖、引用闭合、冲突和可读性测试",
+    "只有在确定性指标不能回答具体检索优化问题时，才增加 Ragas Adapter",
+    "至少三次覆盖两类任务的真实使用验收"
+  ],
+  "out_of_scope": [
+    "逐句或逐段强制附 Citation",
+    "没有声明级引用就拒绝整篇回答",
+    "把 Citation 存在性当作来源可信度的替代品",
+    "多 Agent、Planner、LangGraph、动态 Workflow 或 W3 恢复能力",
+    "多 Web Search Provider、广泛来源生态或大规模语料清洗",
+    "完整论文雷达、四对象完整比较、GraphRAG 或通用知识库迁移",
+    "Web UI、独立评测平台、Phoenix/Ragas/DeepEval 运行依赖",
+    "为没有明确产品决策的指标扩充、付费评测和无限重试"
+  ],
+  "data_contract": {
+    "dataset": {
+      "base_manifest_path": "datasets/regression/personal-research-v1.0.0/manifest.json",
+      "w2_manifest_path": "datasets/regression/w2-retrieval-evidence-v1.0.0/manifest.json",
+      "requirements": [
+        "迁移 W1 相关案例并保留来源边界",
+        "增加两类任务的 held-out 案例",
+        "至少包含无答案、部分证据、来源可信度不足和证据冲突案例",
+        "记录版本、输入 hash、标注依据和案例完成边界"
+      ]
+    },
+    "runtime_paths": {
+      "source_and_artifact": "var/artifacts/sha256/",
+      "delivery": "var/exports/",
+      "evaluation_evidence": "var/evaluations/"
+    },
+    "retrieval_record": "记录 query、query normalization、strategy、top-k、候选来源、选中 Evidence、排序依据、时间和原始响应 hash。",
+    "evidence_record": "每个 Evidence 记录 SourceSnapshot、稳定 locator、quote、extraction_method、support status 和 source_trust。",
+    "answer_record": "回答保存 answer blocks、关键 Claim、uncited_context、限制、标记图例和 Evidence 汇总；不把 Trace 或评测结果当作业务 Evidence。",
+    "git_boundary": "真实文档、Provider 原始响应、运行报告、数据库、索引和 Secret 不进入 Git。"
+  },
+  "validation_cases": [
+    {
+      "validation_id": "W2-CITED-FACT",
+      "kind": "deterministic",
+      "expected": "关键事实 Claim 有闭合 Citation，可定位到 SourceSnapshot 和精确块/段落；正文不逐句堆叠引用。"
+    },
+    {
+      "validation_id": "W2-UNCITED-CONTEXT",
+      "kind": "deterministic",
+      "expected": "回答保留明确标记的背景解释或方法建议；不得把其写成当前来源已证明的事实；不自动转为 no_answer。"
+    },
+    {
+      "validation_id": "W2-PARTIAL-EVIDENCE",
+      "kind": "deterministic",
+      "expected": "存在可交付信息但 Evidence 覆盖不完整时返回 partial，展示已支持范围和未满足条件。"
+    },
+    {
+      "validation_id": "W2-NO-ANSWER",
+      "kind": "deterministic",
+      "expected": "仅在任务核心问题无法负责任回答时返回 no_answer；说明硬约束、证据边界和可行动恢复。"
+    },
+    {
+      "validation_id": "W2-TRUST-SEPARATION",
+      "kind": "deterministic",
+      "expected": "同一 Evidence 可同时有 Citation 状态和 source_trust；低可信来源不会因有引用而显示为已确认事实。"
+    },
+    {
+      "validation_id": "W2-CONFLICT",
+      "kind": "deterministic",
+      "expected": "冲突 Evidence 显示冲突标记，降低结论强度或交付为待核验，不静默选一方。"
+    },
+    {
+      "validation_id": "W2-READABILITY",
+      "kind": "deterministic",
+      "expected": "符号图例、回答块级标记和 Evidence 汇总可区分；正文没有逐句或逐段 Citation 噪声。"
+    }
+  ],
+  "live_tasks": [
+    {
+      "live_id": "W2-LIVE-01",
+      "task_type": "paper_discovery_with_relevance_boundary",
+      "required_runs": 1,
+      "stop_if": "来源访问、Provider、预算或用户授权不足；检索结果无法保留原始响应和来源身份。"
+    },
+    {
+      "live_id": "W2-LIVE-02",
+      "task_type": "paper_or_project_evidence_qa",
+      "required_runs": 1,
+      "stop_if": "关键 Evidence 无稳定定位，或回答无法区分事实、背景和不确定内容。"
+    },
+    {
+      "live_id": "W2-LIVE-03",
+      "task_type": "either_frozen_task_type",
+      "required_runs": 1,
+      "stop_if": "前两类任务的案例级对比未完成，或结果不能支持具体产品决策。"
+    }
+  ],
+  "authorization": {
+    "scope_and_plan_changes": "authorized_by_current_user_instruction",
+    "implementation": "not_authorized_by_this_acceptance_point",
+    "deterministic_fixtures": "allowed_after_implementation_authorization",
+    "public_network_search": "explicit_live_run_authorization_required",
+    "model_provider_calls": "provider_model_budget_and_live_run_authorization_required",
+    "ragas": "optional_and_only_after_feature_risk_admission",
+    "paid_services": "not_authorized",
+    "secrets": "local_environment_only_never_git_trace_or_artifact"
+  },
+  "milestone_completion_criteria": [
+    "本人完成至少三次新的真实任务，覆盖两类任务。",
+    "关键事实 Claim 可定位到 SourceSnapshot 和精确 Evidence locator。",
+    "回答可以包含明确标记的 uncited_context，但不会被误认为来源事实。",
+    "partial、no_answer、冲突和证据不足分别具有稳定语义和可行动限制说明。",
+    "Citation 状态与 source_trust 独立展示；低可信来源不会因存在 Citation 而被提升为可信来源。",
+    "正文使用回答块级低干扰符号和一次图例，Evidence 汇总可打开且不遮蔽主要结论。",
+    "Retrieval/Evidence 修改均有案例级前后对比，并对应具体优化、保留或回滚决策。",
+    "原始响应、失败结果、检索配置、Evidence、Citation、标注和产物 hash 完整保留。"
+  ],
+  "acceptance_points": [
+    {
+      "id": "W2.0",
+      "name": "范围、结果语义、案例和展示合同冻结",
+      "status_at_freeze": "scope_frozen",
+      "evidence": "本文件和 W2 实施方案中的冻结合同"
+    },
+    {
+      "id": "W2.1",
+      "name": "检索基线和单一策略选择",
+      "status_at_freeze": "pending",
+      "evidence": "计划产物：检索基线评估、retrieval 实现与聚焦测试"
+    },
+    {
+      "id": "W2.2",
+      "name": "Web Search + Fetch 与 Evidence Locator v1",
+      "status_at_freeze": "pending",
+      "evidence": "计划产物：Web Fetch 验收、来源快照与聚焦测试"
+    },
+    {
+      "id": "W2.3",
+      "name": "Claim 支持、来源可信度和低干扰交付",
+      "status_at_freeze": "pending",
+      "evidence": "计划产物：可信交付验收、Evidence delivery 实现与聚焦测试"
+    },
+    {
+      "id": "W2.4",
+      "name": "案例集、确定性评估和案例级前后对比",
+      "status_at_freeze": "pending",
+      "evidence": "计划产物：冻结数据集、离线评估验收与案例级对比"
+    },
+    {
+      "id": "W2.5",
+      "name": "三次真实任务使用验收",
+      "status_at_freeze": "pending",
+      "evidence": "计划产物：另行授权并冻结的三次真实任务验收及失败记录"
+    }
+  ],
+  "next_acceptance_point_at_freeze": "W2.1 检索基线和单一策略选择",
+  "stop_conditions": [
+    "为了增加来源、格式或 Agent 角色而延迟两个真实任务类型的可用交付。",
+    "把逐句 Citation、Ragas 或评测看板变成黄金路径前置。",
+    "没有先解决 Evidence 定位、来源身份或结果语义问题，却连续只调整 Prompt、重试或案例特判。",
+    "指标不能改变检索、证据或展示决策时继续扩充评测。",
+    "真实验证缺少用户授权、Provider/模型/预算或网络授权。"
+  ]
+}

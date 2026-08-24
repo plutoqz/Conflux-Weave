@@ -1,0 +1,113 @@
+{
+  "schema_version": "conflux-weave.w2.5-live-revalidation-acceptance.v3",
+  "evaluated_at": "2026-08-24",
+  "freeze_ref": "docs/plans/archive/W2.5-R3-live-freeze.json",
+  "status": "validated_live",
+  "stage_decision": "accept_with_bounded_partial_delivery",
+  "run": {
+    "id": "W2.5-LIVE-03-R3",
+    "run_id": "run-078e7601bd294150aa7b86102b6b3151",
+    "runtime_status": "partial",
+    "delivery_disposition": "partial",
+    "provider_response_id": "chatcmpl-500bc912-131a-9820-bd3e-7cb9c2b62de5",
+    "provider_model": "qwen3.7-flash",
+    "provider_calls": 1,
+    "usage": {
+      "input_tokens": 3888,
+      "output_tokens": 724,
+      "total_tokens": 4612
+    },
+    "automatic_retry": false,
+    "fallback": false
+  },
+  "output_contract": {
+    "prompt_version": "arxiv-relevance-claims-zh-v3",
+    "provider_output_keys": [
+      "claims"
+    ],
+    "provider_claim_count": 8,
+    "model_generated_limitations": false,
+    "deterministic_limitations": [
+      "仅检索 arXiv 元数据和摘要；未核验正式发表版本、全文实验或跨数据库召回。"
+    ],
+    "unmet_criteria": [
+      "尚未覆盖出版社、Crossref、会议页面和全文实验核验。"
+    ]
+  },
+  "content_audit": {
+    "decision": "accept",
+    "direct_gis_or_spatial_analysis": [
+      "Securing Multi-Agent GIS Systems",
+      "TerraLogic",
+      "GISAgentBench"
+    ],
+    "geospatial_constraint_or_simulation": [
+      "GenWorld",
+      "MARS",
+      "Retrieval-Grounded Multilingual LLM Assistance for Island Smallholder Farmers"
+    ],
+    "geospatial_data_management_or_multimodal_assessment": [
+      "AgentFAIR",
+      "RAPID"
+    ],
+    "boundary_checks": [
+      "MARS 明确标为地理位置上下文处理但非核心 GIS 工具调用。",
+      "农业助手明确标为地理锚定 RAG 而非复杂空间分析。",
+      "AgentFAIR 明确标为地理数据管理而非空间分析操作。",
+      "TerraLogic 和 RAPID 保留遥感、多模态与地理推理边界。"
+    ],
+    "unsupported_publication_or_peer_review_claims": 0
+  },
+  "evidence_audit": {
+    "selected_papers": 8,
+    "claim_count": 8,
+    "evidence_count": 8,
+    "citation_count": 8,
+    "citation_closure": "pass",
+    "source_trust_marker": "G",
+    "support_marker": "◐",
+    "sentence_level_citation_noise": 0,
+    "evidence_summary_present": true
+  },
+  "artifacts": {
+    "run_manifest_artifact_ref": "artifact-sha256-97a5f77c38d2f76d69fea403cdf3fab87a21162066475d88c5e052b31ceb921f",
+    "config_artifact_ref": "artifact-sha256-9fd45e04e655d38f50e9e0e3a0f755c2d42d99d20fd70018d29a4d18e4e9ba06",
+    "search_response_artifact_ref": "artifact-sha256-fddf26f9d1b3f5c5fad36ea69a5c4b68b984d4af9aae2e70bbd16bb07b22759b",
+    "search_snapshot_artifact_ref": "artifact-sha256-e9a0f83d70d446745e1a16843770b0932b24ba6ef438e8361fb2be83c6cd9bef",
+    "search_manifest_artifact_ref": "artifact-sha256-9cfb32f3a7c4a6729c11b76b7aff4e18526aaacde2c81a128683dff5e94cc646",
+    "provider_request_artifact_ref": "artifact-sha256-b0f5e0b7b465a72d7b909ae22cec9be7ac979c4c1f5c5f4328f75e51bf8072d9",
+    "provider_response_artifact_ref": "artifact-sha256-fedcf42abb01238b5ca5d8a1682ddcc31a9c907eddff6e1f94371971fac02935",
+    "report_artifact_ref": "artifact-sha256-be61bc536fd8eb003b670393d64429429eceafcc184068050c3387e37ea8224f",
+    "referenced_artifacts_missing": 0,
+    "secret_match_count": 0
+  },
+  "w2_5_final_acceptance": {
+    "accepted_task_runs": [
+      "W2.5-LIVE-01",
+      "W2.5-LIVE-02",
+      "W2.5-LIVE-03-R3"
+    ],
+    "task_types": [
+      "paper_discovery",
+      "project_evidence_qa"
+    ],
+    "accepted_runs": 3,
+    "historical_live_provider_calls": 6,
+    "historical_input_tokens": 21918,
+    "historical_output_tokens": 4708,
+    "historical_total_tokens": 26626,
+    "rejected_or_failed_attempts_preserved": [
+      "W2.5-LIVE-03",
+      "W2.5-LIVE-03-R1",
+      "W2.5-LIVE-03-R2"
+    ],
+    "w2_5_validated_live": true
+  },
+  "capability_boundary": [
+    "只证明冻结 arXiv 元数据/摘要论文发现与 GitHub 仓库证据问答工作流。",
+    "不证明跨数据库系统综述、全文实验核验、独立仓库官方认证或通用多源 RAG。",
+    "W2.4 数据集仍为 provisional，不提升为人工 gold benchmark。",
+    "Dense、RRF、Reranker、Ragas、多向量库和 Agent RAG 仍未准入。"
+  ],
+  "next_acceptance_point": "W3 范围、耐用运行、恢复与质量支撑合同冻结"
+}

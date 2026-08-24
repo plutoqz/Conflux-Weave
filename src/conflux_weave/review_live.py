@@ -23,10 +23,14 @@ from conflux_weave.core import (
 )
 from conflux_weave.documents import DocumentSegment, LocalDocumentImporter
 from conflux_weave.evidence import (
+    AnswerBlock,
     ArtifactRef,
     Citation,
     Claim,
     EvidenceRef,
+    EvidenceSupportStatus,
+    SourceTrustLevel,
+    render_evidence_report,
     require_closed_citations,
 )
 from conflux_weave.live_research import LiveResearchValidationError
@@ -388,16 +392,7 @@ def _render_report(
 ) -> tuple[str, tuple[Claim, ...], tuple[Citation, ...]]:
     claims: list[Claim] = []
     citations: list[Citation] = []
-    lines = [
-        f"# {note['title']}",
-        "",
-        f"> 阅读任务：{query}",
-        f"> SourceSnapshot：`{imported.source_snapshot.source_id}`",
-        f"> 原始 PDF Artifact：`{imported.source_artifact.artifact_id}`",
-        "",
-        "## 执行摘要",
-        "",
-    ]
+    blocks: list[AnswerBlock] = []
     summary = note["executive_summary"]
     summary_claim_id = "review-claim-0001"
     claims.append(
@@ -409,7 +404,6 @@ def _render_report(
             "step-review-reading-note",
         )
     )
-    summary_markers = []
     index = 1
     for evidence_id in summary["evidence_ids"]:
         citations.append(
@@ -420,47 +414,66 @@ def _render_report(
                 index,
             )
         )
-        summary_markers.append(f"[{index}]")
         index += 1
-    lines.extend((f"{summary['text']} {' '.join(summary_markers)}", ""))
+    blocks.append(
+        AnswerBlock(
+            "执行摘要",
+            str(summary["text"]),
+            EvidenceSupportStatus.PARTIAL_SUPPORT,
+            (summary_claim_id,),
+        )
+    )
     section_map = (
         ("key_points", "核心观点", "观点"),
         ("terms", "专业名词解释", "术语"),
         ("omitted_or_underdeveloped", "文章略过或展开不足的点", "缺口"),
         ("implications", "对研究工程的启发", "启发"),
     )
-    evidence_by_id = {item.evidence_id: item for item in evidence}
     for key, heading, kind in section_map:
-        lines.extend((f"## {heading}", ""))
+        section_claim_ids: list[str] = []
+        section_lines: list[str] = []
         for item_number, item in enumerate(note[key], start=1):
             text = item.get("text") or f"{item.get('term')}: {item.get('explanation')}"
             claim_id = f"review-claim-{len(claims) + 1:04d}"
             claims.append(Claim(claim_id, str(text), kind, "primary", "step-review-reading-note"))
-            markers = []
+            section_claim_ids.append(claim_id)
+            section_lines.append(f"- {text}")
             for evidence_id in item["evidence_ids"]:
                 citation = Citation(
                     f"review-citation-{index:04d}", claim_id, evidence_id, index
                 )
                 citations.append(citation)
-                markers.append(f"[{index}]")
                 index += 1
-            lines.append(f"- {text} {' '.join(markers)}")
-        lines.append("")
-    lines.extend(("## 限制", ""))
-    for limitation in note["limitations"]:
-        lines.append(f"- {limitation}")
-    lines.extend(("", "## 引用定位", ""))
-    for citation in citations:
-        item = evidence_by_id[citation.evidence_id]
-        lines.append(
-            f"[{citation.display_index}] `{item.evidence_id}`，PDF 第 {item.locator['page']} 页，"
-            f"SourceSnapshot `{item.source_snapshot_id}`。"
+        blocks.append(
+            AnswerBlock(
+                heading,
+                "\n".join(section_lines),
+                EvidenceSupportStatus.PARTIAL_SUPPORT,
+                tuple(section_claim_ids),
+            )
         )
     closed_claims = tuple(claims)
     closed_evidence = tuple(evidence)
     closed_citations = tuple(citations)
     require_closed_citations(closed_claims, closed_evidence, closed_citations)
-    return "\n".join(lines).rstrip() + "\n", closed_claims, closed_citations
+    report = render_evidence_report(
+        title=str(note["title"]),
+        intro_lines=(
+            f"> 阅读任务：{query}",
+            f"> SourceSnapshot：`{imported.source_snapshot.source_id}`",
+            f"> 原始 PDF Artifact：`{imported.source_artifact.artifact_id}`",
+        ),
+        blocks=tuple(blocks),
+        claims=closed_claims,
+        evidence=closed_evidence,
+        citations=closed_citations,
+        evidence_trust={
+            item.evidence_id: SourceTrustLevel.GENERAL_SOURCE
+            for item in closed_evidence
+        },
+        limitations=tuple(str(item) for item in note["limitations"]),
+    )
+    return report, closed_claims, closed_citations
 
 
 def _idempotency_key(document_id: str, query: str) -> str:

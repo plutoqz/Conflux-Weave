@@ -1,0 +1,62 @@
+{
+  "schema_version": "conflux-weave.w2.5-live-revalidation-freeze.v2",
+  "status": "frozen_authorized",
+  "frozen_at": "2026-08-24T10:35:27+08:00",
+  "authorization": "用户在 W2.5-R1 验收后明确指令：继续",
+  "predecessor": {
+    "freeze_ref": "docs/plans/archive/W2.5-R1-live-freeze.json",
+    "acceptance_ref": "docs/plans/archive/W2.5-R1-live验收.json",
+    "result": "安全拒绝合同 validated_live，但 GIS 用户任务交付失败",
+    "predecessor_artifacts_preserved": true
+  },
+  "source_revision": {
+    "git_head": "da2c82c39cfcbf438af2e98c73ad7c216f6f2f8a",
+    "worktree_dirty": true,
+    "relevant_file_sha256": {
+      "src/conflux_weave/paper_discovery.py": "d41de708693feb7548f13377289f052d4479263449c0af14ee3a78b17c051d4b",
+      "src/conflux_weave/cli.py": "80284c8119e58501f25717c13ee98583a532c98fb0b70f814a78b5e2ead3bce4"
+    }
+  },
+  "contracts_under_test": {
+    "prompt_version": "arxiv-relevance-claims-zh-v2",
+    "prompt_boundary": "只说明当前证据来自 arXiv 元数据与摘要；不得推断正式发表或同行评审状态",
+    "publication_status_rejection": "paper_publication_status_unsupported",
+    "failure_manifest": "结构校验失败必须保存 run_id、配置、来源、Provider 请求/响应、usage 和错误码"
+  },
+  "run": {
+    "id": "W2.5-LIVE-03-R2",
+    "task_type": "paper_discovery",
+    "query": "查找将 LLM Agent 用于 GIS 或地理空间分析的论文；区分真正执行空间分析或调用 GIS 工具的工作，与仅处理地理文本、遥感识别或泛化多模态 Agent 的论文。",
+    "search_query": "all:geospatial AND all:agent",
+    "max_results": 15,
+    "source_boundary": "arXiv Atom API 的元数据与摘要；相关性边界只能依据标题和摘要判断",
+    "expected_disposition": "partial"
+  },
+  "provider_budget": {
+    "provider_base_url": "https://www.dmxapi.cn/v1",
+    "model": "qwen3.7-flash",
+    "maximum_calls": 1,
+    "maximum_output_tokens": 2048,
+    "temperature": 0.0,
+    "enable_thinking": false,
+    "automatic_retry": false,
+    "fallback": false
+  },
+  "acceptance_criteria": [
+    "优先形成 partial 或 complete 的任务级回答；不得为了避免风险而无依据拒绝所有候选。",
+    "回答逐项说明候选与 GIS 工具、空间分析、地理空间约束、基准或遥感任务的关系边界。",
+    "不推断正式发表、会议/期刊出版或同行评审状态；若输出此类内容，必须拒绝交付并提交 failure manifest。",
+    "关键事实 Claim 与 Evidence/Citation 闭合，正文无逐句 Citation，来源可信度与支持状态分别显示。",
+    "原始 arXiv、Provider 请求/响应、报告或 failure manifest 均使用 SHA-256 内容地址保存。",
+    "API key 和其他秘密扫描结果为 0。"
+  ],
+  "failure_semantics": {
+    "on_failure": "保留错误和所有已生成 Artifact；不 retry、不 fallback、不更换检索式或放宽校验",
+    "stage_effect": "失败则 W2.5 继续保持 executed_live_not_accepted"
+  },
+  "non_goals": [
+    "不增加第二次 Provider 调用。",
+    "不建设 Dense、RRF、Reranker、Ragas 或 Agent RAG。",
+    "不以安全拒绝成功代替用户任务可用交付。"
+  ]
+}
