@@ -1,0 +1,101 @@
+{
+  "schema_version": "conflux-weave.w3.acceptance.v1",
+  "acceptance_point": "W3.1",
+  "name": "SQLite Repository 与原子 Artifact/终态提交",
+  "status": "validated_offline",
+  "accepted_at": "2026-08-24",
+  "implementation_revision": "7c6df6fe848df0ad0bcaf89866d68a0509f22ae8",
+  "w3_freeze_revision": "e75eb684c36bba8892ffc828e49ac33345eb539b",
+  "w2_baseline_revision": "e9137f39d3a55254dced02c086b3844f250720fd",
+  "scope": {
+    "implemented": [
+      "SQLiteRuntimeRepository and checksum-protected one-way migration v1",
+      "idempotent Task plus initial Run and ordered Step submission",
+      "Run state transition gate for successful and partial terminal states",
+      "atomic SQLite transaction for Delivery, Artifact metadata, lineage, and Run terminal state",
+      "same-directory temporary Artifact write, fsync, atomic replace, integrity verification, and failure cleanup"
+    ],
+    "deferred": [
+      "Worker, Attempt, Lease, heartbeat, fencing, and subprocess recovery",
+      "discover-papers workflow checkpoint migration, cancel, and resume",
+      "Budget reservation and usage ledger",
+      "structured Error records and optional Trace",
+      "network, Provider, paid service, and live acceptance"
+    ]
+  },
+  "migration": {
+    "version": 1,
+    "name": "w3_runtime_authority",
+    "checksum": "sha256:ec9c9577cea23492915274f8a0f88056989ebee6cc937a81fcec8c16c8156ec7",
+    "tables": [
+      "schema_migrations",
+      "tasks",
+      "runs",
+      "steps",
+      "artifacts",
+      "artifact_registrations",
+      "deliveries",
+      "delivery_artifacts"
+    ],
+    "runtime_path": "var/db/conflux-weave.sqlite3"
+  },
+  "acceptance_results": [
+    {
+      "criterion": "sequential and concurrent duplicate submission creates one logical Task and initial Run",
+      "result": "passed"
+    },
+    {
+      "criterion": "different payload under one idempotency key is rejected",
+      "result": "passed"
+    },
+    {
+      "criterion": "succeeded or partial Run cannot be published without a readable Delivery Artifact",
+      "result": "passed"
+    },
+    {
+      "criterion": "Delivery, Artifact metadata, producer lineage, and Run terminal state roll back together",
+      "result": "passed"
+    },
+    {
+      "criterion": "failed atomic file publication leaves neither final file nor temporary file",
+      "result": "passed"
+    },
+    {
+      "criterion": "identical Artifact bytes preserve distinct producer registrations",
+      "result": "passed"
+    }
+  ],
+  "verification": {
+    "focused_tests": {
+      "command": "uv run --frozen pytest tests/test_artifact_store.py tests/test_sqlite_runtime.py -q",
+      "result": "12 passed in 1.75s"
+    },
+    "full_regression": {
+      "command": "uv run --frozen pytest",
+      "result": "140 passed in 4.60s"
+    },
+    "compileall": {
+      "command": "uv run --frozen python -m compileall -q src tests scripts",
+      "result": "passed"
+    },
+    "build": {
+      "command": "uv build",
+      "result": "sdist and wheel built"
+    },
+    "diff_check": {
+      "command": "git diff --check",
+      "result": "passed"
+    }
+  },
+  "execution_boundary": {
+    "fixtures": "deterministic local fixtures and temporary SQLite/filesystem only",
+    "network_calls": 0,
+    "provider_calls": 0,
+    "automatic_retry": false,
+    "fallback": false,
+    "live_capability_claim": false,
+    "claim": "W3.1 proves the bounded local persistence and atomic publication mechanism only; it does not prove durable discover-papers execution or recovery."
+  },
+  "frozen_file_unchanged": "docs/plans/current/W3-scope-freeze.json",
+  "next_acceptance_point": "W3.2 单 Worker、Lease、Heartbeat 与 Fencing"
+}
