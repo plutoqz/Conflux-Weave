@@ -37,6 +37,14 @@ from conflux_weave.runtime.sqlite import (
     StepPolicy,
     StoredErrorRecord,
     SubmissionResult,
+    TelemetryDropRecord,
+)
+from conflux_weave.runtime.telemetry import (
+    OpenTelemetryTraceExporter,
+    SafeTraceExporter,
+    TraceDependencyUnavailable,
+    TraceExporter,
+    TraceRecord,
 )
 from conflux_weave.runtime.worker import SQLiteStepWorker
 from conflux_weave.runtime.durable_paper_discovery import (
@@ -78,6 +86,12 @@ __all__ = [
     "StepPolicy",
     "StoredErrorRecord",
     "SubmissionResult",
+    "TelemetryDropRecord",
+    "OpenTelemetryTraceExporter",
+    "SafeTraceExporter",
+    "TraceDependencyUnavailable",
+    "TraceExporter",
+    "TraceRecord",
     "ValidationAdapter",
     "WorkflowExecution",
 ]

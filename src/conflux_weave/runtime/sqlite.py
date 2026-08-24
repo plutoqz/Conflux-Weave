@@ -105,6 +105,17 @@ class StoredErrorRecord:
     created_at: str
 
 
+@dataclass(frozen=True, slots=True)
+class TelemetryDropRecord:
+    drop_id: int
+    run_id: str
+    step_id: str | None
+    attempt_id: str | None
+    span_name: str
+    reason: str
+    created_at: str
+
+
 class SideEffectClass(StrEnum):
     NONE = "none"
     REPLAYABLE_EXTERNAL_READ = "replayable_external_read"
@@ -497,6 +508,27 @@ _MIGRATIONS = (
                    json_extract(budget_json, '$.estimated_cost'),
                    'unavailable', 'active', created_at
             FROM runs
+            """,
+        ),
+    ),
+    _Migration(
+        version=5,
+        name="w3_trace_diagnostics",
+        statements=(
+            """
+            CREATE TABLE telemetry_drops (
+                drop_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE RESTRICT,
+                step_id TEXT REFERENCES steps(step_id) ON DELETE RESTRICT,
+                attempt_id TEXT REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
+                span_name TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE INDEX telemetry_drops_run_idx
+            ON telemetry_drops(run_id, drop_id)
             """,
         ),
     ),
@@ -1395,6 +1427,61 @@ class SQLiteRuntimeRepository:
                 )
         return next(
             item for item in self.get_errors(claim.run_id) if item.error_id == error_id
+        )
+
+    def record_telemetry_drop(
+        self,
+        run_id: str,
+        *,
+        step_id: str | None,
+        attempt_id: str | None,
+        span_name: str,
+        reason: str,
+        now: str | None = None,
+    ) -> None:
+        if not span_name.strip() or not reason.strip():
+            raise PersistenceInvariantError(
+                "telemetry drop requires span_name and reason"
+            )
+        created_at = _normalize_timestamp(now or self.clock())
+        with self._connect() as connection:
+            with _transaction(connection):
+                connection.execute(
+                    """
+                    INSERT INTO telemetry_drops(
+                        run_id, step_id, attempt_id, span_name, reason, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run_id,
+                        step_id,
+                        attempt_id,
+                        span_name,
+                        reason,
+                        created_at,
+                    ),
+                )
+
+    def get_telemetry_drops(self, run_id: str) -> tuple[TelemetryDropRecord, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM telemetry_drops
+                WHERE run_id = ? ORDER BY drop_id
+                """,
+                (run_id,),
+            ).fetchall()
+        return tuple(
+            TelemetryDropRecord(
+                drop_id=int(row["drop_id"]),
+                run_id=str(row["run_id"]),
+                step_id=row["step_id"],
+                attempt_id=row["attempt_id"],
+                span_name=str(row["span_name"]),
+                reason=str(row["reason"]),
+                created_at=str(row["created_at"]),
+            )
+            for row in rows
         )
 
     def get_step_artifacts(self, step_id: str) -> tuple[ArtifactRef, ...]:

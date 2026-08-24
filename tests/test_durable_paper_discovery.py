@@ -18,6 +18,7 @@ from conflux_weave.runtime import (
     RecoveryDecision,
     RecoveryDecisionRequired,
     SQLiteRuntimeRepository,
+    OpenTelemetryTraceExporter,
 )
 
 
@@ -116,7 +117,13 @@ class ProviderTransport:
         )
 
 
-def build_runtime(tmp_path, *, arxiv_transport=None, provider_transport=None):
+def build_runtime(
+    tmp_path,
+    *,
+    arxiv_transport=None,
+    provider_transport=None,
+    trace_exporter=None,
+):
     store = LocalArtifactStore(tmp_path / "artifacts")
     repository = SQLiteRuntimeRepository(
         tmp_path / "db" / "conflux-weave.sqlite3",
@@ -145,8 +152,22 @@ def build_runtime(tmp_path, *, arxiv_transport=None, provider_transport=None):
         clock=lambda: T0,
         id_factory=lambda prefix: f"{prefix}-durable",
         code_revision="fixture-revision",
+        trace_exporter=trace_exporter,
     )
     return runtime, repository, store, arxiv_transport, provider_transport
+
+
+class RecordingTraceExporter:
+    def __init__(self):
+        self.records = []
+
+    def export(self, record):
+        self.records.append(record)
+
+
+class TimeoutTraceExporter:
+    def export(self, record):
+        raise TimeoutError("fixture exporter timeout with secret-fixture")
 
 
 def submit(runtime):
@@ -358,3 +379,74 @@ def test_cancelled_queued_run_starts_no_external_call(tmp_path):
         step.status is StepStatus.CANCELLED
         for step in repository.get_steps(submission.run_id)
     )
+
+
+def test_trace_records_required_links_without_owning_delivery(tmp_path):
+    exporter = RecordingTraceExporter()
+    runtime, repository, _, arxiv, provider = build_runtime(
+        tmp_path, trace_exporter=exporter
+    )
+    submission = submit(runtime)
+
+    for _ in range(5):
+        runtime.work_once(now=T0)
+
+    assert repository.get_run(submission.run_id).status is RunStatus.PARTIAL
+    assert arxiv.calls == provider.calls == 1
+    assert len(exporter.records) == 5
+    required = {
+        "task_id", "run_id", "step_id", "attempt_id", "workflow_version",
+        "provider_model", "artifact_refs", "openinference.span.kind",
+    }
+    assert all(required <= set(record.attributes) for record in exporter.records)
+    serialized = json.dumps(
+        [dict(record.attributes) for record in exporter.records], ensure_ascii=False
+    )
+    assert "fixture-secret" not in serialized
+
+
+@pytest.mark.parametrize(
+    ("exporter", "reason"),
+    [
+        (TimeoutTraceExporter(), "TimeoutError"),
+        (
+            OpenTelemetryTraceExporter(
+                module_loader=lambda name: (_ for _ in ()).throw(
+                    ModuleNotFoundError(name)
+                )
+            ),
+            "TraceDependencyUnavailable",
+        ),
+    ],
+)
+def test_trace_failure_does_not_change_deterministic_delivery(
+    tmp_path, exporter, reason
+):
+    baseline_exporter = RecordingTraceExporter()
+    baseline, baseline_repository, _, _, _ = build_runtime(
+        tmp_path / "baseline", trace_exporter=baseline_exporter
+    )
+    baseline_submission = submit(baseline)
+    failing, failing_repository, failing_store, arxiv, provider = build_runtime(
+        tmp_path / "failing", trace_exporter=exporter
+    )
+    failing_submission = submit(failing)
+
+    for _ in range(5):
+        baseline.work_once(now=T0)
+        failing.work_once(now=T0)
+
+    assert baseline_repository.get_delivery(
+        baseline_submission.run_id
+    ).artifact_refs == failing_repository.get_delivery(
+        failing_submission.run_id
+    ).artifact_refs
+    assert failing_repository.get_run(failing_submission.run_id).status is RunStatus.PARTIAL
+    assert arxiv.calls == provider.calls == 1
+    reopened = SQLiteRuntimeRepository(
+        failing_repository.database_path, failing_store
+    )
+    drops = reopened.get_telemetry_drops(failing_submission.run_id)
+    assert len(drops) == 5
+    assert {drop.reason for drop in drops} == {reason}
+    assert all("secret-fixture" not in drop.reason for drop in drops)

@@ -96,11 +96,11 @@ def test_v4_migration_backfills_existing_run_budget_snapshot(tmp_path):
     result = submit(runtime, BudgetLedger(180, 20_000, 2_048, "unavailable", 2, 1, 1))
     with sqlite3.connect(repository.database_path) as connection:
         for table in (
-            "error_artifacts", "errors", "budget_entries",
+            "telemetry_drops", "error_artifacts", "errors", "budget_entries",
             "budget_reservations", "budget_limits",
         ):
             connection.execute(f"DROP TABLE {table}")
-        connection.execute("DELETE FROM schema_migrations WHERE version = 4")
+        connection.execute("DELETE FROM schema_migrations WHERE version >= 4")
         connection.execute("PRAGMA user_version = 3")
 
     reopened = SQLiteRuntimeRepository(repository.database_path, store)
@@ -110,7 +110,7 @@ def test_v4_migration_backfills_existing_run_budget_snapshot(tmp_path):
     assert status.concurrency == 1
     assert status.limit.output_tokens == 2_048
     assert status.estimated_cost_limit == "unavailable"
-    assert reopened.migration_records()[-1].version == 4
+    assert reopened.migration_records()[-1].version == 5
 
 
 def test_expired_wall_clock_budget_starts_zero_external_calls(tmp_path):

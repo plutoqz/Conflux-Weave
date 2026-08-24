@@ -57,6 +57,11 @@ from conflux_weave.runtime.sqlite import (
     SubmissionResult,
 )
 from conflux_weave.runtime.worker import SQLiteStepWorker
+from conflux_weave.runtime.telemetry import (
+    SafeTraceExporter,
+    TraceExporter,
+    TraceRecord,
+)
 
 
 DURABLE_WORKFLOW_VERSION = "fixed-arxiv-paper-discovery-durable-v1"
@@ -97,6 +102,8 @@ class DurablePaperDiscoveryRuntime:
         clock: Callable[[], str] | None = None,
         id_factory: Callable[[str], str] | None = None,
         code_revision: str = "unknown",
+        trace_exporter: TraceExporter | None = None,
+        fault_hook: Callable[[str], None] | None = None,
     ) -> None:
         self.repository = repository
         self.artifact_store = artifact_store
@@ -106,6 +113,12 @@ class DurablePaperDiscoveryRuntime:
         self.clock = clock or repository.clock
         self.id_factory = id_factory or _new_id
         self.code_revision = code_revision
+        self.trace = (
+            SafeTraceExporter(trace_exporter, on_drop=self._record_trace_drop)
+            if trace_exporter is not None
+            else None
+        )
+        self.fault_hook = fault_hook
 
     def submit(
         self,
@@ -239,13 +252,13 @@ class DurablePaperDiscoveryRuntime:
         )
         if self.repository.is_cancel_requested(claim.run_id):
             self.repository.cancel_claim(claim, now=now)
-            return DurableWorkResult(claim.run_id, step.kind, "cancelled")
+            return self._result(claim, step.kind, "cancelled", now=now)
         try:
             getattr(self, f"_execute_{step.kind}")(claim, now=now)
         except Exception as exc:
             if self.repository.is_cancel_requested(claim.run_id):
                 self.repository.cancel_claim(claim, now=now)
-                return DurableWorkResult(claim.run_id, step.kind, "cancelled")
+                return self._result(claim, step.kind, "cancelled", now=now)
             effect = self.repository.get_attempt_effect(claim.attempt_id)
             detail = self.artifact_store.put_json(
                 {
@@ -296,19 +309,22 @@ class DurablePaperDiscoveryRuntime:
                 self.repository.block_unknown_external_outcome(
                     claim, detail, now=now
                 )
-                return DurableWorkResult(
-                    claim.run_id, step.kind, "waiting_for_user"
+                return self._result(
+                    claim, step.kind, "waiting_for_user", now=now
                 )
             self.worker.fail(claim, detail.artifact_id, now=now)
             self.repository.transition_run(
                 claim.run_id, RunStatus.FAILED, updated_at=now or self.clock()
             )
-            return DurableWorkResult(claim.run_id, step.kind, "failed")
+            return self._result(claim, step.kind, "failed", now=now)
         if self.repository.is_cancel_requested(claim.run_id):
             self.repository.finalize_cancellation(claim.run_id, now=now)
-            return DurableWorkResult(claim.run_id, step.kind, "cancelled")
-        return DurableWorkResult(
-            claim.run_id, step.kind, self.repository.get_run(claim.run_id).status.value
+            return self._result(claim, step.kind, "cancelled", now=now)
+        return self._result(
+            claim,
+            step.kind,
+            self.repository.get_run(claim.run_id).status.value,
+            now=now,
         )
 
     def request_cancel(self, run_id: str, *, now: str | None = None) -> RunRecord:
@@ -335,6 +351,7 @@ class DurablePaperDiscoveryRuntime:
                 "max_results": task.input["max_results"],
             },
         )
+        self._fault("before_search_external_call")
         if not self._authorize_external_call(
             claim,
             intent,
@@ -374,6 +391,7 @@ class DurablePaperDiscoveryRuntime:
             actual_usage=BudgetAmount(tool_calls=1, retrieval_rounds=1),
             now=now,
         )
+        self._fault("search_response_committed")
 
     def _execute_rank_candidates(
         self, claim: LeaseClaim, *, now: str | None
@@ -503,6 +521,7 @@ class DurablePaperDiscoveryRuntime:
             overage_error=overage_error,
             now=now,
         )
+        self._fault("provider_response_committed")
 
     def _authorize_external_call(
         self,
@@ -682,6 +701,7 @@ class DurablePaperDiscoveryRuntime:
                 "如需完整综述，授权出版社/Crossref 检索和全文核验后创建新 Run。",
             ),
         )
+        self._fault("publish_artifacts_written")
         self.repository.publish_delivery(
             claim.run_id,
             RunStatus.PARTIAL,
@@ -690,6 +710,94 @@ class DurablePaperDiscoveryRuntime:
             claim=claim,
             published_at=now,
         )
+
+    def _result(
+        self,
+        claim: LeaseClaim,
+        step_kind: str,
+        status: str,
+        *,
+        now: str | None,
+    ) -> DurableWorkResult:
+        self._emit_trace(claim, step_kind, status, now=now)
+        return DurableWorkResult(claim.run_id, step_kind, status)
+
+    def _emit_trace(
+        self,
+        claim: LeaseClaim,
+        step_kind: str,
+        status: str,
+        *,
+        now: str | None,
+    ) -> None:
+        if self.trace is None:
+            return
+        try:
+            record = self._trace_record(claim, step_kind, status)
+            self.trace.export(record)
+        except Exception as exc:
+            try:
+                self.repository.record_telemetry_drop(
+                    claim.run_id,
+                    step_id=claim.step_id,
+                    attempt_id=claim.attempt_id,
+                    span_name=f"conflux_weave.{step_kind}",
+                    reason=type(exc).__name__,
+                    now=now,
+                )
+            except Exception:
+                pass
+
+    def _trace_record(
+        self, claim: LeaseClaim, step_kind: str, status: str
+    ) -> TraceRecord:
+        task = self.repository.get_task_for_run(claim.run_id)
+        run = self.repository.get_run(claim.run_id)
+        step = next(
+            item
+            for item in self.repository.get_steps(claim.run_id)
+            if item.step_id == claim.step_id
+        )
+        budget = self.repository.get_budget_status(claim.run_id)
+        span_kind = {
+            "search_arxiv": "TOOL",
+            "synthesize_claims": "LLM",
+        }.get(step_kind, "CHAIN")
+        return TraceRecord(
+            name=f"conflux_weave.{step_kind}",
+            attributes={
+                "task_id": task.task_id,
+                "run_id": claim.run_id,
+                "step_id": claim.step_id,
+                "attempt_id": claim.attempt_id,
+                "attempt": claim.attempt_number,
+                "workflow_version": run.workflow_version,
+                "provider_model": str(task.input.get("model", "none")),
+                "prompt_version": str(task.input.get("prompt_version", "none")),
+                "budget_input_tokens_limit": budget.limit.input_tokens,
+                "budget_output_tokens_limit": budget.limit.output_tokens,
+                "budget_tool_calls_actual": budget.actual.tool_calls,
+                "budget_retrieval_rounds_actual": budget.actual.retrieval_rounds,
+                "artifact_refs": tuple(step.output_refs),
+                "status": status,
+                "openinference.span.kind": span_kind,
+            },
+        )
+
+    def _record_trace_drop(self, record: TraceRecord, reason: str) -> None:
+        attributes = record.attributes
+        self.repository.record_telemetry_drop(
+            str(attributes["run_id"]),
+            step_id=str(attributes["step_id"]),
+            attempt_id=str(attributes["attempt_id"]),
+            span_name=record.name,
+            reason=reason,
+            now=self.clock(),
+        )
+
+    def _fault(self, point: str) -> None:
+        if self.fault_hook is not None:
+            self.fault_hook(point)
 
     def _checkpoint(self, run_id: str, step_kind: str, schema: str) -> dict:
         step = next(
