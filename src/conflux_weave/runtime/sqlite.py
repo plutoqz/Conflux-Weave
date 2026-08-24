@@ -9,7 +9,8 @@ import hashlib
 import json
 from pathlib import Path
 import sqlite3
-from typing import Callable, Iterator, Sequence
+from enum import StrEnum
+from typing import Callable, Iterator, Mapping, Sequence
 
 from conflux_weave.core import (
     BudgetLedger,
@@ -54,6 +55,28 @@ class LeaseConflict(PersistenceInvariantError):
     """Raised when an Attempt no longer owns the active Step lease."""
 
 
+class RecoveryDecisionRequired(PersistenceInvariantError):
+    """Raised when recovery requires an explicit decision about unknown effects."""
+
+
+class SideEffectClass(StrEnum):
+    NONE = "none"
+    REPLAYABLE_EXTERNAL_READ = "replayable_external_read"
+    PAID_EXTERNAL_UNKNOWN = "paid_external_unknown"
+    IDEMPOTENT_LOCAL_WRITE = "idempotent_local_write"
+
+
+class RecoveryDecision(StrEnum):
+    RETRY_UNKNOWN_EXTERNAL = "retry_unknown_external"
+    FAIL_UNKNOWN_EXTERNAL = "fail_unknown_external"
+
+
+@dataclass(frozen=True, slots=True)
+class StepPolicy:
+    side_effect: SideEffectClass
+    recovery_rule: str
+
+
 @dataclass(frozen=True, slots=True)
 class SubmissionResult:
     task_id: str
@@ -93,6 +116,18 @@ class AttemptRecord:
     started_at: str
     finished_at: str | None
     error_ref: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class AttemptEffectRecord:
+    attempt_id: str
+    side_effect: SideEffectClass
+    effect_state: str
+    intent_artifact_ref: str | None
+    request_artifact_ref: str | None
+    response_artifact_ref: str | None
+    external_response_id: str | None
+    updated_at: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -273,6 +308,40 @@ _MIGRATIONS = (
             """,
         ),
     ),
+    _Migration(
+        version=3,
+        name="w3_workflow_checkpoints",
+        statements=(
+            """
+            CREATE TABLE step_policies (
+                step_id TEXT PRIMARY KEY REFERENCES steps(step_id) ON DELETE RESTRICT,
+                side_effect TEXT NOT NULL CHECK (side_effect IN (
+                    'none', 'replayable_external_read',
+                    'paid_external_unknown', 'idempotent_local_write'
+                )),
+                recovery_rule TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE TABLE attempt_effects (
+                attempt_id TEXT PRIMARY KEY
+                    REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
+                side_effect TEXT NOT NULL CHECK (side_effect IN (
+                    'none', 'replayable_external_read',
+                    'paid_external_unknown', 'idempotent_local_write'
+                )),
+                effect_state TEXT NOT NULL CHECK (effect_state IN (
+                    'not_started', 'request_started', 'response_committed'
+                )),
+                intent_artifact_ref TEXT,
+                request_artifact_ref TEXT,
+                response_artifact_ref TEXT,
+                external_response_id TEXT,
+                updated_at TEXT NOT NULL
+            )
+            """,
+        ),
+    ),
 )
 
 
@@ -369,8 +438,20 @@ class SQLiteRuntimeRepository:
         task: TaskSpec,
         run: RunRecord,
         steps: Sequence[StepRecord],
+        *,
+        step_policies: Mapping[str, StepPolicy] | None = None,
+        submission_artifacts: Sequence[ArtifactRef] = (),
     ) -> SubmissionResult:
         _validate_submission(task, run, steps)
+        policies = dict(step_policies or {})
+        unknown_policy_steps = set(policies) - {step.step_id for step in steps}
+        if unknown_policy_steps:
+            raise PersistenceInvariantError(
+                "Step policies reference unknown Steps: "
+                + ", ".join(sorted(unknown_policy_steps))
+            )
+        for artifact in submission_artifacts:
+            self._validate_artifact(artifact)
         task_input = _canonical_json(task.input)
         with self._connect() as connection:
             with _transaction(connection):
@@ -467,6 +548,22 @@ class SQLiteRuntimeRepository:
                                 step.error_ref,
                             ),
                         )
+                        policy = policies.get(step.step_id)
+                        if policy is not None:
+                            connection.execute(
+                                """
+                                INSERT INTO step_policies(
+                                    step_id, side_effect, recovery_rule
+                                ) VALUES (?, ?, ?)
+                                """,
+                                (
+                                    step.step_id,
+                                    policy.side_effect.value,
+                                    policy.recovery_rule,
+                                ),
+                            )
+                    for artifact in submission_artifacts:
+                        self._register_artifact(connection, artifact)
                 except sqlite3.IntegrityError as exc:
                     raise PersistenceInvariantError(
                         f"task submission violates persistence constraints: {exc}"
@@ -485,6 +582,27 @@ class SQLiteRuntimeRepository:
             ).fetchone()
         if row is None:
             raise RecordNotFound("Task not found")
+        return TaskSpec(
+            task_id=str(row["task_id"]),
+            kind=str(row["kind"]),
+            input=json.loads(row["input_json"]),
+            requested_policy=str(row["requested_policy"]),
+            idempotency_key=str(row["idempotency_key"]),
+        )
+
+    def get_task_for_run(self, run_id: str) -> TaskSpec:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT t.task_id, t.kind, t.input_json, t.requested_policy,
+                       t.idempotency_key
+                FROM runs r JOIN tasks t ON t.task_id = r.task_id
+                WHERE r.run_id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+        if row is None:
+            raise RecordNotFound("Task for Run not found")
         return TaskSpec(
             task_id=str(row["task_id"]),
             kind=str(row["kind"]),
@@ -521,6 +639,59 @@ class SQLiteRuntimeRepository:
         expires_at = _add_seconds(claimed_at, lease_seconds)
         with self._connect() as connection:
             with _transaction(connection):
+                cancelling = connection.execute(
+                    """
+                    SELECT r.run_id, s.step_id, a.attempt_id
+                    FROM runs r
+                    JOIN steps s ON s.run_id = r.run_id
+                    JOIN attempts a ON a.step_id = s.step_id
+                    JOIN leases l ON l.attempt_id = a.attempt_id
+                    WHERE r.status = 'cancelling' AND a.status = 'running'
+                      AND l.released_at IS NULL AND l.expires_at <= ?
+                    LIMIT 1
+                    """,
+                    (claimed_at,),
+                ).fetchone()
+                if cancelling is not None:
+                    connection.execute(
+                        """
+                        UPDATE attempts SET status = 'fenced', finished_at = ?
+                        WHERE attempt_id = ? AND status = 'running'
+                        """,
+                        (claimed_at, cancelling["attempt_id"]),
+                    )
+                    connection.execute(
+                        """
+                        UPDATE leases SET released_at = ?
+                        WHERE attempt_id = ? AND released_at IS NULL
+                        """,
+                        (claimed_at, cancelling["attempt_id"]),
+                    )
+                    connection.execute(
+                        """
+                        UPDATE steps SET status = 'cancelled'
+                        WHERE run_id = ? AND status IN (
+                            'pending', 'running', 'waiting_for_user'
+                        )
+                        """,
+                        (cancelling["run_id"],),
+                    )
+                    connection.execute(
+                        """
+                        UPDATE runs SET status = 'cancelled', updated_at = ?
+                        WHERE run_id = ? AND status = 'cancelling'
+                        """,
+                        (claimed_at, cancelling["run_id"]),
+                    )
+                    self._append_run_event(
+                        connection,
+                        run_id=str(cancelling["run_id"]),
+                        step_id=str(cancelling["step_id"]),
+                        attempt_id=str(cancelling["attempt_id"]),
+                        event_type="cancelled_after_lease_expiry",
+                        detail={},
+                        created_at=claimed_at,
+                    )
                 active_lease = connection.execute(
                     """
                     SELECT 1 FROM leases
@@ -550,6 +721,7 @@ class SQLiteRuntimeRepository:
                               AND NOT EXISTS (
                                   SELECT 1 FROM attempts a
                                   WHERE a.step_id = s.step_id
+                                    AND a.status = 'running'
                               )
                           )
                           OR (
@@ -575,12 +747,24 @@ class SQLiteRuntimeRepository:
                     return None
 
                 attempt_number = int(row["attempt"])
+                if row["status"] == StepStatus.PENDING.value:
+                    previous_number = connection.execute(
+                        "SELECT MAX(attempt_number) FROM attempts WHERE step_id = ?",
+                        (row["step_id"],),
+                    ).fetchone()[0]
+                    if previous_number is not None:
+                        attempt_number = int(previous_number) + 1
                 if row["status"] == StepStatus.RUNNING.value:
                     previous = connection.execute(
                         """
-                        SELECT a.attempt_id, a.worker_id, a.fencing_token
+                        SELECT
+                            a.attempt_id, a.worker_id, a.fencing_token,
+                            COALESCE(sp.side_effect, 'none') AS side_effect,
+                            COALESCE(ae.effect_state, 'not_started') AS effect_state
                         FROM attempts a
                         JOIN leases l ON l.attempt_id = a.attempt_id
+                        LEFT JOIN step_policies sp ON sp.step_id = a.step_id
+                        LEFT JOIN attempt_effects ae ON ae.attempt_id = a.attempt_id
                         WHERE a.step_id = ? AND a.attempt_number = ?
                           AND a.status = 'running' AND l.released_at IS NULL
                           AND l.expires_at <= ?
@@ -604,6 +788,38 @@ class SQLiteRuntimeRepository:
                         """,
                         (claimed_at, previous["attempt_id"]),
                     )
+                    if (
+                        previous["side_effect"]
+                        == SideEffectClass.PAID_EXTERNAL_UNKNOWN.value
+                        and previous["effect_state"] == "request_started"
+                    ):
+                        connection.execute(
+                            """
+                            UPDATE steps SET status = 'waiting_for_user'
+                            WHERE step_id = ? AND status = 'running'
+                            """,
+                            (row["step_id"],),
+                        )
+                        connection.execute(
+                            """
+                            UPDATE runs SET status = 'waiting_for_user', updated_at = ?
+                            WHERE run_id = ? AND status = 'running'
+                            """,
+                            (claimed_at, row["run_id"]),
+                        )
+                        self._append_run_event(
+                            connection,
+                            run_id=str(row["run_id"]),
+                            step_id=str(row["step_id"]),
+                            attempt_id=str(previous["attempt_id"]),
+                            event_type="recovery_decision_required",
+                            detail={
+                                "reason": "provider_outcome_unknown",
+                                "automatic_replay": False,
+                            },
+                            created_at=claimed_at,
+                        )
+                        return None
                     self._append_run_event(
                         connection,
                         run_id=str(row["run_id"]),
@@ -642,6 +858,25 @@ class SQLiteRuntimeRepository:
                         fencing_token,
                         claimed_at,
                     ),
+                )
+                policy = connection.execute(
+                    "SELECT side_effect FROM step_policies WHERE step_id = ?",
+                    (row["step_id"],),
+                ).fetchone()
+                side_effect = (
+                    str(policy["side_effect"])
+                    if policy is not None
+                    else SideEffectClass.NONE.value
+                )
+                connection.execute(
+                    """
+                    INSERT INTO attempt_effects(
+                        attempt_id, side_effect, effect_state,
+                        intent_artifact_ref, request_artifact_ref,
+                        response_artifact_ref, external_response_id, updated_at
+                    ) VALUES (?, ?, 'not_started', NULL, NULL, NULL, NULL, ?)
+                    """,
+                    (attempt_id, side_effect, claimed_at),
                 )
                 connection.execute(
                     """
@@ -865,6 +1100,511 @@ class SQLiteRuntimeRepository:
                 (step_id,),
             ).fetchall()
         return tuple(_attempt_from_row(row) for row in rows)
+
+    def get_attempt_effect(self, attempt_id: str) -> AttemptEffectRecord:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM attempt_effects WHERE attempt_id = ?",
+                (attempt_id,),
+            ).fetchone()
+        if row is None:
+            raise RecordNotFound("Attempt effect not found")
+        return _attempt_effect_from_row(row)
+
+    def get_step_artifacts(self, step_id: str) -> tuple[ArtifactRef, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    a.artifact_id, a.content_hash, a.storage_uri,
+                    ar.media_type, ar.producer_step_id, ar.schema_version
+                FROM attempts at
+                JOIN attempt_artifacts aa ON aa.attempt_id = at.attempt_id
+                JOIN artifact_registrations ar
+                  ON ar.registration_id = aa.registration_id
+                JOIN artifacts a ON a.artifact_id = ar.artifact_id
+                WHERE at.step_id = ? AND at.status = 'succeeded'
+                ORDER BY at.attempt_number DESC, aa.ordinal
+                """,
+                (step_id,),
+            ).fetchall()
+        return tuple(_artifact_from_row(row) for row in rows)
+
+    def mark_external_call_started(
+        self,
+        claim: LeaseClaim,
+        intent_artifact: ArtifactRef,
+        *,
+        now: str | None = None,
+    ) -> None:
+        started_at = _normalize_timestamp(now or self.clock())
+        if intent_artifact.producer_step_id != claim.step_id:
+            raise PersistenceInvariantError(
+                "external call intent producer does not match claimed Step"
+            )
+        self._validate_artifact(intent_artifact)
+        with self._connect() as connection:
+            with _transaction(connection):
+                self._require_active_attempt(connection, claim, started_at)
+                run_status = connection.execute(
+                    "SELECT status FROM runs WHERE run_id = ?", (claim.run_id,)
+                ).fetchone()
+                if run_status is None or run_status["status"] != RunStatus.RUNNING.value:
+                    raise LeaseConflict("Run no longer allows an external call")
+                effect = connection.execute(
+                    "SELECT * FROM attempt_effects WHERE attempt_id = ?",
+                    (claim.attempt_id,),
+                ).fetchone()
+                if effect is None or effect["effect_state"] != "not_started":
+                    raise PersistenceInvariantError(
+                        "external call intent was already recorded"
+                    )
+                if effect["side_effect"] not in {
+                    SideEffectClass.REPLAYABLE_EXTERNAL_READ.value,
+                    SideEffectClass.PAID_EXTERNAL_UNKNOWN.value,
+                }:
+                    raise PersistenceInvariantError(
+                        "Step policy does not permit an external call"
+                    )
+                self._register_artifact(connection, intent_artifact)
+                connection.execute(
+                    """
+                    UPDATE attempt_effects
+                    SET effect_state = 'request_started', intent_artifact_ref = ?,
+                        updated_at = ?
+                    WHERE attempt_id = ? AND effect_state = 'not_started'
+                    """,
+                    (intent_artifact.artifact_id, started_at, claim.attempt_id),
+                )
+                self._append_run_event(
+                    connection,
+                    run_id=claim.run_id,
+                    step_id=claim.step_id,
+                    attempt_id=claim.attempt_id,
+                    event_type="external_call_started",
+                    detail={"side_effect": str(effect["side_effect"])},
+                    created_at=started_at,
+                )
+
+    def complete_external_attempt(
+        self,
+        claim: LeaseClaim,
+        artifacts: Sequence[ArtifactRef],
+        *,
+        request_artifact_ref: str,
+        response_artifact_ref: str,
+        external_response_id: str | None = None,
+        now: str | None = None,
+    ) -> StepRecord:
+        completed_at = _normalize_timestamp(now or self.clock())
+        artifact_ids = tuple(artifact.artifact_id for artifact in artifacts)
+        if request_artifact_ref not in artifact_ids or response_artifact_ref not in artifact_ids:
+            raise PersistenceInvariantError(
+                "committed external response requires request and response Artifacts"
+            )
+        if len(artifact_ids) != len(set(artifact_ids)):
+            raise PersistenceInvariantError("Step output Artifact ids must be unique")
+        for artifact in artifacts:
+            if artifact.producer_step_id != claim.step_id:
+                raise PersistenceInvariantError(
+                    "Step output Artifact producer does not match claimed Step"
+                )
+            self._validate_artifact(artifact)
+        with self._connect() as connection:
+            with _transaction(connection):
+                self._require_active_attempt(connection, claim, completed_at)
+                effect = connection.execute(
+                    "SELECT effect_state FROM attempt_effects WHERE attempt_id = ?",
+                    (claim.attempt_id,),
+                ).fetchone()
+                if effect is None or effect["effect_state"] != "request_started":
+                    raise PersistenceInvariantError(
+                        "external response cannot commit before call intent"
+                    )
+                registrations = [
+                    self._register_artifact(connection, artifact)
+                    for artifact in artifacts
+                ]
+                for ordinal, registration_id in enumerate(registrations):
+                    connection.execute(
+                        """
+                        INSERT INTO attempt_artifacts(
+                            attempt_id, registration_id, ordinal
+                        ) VALUES (?, ?, ?)
+                        """,
+                        (claim.attempt_id, registration_id, ordinal),
+                    )
+                connection.execute(
+                    """
+                    UPDATE attempt_effects
+                    SET effect_state = 'response_committed',
+                        request_artifact_ref = ?, response_artifact_ref = ?,
+                        external_response_id = ?, updated_at = ?
+                    WHERE attempt_id = ? AND effect_state = 'request_started'
+                    """,
+                    (
+                        request_artifact_ref,
+                        response_artifact_ref,
+                        external_response_id,
+                        completed_at,
+                        claim.attempt_id,
+                    ),
+                )
+                changed = connection.execute(
+                    """
+                    UPDATE steps
+                    SET status = 'succeeded', output_refs_json = ?, error_ref = NULL
+                    WHERE step_id = ? AND status = 'running' AND attempt = ?
+                    """,
+                    (
+                        _canonical_json(artifact_ids),
+                        claim.step_id,
+                        claim.attempt_number,
+                    ),
+                ).rowcount
+                if changed != 1:
+                    raise LeaseConflict("claimed Step is no longer current")
+                self._finish_attempt(
+                    connection,
+                    claim,
+                    status="succeeded",
+                    finished_at=completed_at,
+                    error_ref=None,
+                )
+                self._append_run_event(
+                    connection,
+                    run_id=claim.run_id,
+                    step_id=claim.step_id,
+                    attempt_id=claim.attempt_id,
+                    event_type="external_response_committed",
+                    detail={
+                        "request_artifact_ref": request_artifact_ref,
+                        "response_artifact_ref": response_artifact_ref,
+                        "external_response_id": external_response_id,
+                    },
+                    created_at=completed_at,
+                )
+                row = connection.execute(
+                    "SELECT * FROM steps WHERE step_id = ?", (claim.step_id,)
+                ).fetchone()
+        return _step_from_row(row)
+
+    def block_unknown_external_outcome(
+        self,
+        claim: LeaseClaim,
+        detail_artifact: ArtifactRef,
+        *,
+        now: str | None = None,
+    ) -> RunRecord:
+        blocked_at = _normalize_timestamp(now or self.clock())
+        if detail_artifact.producer_step_id != claim.step_id:
+            raise PersistenceInvariantError(
+                "unknown-outcome detail producer does not match claimed Step"
+            )
+        self._validate_artifact(detail_artifact)
+        with self._connect() as connection:
+            with _transaction(connection):
+                self._require_active_attempt(connection, claim, blocked_at)
+                effect = connection.execute(
+                    "SELECT * FROM attempt_effects WHERE attempt_id = ?",
+                    (claim.attempt_id,),
+                ).fetchone()
+                if (
+                    effect is None
+                    or effect["side_effect"]
+                    != SideEffectClass.PAID_EXTERNAL_UNKNOWN.value
+                    or effect["effect_state"] != "request_started"
+                ):
+                    raise PersistenceInvariantError(
+                        "Attempt has no unknown paid external outcome"
+                    )
+                self._register_artifact(connection, detail_artifact)
+                connection.execute(
+                    """
+                    UPDATE attempts
+                    SET status = 'fenced', finished_at = ?, error_ref = ?
+                    WHERE attempt_id = ? AND status = 'running'
+                    """,
+                    (blocked_at, detail_artifact.artifact_id, claim.attempt_id),
+                )
+                connection.execute(
+                    """
+                    UPDATE leases SET released_at = ?
+                    WHERE attempt_id = ? AND released_at IS NULL
+                    """,
+                    (blocked_at, claim.attempt_id),
+                )
+                connection.execute(
+                    """
+                    UPDATE steps SET status = 'waiting_for_user', error_ref = ?
+                    WHERE step_id = ? AND status = 'running' AND attempt = ?
+                    """,
+                    (
+                        detail_artifact.artifact_id,
+                        claim.step_id,
+                        claim.attempt_number,
+                    ),
+                )
+                connection.execute(
+                    """
+                    UPDATE runs SET status = 'waiting_for_user', updated_at = ?
+                    WHERE run_id = ? AND status = 'running'
+                    """,
+                    (blocked_at, claim.run_id),
+                )
+                self._append_run_event(
+                    connection,
+                    run_id=claim.run_id,
+                    step_id=claim.step_id,
+                    attempt_id=claim.attempt_id,
+                    event_type="recovery_decision_required",
+                    detail={
+                        "reason": "provider_outcome_unknown",
+                        "detail_artifact_ref": detail_artifact.artifact_id,
+                        "automatic_replay": False,
+                    },
+                    created_at=blocked_at,
+                )
+                row = connection.execute(
+                    "SELECT * FROM runs WHERE run_id = ?", (claim.run_id,)
+                ).fetchone()
+        return _run_from_row(row)
+
+    def cancel_claim(
+        self, claim: LeaseClaim, *, now: str | None = None
+    ) -> RunRecord:
+        cancelled_at = _normalize_timestamp(now or self.clock())
+        with self._connect() as connection:
+            with _transaction(connection):
+                self._require_active_attempt(connection, claim, cancelled_at)
+                connection.execute(
+                    """
+                    UPDATE attempts SET status = 'fenced', finished_at = ?
+                    WHERE attempt_id = ? AND status = 'running'
+                    """,
+                    (cancelled_at, claim.attempt_id),
+                )
+                connection.execute(
+                    """
+                    UPDATE leases SET released_at = ?
+                    WHERE attempt_id = ? AND released_at IS NULL
+                    """,
+                    (cancelled_at, claim.attempt_id),
+                )
+                connection.execute(
+                    """
+                    UPDATE steps SET status = 'cancelled'
+                    WHERE step_id = ? AND status = 'running' AND attempt = ?
+                    """,
+                    (claim.step_id, claim.attempt_number),
+                )
+                connection.execute(
+                    """
+                    UPDATE steps SET status = 'cancelled'
+                    WHERE run_id = ? AND status IN ('pending', 'waiting_for_user')
+                    """,
+                    (claim.run_id,),
+                )
+                connection.execute(
+                    """
+                    UPDATE runs SET status = 'cancelled', updated_at = ?
+                    WHERE run_id = ? AND status IN ('running', 'cancelling')
+                    """,
+                    (cancelled_at, claim.run_id),
+                )
+                self._append_run_event(
+                    connection,
+                    run_id=claim.run_id,
+                    step_id=claim.step_id,
+                    attempt_id=claim.attempt_id,
+                    event_type="attempt_cancelled",
+                    detail={},
+                    created_at=cancelled_at,
+                )
+                row = connection.execute(
+                    "SELECT * FROM runs WHERE run_id = ?", (claim.run_id,)
+                ).fetchone()
+        return _run_from_row(row)
+
+    def request_cancel(self, run_id: str, *, now: str | None = None) -> RunRecord:
+        requested_at = _normalize_timestamp(now or self.clock())
+        with self._connect() as connection:
+            with _transaction(connection):
+                row = connection.execute(
+                    "SELECT * FROM runs WHERE run_id = ?", (run_id,)
+                ).fetchone()
+                if row is None:
+                    raise RecordNotFound("Run not found")
+                current = RunStatus(row["status"])
+                if current.is_terminal:
+                    return _run_from_row(row)
+                active = connection.execute(
+                    """
+                    SELECT 1
+                    FROM attempts a
+                    JOIN steps s ON s.step_id = a.step_id
+                    JOIN leases l ON l.attempt_id = a.attempt_id
+                    WHERE s.run_id = ? AND a.status = 'running'
+                      AND l.released_at IS NULL
+                    LIMIT 1
+                    """,
+                    (run_id,),
+                ).fetchone()
+                target = RunStatus.CANCELLING if active is not None else RunStatus.CANCELLED
+                connection.execute(
+                    "UPDATE runs SET status = ?, updated_at = ? WHERE run_id = ?",
+                    (target.value, requested_at, run_id),
+                )
+                if target is RunStatus.CANCELLED:
+                    connection.execute(
+                        """
+                        UPDATE steps SET status = 'cancelled'
+                        WHERE run_id = ? AND status IN ('pending', 'waiting_for_user')
+                        """,
+                        (run_id,),
+                    )
+                self._append_run_event(
+                    connection,
+                    run_id=run_id,
+                    step_id=None,
+                    attempt_id=None,
+                    event_type="cancel_requested",
+                    detail={"in_flight": active is not None},
+                    created_at=requested_at,
+                )
+                updated = connection.execute(
+                    "SELECT * FROM runs WHERE run_id = ?", (run_id,)
+                ).fetchone()
+        return _run_from_row(updated)
+
+    def finalize_cancellation(
+        self, run_id: str, *, now: str | None = None
+    ) -> RunRecord:
+        cancelled_at = _normalize_timestamp(now or self.clock())
+        with self._connect() as connection:
+            with _transaction(connection):
+                row = connection.execute(
+                    "SELECT * FROM runs WHERE run_id = ?", (run_id,)
+                ).fetchone()
+                if row is None:
+                    raise RecordNotFound("Run not found")
+                if row["status"] != RunStatus.CANCELLING.value:
+                    return _run_from_row(row)
+                active = connection.execute(
+                    """
+                    SELECT 1 FROM attempts a
+                    JOIN steps s ON s.step_id = a.step_id
+                    JOIN leases l ON l.attempt_id = a.attempt_id
+                    WHERE s.run_id = ? AND a.status = 'running'
+                      AND l.released_at IS NULL
+                    LIMIT 1
+                    """,
+                    (run_id,),
+                ).fetchone()
+                if active is not None:
+                    raise LeaseConflict("Run still has an in-flight Attempt")
+                connection.execute(
+                    """
+                    UPDATE steps SET status = 'cancelled'
+                    WHERE run_id = ? AND status IN ('pending', 'waiting_for_user')
+                    """,
+                    (run_id,),
+                )
+                connection.execute(
+                    """
+                    UPDATE runs SET status = 'cancelled', updated_at = ?
+                    WHERE run_id = ? AND status = 'cancelling'
+                    """,
+                    (cancelled_at, run_id),
+                )
+                updated = connection.execute(
+                    "SELECT * FROM runs WHERE run_id = ?", (run_id,)
+                ).fetchone()
+        return _run_from_row(updated)
+
+    def resume_run(
+        self,
+        run_id: str,
+        decision: RecoveryDecision | None = None,
+        *,
+        now: str | None = None,
+    ) -> RunRecord:
+        decided_at = _normalize_timestamp(now or self.clock())
+        with self._connect() as connection:
+            with _transaction(connection):
+                run = connection.execute(
+                    "SELECT * FROM runs WHERE run_id = ?", (run_id,)
+                ).fetchone()
+                if run is None:
+                    raise RecordNotFound("Run not found")
+                if run["status"] != RunStatus.WAITING_FOR_USER.value:
+                    raise PersistenceInvariantError(
+                        "resume only applies to a waiting_for_user Run"
+                    )
+                step = connection.execute(
+                    """
+                    SELECT s.step_id, a.attempt_id, ae.effect_state, ae.side_effect
+                    FROM steps s
+                    JOIN attempts a ON a.step_id = s.step_id
+                    JOIN attempt_effects ae ON ae.attempt_id = a.attempt_id
+                    WHERE s.run_id = ? AND s.status = 'waiting_for_user'
+                    ORDER BY a.attempt_number DESC LIMIT 1
+                    """,
+                    (run_id,),
+                ).fetchone()
+                if (
+                    step is None
+                    or step["side_effect"]
+                    != SideEffectClass.PAID_EXTERNAL_UNKNOWN.value
+                    or step["effect_state"] != "request_started"
+                ):
+                    raise PersistenceInvariantError(
+                        "Run has no resumable unknown Provider outcome"
+                    )
+                if decision is None:
+                    raise RecoveryDecisionRequired(
+                        "unknown Provider outcome requires retry or fail decision"
+                    )
+                if decision is RecoveryDecision.RETRY_UNKNOWN_EXTERNAL:
+                    step_status = StepStatus.PENDING.value
+                    run_status = RunStatus.QUEUED.value
+                    error_ref = None
+                elif decision is RecoveryDecision.FAIL_UNKNOWN_EXTERNAL:
+                    step_status = StepStatus.FAILED.value
+                    run_status = RunStatus.FAILED.value
+                    error_ref = connection.execute(
+                        "SELECT error_ref FROM steps WHERE step_id = ?",
+                        (step["step_id"],),
+                    ).fetchone()["error_ref"]
+                else:
+                    raise PersistenceInvariantError("unsupported recovery decision")
+                connection.execute(
+                    "UPDATE steps SET status = ?, error_ref = ? WHERE step_id = ?",
+                    (step_status, error_ref, step["step_id"]),
+                )
+                connection.execute(
+                    "UPDATE runs SET status = ?, updated_at = ? WHERE run_id = ?",
+                    (run_status, decided_at, run_id),
+                )
+                self._append_run_event(
+                    connection,
+                    run_id=run_id,
+                    step_id=str(step["step_id"]),
+                    attempt_id=str(step["attempt_id"]),
+                    event_type="recovery_decided",
+                    detail={"decision": decision.value, "automatic_replay": False},
+                    created_at=decided_at,
+                )
+                updated = connection.execute(
+                    "SELECT * FROM runs WHERE run_id = ?", (run_id,)
+                ).fetchone()
+        return _run_from_row(updated)
+
+    def is_cancel_requested(self, run_id: str) -> bool:
+        return self.get_run(run_id).status in {
+            RunStatus.CANCELLING,
+            RunStatus.CANCELLED,
+        }
 
     def transition_run(
         self,
@@ -1191,8 +1931,8 @@ class SQLiteRuntimeRepository:
         connection: sqlite3.Connection,
         *,
         run_id: str,
-        step_id: str,
-        attempt_id: str,
+        step_id: str | None,
+        attempt_id: str | None,
         event_type: str,
         detail: object,
         created_at: str,
@@ -1383,6 +2123,30 @@ def _attempt_from_row(row: sqlite3.Row) -> AttemptRecord:
         started_at=str(row["started_at"]),
         finished_at=row["finished_at"],
         error_ref=row["error_ref"],
+    )
+
+
+def _attempt_effect_from_row(row: sqlite3.Row) -> AttemptEffectRecord:
+    return AttemptEffectRecord(
+        attempt_id=str(row["attempt_id"]),
+        side_effect=SideEffectClass(row["side_effect"]),
+        effect_state=str(row["effect_state"]),
+        intent_artifact_ref=row["intent_artifact_ref"],
+        request_artifact_ref=row["request_artifact_ref"],
+        response_artifact_ref=row["response_artifact_ref"],
+        external_response_id=row["external_response_id"],
+        updated_at=str(row["updated_at"]),
+    )
+
+
+def _artifact_from_row(row: sqlite3.Row) -> ArtifactRef:
+    return ArtifactRef(
+        artifact_id=str(row["artifact_id"]),
+        media_type=str(row["media_type"]),
+        content_hash=str(row["content_hash"]),
+        storage_uri=str(row["storage_uri"]),
+        producer_step_id=str(row["producer_step_id"]),
+        schema_version=str(row["schema_version"]),
     )
 
 

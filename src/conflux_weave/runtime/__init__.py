@@ -16,6 +16,7 @@ from conflux_weave.runtime.outcome_workflow import (
     OutcomeScenario,
 )
 from conflux_weave.runtime.sqlite import (
+    AttemptEffectRecord,
     AttemptRecord,
     ArtifactMetadataConflict,
     IdempotencyConflict,
@@ -26,16 +27,29 @@ from conflux_weave.runtime.sqlite import (
     PersistenceError,
     PersistenceInvariantError,
     RecordNotFound,
+    RecoveryDecision,
+    RecoveryDecisionRequired,
+    SideEffectClass,
     SQLiteRuntimeRepository,
+    StepPolicy,
     SubmissionResult,
 )
 from conflux_weave.runtime.worker import SQLiteStepWorker
+from conflux_weave.runtime.durable_paper_discovery import (
+    DURABLE_WORKFLOW_VERSION,
+    DurablePaperDiscoveryRuntime,
+    DurableWorkResult,
+)
 
 __all__ = [
     "ArtifactIntegrityError",
+    "AttemptEffectRecord",
     "AttemptRecord",
     "ArtifactMetadataConflict",
     "DeterministicValidationAdapter",
+    "DURABLE_WORKFLOW_VERSION",
+    "DurablePaperDiscoveryRuntime",
+    "DurableWorkResult",
     "FixedValidationWorkflow",
     "FixedOutcomeWorkflow",
     "IdempotencyConflict",
@@ -48,9 +62,13 @@ __all__ = [
     "OutcomeScenario",
     "PersistenceError",
     "PersistenceInvariantError",
+    "RecoveryDecision",
+    "RecoveryDecisionRequired",
     "RecordNotFound",
     "SQLiteRuntimeRepository",
     "SQLiteStepWorker",
+    "SideEffectClass",
+    "StepPolicy",
     "SubmissionResult",
     "ValidationAdapter",
     "WorkflowExecution",

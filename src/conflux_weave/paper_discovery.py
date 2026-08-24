@@ -40,7 +40,7 @@ from conflux_weave.evidence import (
 from conflux_weave.live_research import LiveResearchValidationError
 from conflux_weave.provider import OpenAICompatibleChatAdapter
 from conflux_weave.retrieval import BM25Retriever, RetrievalDocument
-from conflux_weave.runtime import LocalArtifactStore
+from conflux_weave.runtime.artifacts import LocalArtifactStore
 
 
 ARXIV_API = "https://export.arxiv.org/api/query"
@@ -162,7 +162,13 @@ class ArxivSearchAdapter:
         self.acquired_at = acquired_at or _utc_now()
         self.timeout_seconds = timeout_seconds
 
-    def search(self, search_query: str, *, max_results: int = 15) -> ArxivSearchResult:
+    def search(
+        self,
+        search_query: str,
+        *,
+        max_results: int = 15,
+        producer_step_id: str = "step-arxiv-search",
+    ) -> ArxivSearchResult:
         normalized = search_query.strip()
         if not normalized:
             raise ValueError("search_query must not be empty")
@@ -193,7 +199,7 @@ class ArxivSearchAdapter:
                     "message": str(exc),
                     "retryable": exc.retryable,
                 },
-                producer_step_id="step-arxiv-search",
+                producer_step_id=producer_step_id,
                 schema_version=SCHEMA_VERSION,
             )
             exc.artifact_ref = failure.artifact_id
@@ -201,7 +207,7 @@ class ArxivSearchAdapter:
         response_artifact = self.artifact_store.put_bytes(
             response.body,
             media_type=_header(response.headers, "Content-Type") or "application/atom+xml",
-            producer_step_id="step-arxiv-search",
+            producer_step_id=producer_step_id,
             schema_version="arxiv.atom-response.v1",
         )
         if response.status_code != 200:
@@ -232,7 +238,7 @@ class ArxivSearchAdapter:
                 "content_hash": snapshot.content_hash,
                 "artifact_ref": snapshot.artifact_ref,
             },
-            producer_step_id="step-arxiv-search",
+            producer_step_id=producer_step_id,
             schema_version="conflux-weave.source-snapshot.v1",
         )
         manifest_artifact = self.artifact_store.put_json(
@@ -246,7 +252,7 @@ class ArxivSearchAdapter:
                 "paper_count": len(papers),
                 "selection_boundary": "arXiv search candidates are discovery results, not proof of relevance, peer review or experimental quality.",
             },
-            producer_step_id="step-arxiv-search",
+            producer_step_id=producer_step_id,
             schema_version="conflux-weave.arxiv-search.v1",
         )
         return ArxivSearchResult(
