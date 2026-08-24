@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 import json
 import subprocess
 import sys
@@ -27,10 +28,13 @@ from conflux_weave.provider import (
     ProviderPortError,
 )
 from conflux_weave.runtime import (
+    DurablePaperDiscoveryRuntime,
     FixedOutcomeWorkflow,
     FixedValidationWorkflow,
     LocalArtifactStore,
     OutcomeScenario,
+    RecordNotFound,
+    SQLiteRuntimeRepository,
 )
 from conflux_weave.search import GitHubRepositorySearchAdapter, SearchPortError
 
@@ -138,6 +142,40 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("var") / "artifacts" / "sha256",
     )
+    durable = subparsers.add_parser(
+        "durable-paper",
+        help="submit, advance, or inspect the bounded W3 paper-discovery workflow",
+    )
+    durable_subparsers = durable.add_subparsers(
+        dest="durable_command", required=True
+    )
+    durable_submit = durable_subparsers.add_parser(
+        "submit", help="persist one frozen Run without making an external call"
+    )
+    durable_submit.add_argument("--query", required=True)
+    durable_submit.add_argument("--search-query", required=True)
+    durable_submit.add_argument("--max-results", type=int, default=15)
+    durable_submit.add_argument("--dotenv", type=Path, default=Path(".env"))
+    durable_worker = durable_subparsers.add_parser(
+        "worker", help="claim and execute at most one durable Step"
+    )
+    durable_worker.add_argument("--once", action="store_true", required=True)
+    durable_worker.add_argument("--dotenv", type=Path, default=Path(".env"))
+    durable_status = durable_subparsers.add_parser(
+        "status", help="read Run, Step, budget, Error, and Delivery state"
+    )
+    durable_status.add_argument("--run-id", required=True)
+    for durable_parser in (durable_submit, durable_worker, durable_status):
+        durable_parser.add_argument(
+            "--database",
+            type=Path,
+            default=Path("var") / "db" / "conflux-weave.sqlite3",
+        )
+        durable_parser.add_argument(
+            "--artifact-root",
+            type=Path,
+            default=Path("var") / "artifacts" / "sha256",
+        )
     return parser
 
 
@@ -145,6 +183,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     _configure_stdout()
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.command == "durable-paper":
+        return _run_durable_paper(args)
 
     if args.command == "discover-papers":
         try:
@@ -561,3 +602,132 @@ def _git_revision() -> str:
     )
     revision = completed.stdout.strip()
     return revision if completed.returncode == 0 and revision else "unknown"
+
+
+def _run_durable_paper(args: argparse.Namespace) -> int:
+    store = LocalArtifactStore(args.artifact_root)
+    repository = SQLiteRuntimeRepository(args.database, store)
+    if args.durable_command == "status":
+        try:
+            output = _durable_status(repository, args.run_id)
+        except RecordNotFound as exc:
+            _print_json({"status": "not_found", "message": str(exc)})
+            return 2
+        _print_json(output)
+        return 1 if output["run"]["status"] == "failed" else 0
+
+    try:
+        config = ProviderConfig.from_environment(args.dotenv)
+    except ProviderConfigurationError as exc:
+        _print_json(
+            {
+                "status": "failed",
+                "error_code": "provider_configuration_invalid",
+                "message": str(exc),
+                "network_called": False,
+                "provider_called": False,
+            }
+        )
+        return 2
+    runtime = DurablePaperDiscoveryRuntime(
+        repository,
+        store,
+        ArxivSearchAdapter(store),
+        OpenAICompatibleChatAdapter(store, config),
+        code_revision=_git_revision(),
+    )
+    if args.durable_command == "submit":
+        try:
+            result = runtime.submit(
+                args.query,
+                search_query=args.search_query,
+                max_results=args.max_results,
+            )
+        except ValueError as exc:
+            _print_json({"status": "failed", "error_code": "input_invalid", "message": str(exc)})
+            return 2
+        _print_json(
+            {
+                "status": repository.get_run(result.run_id).status.value,
+                "task_id": result.task_id,
+                "run_id": result.run_id,
+                "created": result.created,
+                "network_called": False,
+                "provider_called": False,
+            }
+        )
+        return 0
+    result = runtime.work_once()
+    _print_json(
+        {
+            "status": result.status if result else "idle",
+            "run_id": result.run_id if result else None,
+            "step_kind": result.step_kind if result else None,
+            "automatic_retry": False,
+            "fallback": False,
+        }
+    )
+    return 1 if result and result.status in {"failed", "waiting_for_user"} else 0
+
+
+def _durable_status(repository: SQLiteRuntimeRepository, run_id: str) -> dict:
+    run = repository.get_run(run_id)
+    steps = repository.get_steps(run_id)
+    budget = repository.get_budget_status(run_id)
+    errors = repository.get_errors(run_id)
+    drops = repository.get_telemetry_drops(run_id)
+    try:
+        delivery = repository.get_delivery(run_id)
+        delivery_artifacts = repository.get_delivery_artifacts(run_id)
+        delivery_output = {
+            "disposition": delivery.disposition.value,
+            "artifact_refs": list(delivery.artifact_refs),
+            "artifacts": [asdict(item) for item in delivery_artifacts],
+            "evidence_refs": list(delivery.evidence_refs),
+            "limitations": list(delivery.limitations),
+            "unmet_criteria": list(delivery.unmet_criteria),
+            "recovery_actions": list(delivery.recovery_actions),
+        }
+    except RecordNotFound:
+        delivery_output = None
+    return {
+        "run": {
+            "run_id": run.run_id,
+            "task_id": run.task_id,
+            "status": run.status.value,
+            "workflow_version": run.workflow_version,
+            "config_snapshot_ref": run.config_snapshot_ref,
+            "created_at": run.created_at,
+            "updated_at": run.updated_at,
+        },
+        "steps": [
+            {
+                **asdict(step),
+                "status": step.status.value,
+                "attempts": [asdict(item) for item in repository.get_attempts(step.step_id)],
+            }
+            for step in steps
+        ],
+        "budget": asdict(budget),
+        "budget_entries": [asdict(item) for item in repository.get_budget_entries(run_id)],
+        "errors": [
+            {
+                "error_id": item.error_id,
+                "step_id": item.step_id,
+                "attempt_id": item.attempt_id,
+                "created_at": item.created_at,
+                "code": item.record.code,
+                "category": item.record.category.value,
+                "stage": item.record.stage,
+                "retryable": item.record.retryable,
+                "user_message": item.record.user_message,
+                "technical_detail_ref": item.record.technical_detail_ref,
+                "affected_artifact_refs": list(item.record.affected_artifact_refs),
+                "recovery_action": item.record.recovery_action,
+            }
+            for item in errors
+        ],
+        "telemetry_drop_count": len(drops),
+        "telemetry_drops": [asdict(item) for item in drops],
+        "delivery": delivery_output,
+    }
