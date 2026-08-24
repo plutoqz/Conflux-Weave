@@ -1,7 +1,7 @@
 import json
 
-from conflux_weave import cli
 from conflux_weave.cli import build_parser, main
+from conflux_weave.cli_commands import live_research
 from conflux_weave.provider import ProviderPortError
 
 
@@ -85,7 +85,9 @@ def test_review_cli_exposes_provider_failure_without_traceback(
                 recovery_action="check network",
             )
 
-    monkeypatch.setattr(cli, "FixedReviewReadingNoteWorkflow", FailingWorkflow)
+    monkeypatch.setattr(
+        live_research, "FixedReviewReadingNoteWorkflow", FailingWorkflow
+    )
 
     exit_code = main(
         [

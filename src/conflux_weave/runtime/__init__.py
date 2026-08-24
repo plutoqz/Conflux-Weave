@@ -47,12 +47,6 @@ from conflux_weave.runtime.telemetry import (
     TraceRecord,
 )
 from conflux_weave.runtime.worker import SQLiteStepWorker
-from conflux_weave.runtime.durable_paper_discovery import (
-    DURABLE_WORKFLOW_VERSION,
-    DurablePaperDiscoveryRuntime,
-    DurableWorkResult,
-)
-
 __all__ = [
     "ArtifactIntegrityError",
     "AttemptEffectRecord",
@@ -95,3 +89,15 @@ __all__ = [
     "ValidationAdapter",
     "WorkflowExecution",
 ]
+
+
+def __getattr__(name: str):
+    if name in {
+        "DURABLE_WORKFLOW_VERSION",
+        "DurablePaperDiscoveryRuntime",
+        "DurableWorkResult",
+    }:
+        from conflux_weave.runtime import durable_paper_discovery
+
+        return getattr(durable_paper_discovery, name)
+    raise AttributeError(name)

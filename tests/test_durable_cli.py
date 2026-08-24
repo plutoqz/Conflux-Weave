@@ -2,8 +2,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from conflux_weave import cli
 from conflux_weave.cli import build_parser, main
+from conflux_weave.cli_commands import durable_paper
 
 
 def _dotenv(path: Path) -> Path:
@@ -132,7 +132,7 @@ def test_durable_worker_executes_only_one_step(tmp_path, monkeypatch, capsys) ->
                 status="running", run_id="run-fixture", step_kind="search_arxiv"
             )
 
-    monkeypatch.setattr(cli, "DurablePaperDiscoveryRuntime", FakeRuntime)
+    monkeypatch.setattr(durable_paper, "DurablePaperDiscoveryRuntime", FakeRuntime)
     exit_code = main(
         [
             "durable-paper",
