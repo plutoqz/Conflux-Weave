@@ -1466,10 +1466,19 @@ class SQLiteRuntimeRepository:
                 self._release_stale_reservations(connection, claim.run_id, started_at)
                 actual = self._budget_totals(connection, claim.run_id, "actual")
                 active = self._active_reservation_totals(connection, claim.run_id)
-                sufficient = limit["state"] == "active" and all(
-                    actual[dimension] + active[dimension] + getattr(reservation, dimension)
-                    <= int(limit[dimension])
-                    for dimension in _BUDGET_DIMENSIONS
+                deadline = _add_seconds(
+                    str(limit["created_at"]), int(limit["wall_clock_seconds"])
+                )
+                sufficient = (
+                    limit["state"] == "active"
+                    and started_at <= deadline
+                    and all(
+                        actual[dimension]
+                        + active[dimension]
+                        + getattr(reservation, dimension)
+                        <= int(limit[dimension])
+                        for dimension in _BUDGET_DIMENSIONS
+                    )
                 )
                 self._register_artifact(connection, intent_artifact)
                 if not sufficient:
@@ -1509,7 +1518,12 @@ class SQLiteRuntimeRepository:
                     self._append_run_event(
                         connection, run_id=claim.run_id, step_id=claim.step_id,
                         attempt_id=claim.attempt_id, event_type="budget_reservation_denied",
-                        detail={"reservation": asdict(reservation)}, created_at=started_at,
+                        detail={
+                            "reservation": asdict(reservation),
+                            "deadline": deadline,
+                            "deadline_exceeded": started_at > deadline,
+                        },
+                        created_at=started_at,
                     )
                     return False
                 reservation_id = f"budget-reservation:{claim.attempt_id}"

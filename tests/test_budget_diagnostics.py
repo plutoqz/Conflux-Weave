@@ -8,6 +8,7 @@ from conflux_weave.provider import OpenAICompatibleChatAdapter, ProviderConfig, 
 
 
 T0 = "2026-08-24T12:00:00Z"
+T181 = "2026-08-24T12:03:01Z"
 ATOM = b"""<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom"><entry>
 <id>http://arxiv.org/abs/2608.00002v1</id>
@@ -110,6 +111,20 @@ def test_v4_migration_backfills_existing_run_budget_snapshot(tmp_path):
     assert status.limit.output_tokens == 2_048
     assert status.estimated_cost_limit == "unavailable"
     assert reopened.migration_records()[-1].version == 4
+
+
+def test_expired_wall_clock_budget_starts_zero_external_calls(tmp_path):
+    runtime, repository, _, arxiv, provider = build_runtime(tmp_path)
+    result = submit(
+        runtime, BudgetLedger(180, 20_000, 2_048, "unavailable", 2, 1, 1)
+    )
+
+    work = runtime.work_once(now=T181)
+
+    assert work.status == "failed"
+    assert arxiv.calls == provider.calls == 0
+    assert repository.get_budget_status(result.run_id).state == "stopped"
+    assert repository.get_errors(result.run_id)[0].record.code == "budget_reservation_denied"
 
 
 def test_insufficient_provider_output_reservation_starts_zero_provider_calls(tmp_path):
