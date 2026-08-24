@@ -1,0 +1,100 @@
+{
+  "schema_version": "conflux-weave.w3.acceptance.v1",
+  "acceptance_point": "W3.2",
+  "name": "单 Worker、Lease、Heartbeat 与 Fencing",
+  "status": "validated_offline",
+  "accepted_at": "2026-08-24",
+  "implementation_revision": "6069491a8a5fa24f256f17b622a7aba3f8b226bb",
+  "w3_freeze_revision": "e75eb684c36bba8892ffc828e49ac33345eb539b",
+  "w3_1_revision": "7c6df6fe848df0ad0bcaf89866d68a0509f22ae8",
+  "scope": {
+    "implemented": [
+      "checksum-protected one-way migration v2 for attempts, leases, attempt_artifacts, and run_events",
+      "global concurrency-one Step claim ordered by Run and Step ordinal",
+      "lease heartbeat with monotonic UTC timestamps and bounded expiry",
+      "expired lease takeover with a new Attempt and globally monotonic fencing token",
+      "fencing checks for heartbeat, Step success/failure, Artifact registration, and Delivery publication",
+      "single-worker facade carrying worker identity and lease duration"
+    ],
+    "deferred": [
+      "discover-papers five-Step checkpoint integration",
+      "real subprocess kill and restart fault injection",
+      "unknown Provider outcome handling, cancel, and resume",
+      "Budget reservation and usage ledger",
+      "structured Error records and optional Trace",
+      "network, Provider, paid service, and live acceptance"
+    ]
+  },
+  "migration": {
+    "version": 2,
+    "name": "w3_worker_leases",
+    "checksum": "sha256:404463aa8e3f9e22d3092a5bd5e52671e4f5608f314f66fe4e76711c48b3a63d",
+    "added_tables": [
+      "attempts",
+      "leases",
+      "attempt_artifacts",
+      "run_events"
+    ],
+    "w3_1_migration_checksum_unchanged": "sha256:ec9c9577cea23492915274f8a0f88056989ebee6cc937a81fcec8c16c8156ec7"
+  },
+  "acceptance_results": [
+    {
+      "criterion": "concurrent claims across multiple queued Runs create one globally active lease",
+      "result": "passed"
+    },
+    {
+      "criterion": "a later Step is not claimable until prior Step completion",
+      "result": "passed"
+    },
+    {
+      "criterion": "heartbeat extends the current lease and rejects timestamp regression",
+      "result": "passed"
+    },
+    {
+      "criterion": "lease expiry creates a new Attempt with a larger fencing token",
+      "result": "passed"
+    },
+    {
+      "criterion": "old Attempt heartbeat, Artifact registration, Step completion, and Delivery publication are rejected",
+      "result": "passed"
+    },
+    {
+      "criterion": "current Attempt output lineage and final Delivery survive repository reopen",
+      "result": "passed"
+    }
+  ],
+  "verification": {
+    "focused_tests": {
+      "command": "uv run --frozen pytest tests/test_sqlite_runtime.py tests/test_worker_leases.py -q",
+      "result": "15 passed in 2.00s"
+    },
+    "full_regression": {
+      "command": "uv run --frozen pytest",
+      "result": "146 passed in 5.11s"
+    },
+    "compileall": {
+      "command": "uv run --frozen python -m compileall -q src tests scripts",
+      "result": "passed"
+    },
+    "build": {
+      "command": "uv build",
+      "result": "sdist and wheel built"
+    },
+    "diff_check": {
+      "command": "git diff --check",
+      "result": "passed"
+    }
+  },
+  "execution_boundary": {
+    "fixtures": "deterministic in-process Workers with temporary SQLite and filesystem",
+    "subprocess_kill_tests": 0,
+    "network_calls": 0,
+    "provider_calls": 0,
+    "automatic_retry": false,
+    "fallback": false,
+    "live_capability_claim": false,
+    "claim": "W3.2 proves the bounded single-process lease ownership and fencing mechanism only; it does not prove workflow checkpoint recovery or live research execution."
+  },
+  "frozen_file_unchanged": "docs/plans/current/W3-scope-freeze.json",
+  "next_acceptance_point": "W3.3 论文发现 Step checkpoint、取消与恢复"
+}
