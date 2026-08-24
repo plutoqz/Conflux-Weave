@@ -1,0 +1,129 @@
+{
+  "schema_version": "conflux-weave.w3.6-live-freeze.v1",
+  "status": "frozen_authorized",
+  "frozen_at": "2026-08-24T15:55:56+08:00",
+  "authorization": "用户明确指令：进入 W3.6",
+  "purpose": "以两个 W2 已接受论文发现任务配对验收 W3 持久化路径的 live 交付非回归",
+  "source_revision": {
+    "implementation_revision": "f975755302b5713713c89b559e3de3ca3cf6b8cd",
+    "local_equals_origin_main": true,
+    "worktree_before_freeze": "clean",
+    "execution_revision_rule": "冻结文件提交并推送后，以该文档提交的 HEAD 执行；不得再修改源码或冻结输入",
+    "relevant_file_sha256": {
+      "src/conflux_weave/cli.py": "26603e2ad0cf96d87c2568b8fa4126f02fe3615c68e512894aa1f7b69213ad1c",
+      "src/conflux_weave/runtime/durable_paper_discovery.py": "f679be0e24553b30bb702f7dd6bbe4f0cba27706acec1900c92704a799ffbce8",
+      "src/conflux_weave/runtime/sqlite.py": "67d00e3183d607b325d49766469d0930d24ed008ac92529402dbb4c490de6979",
+      "src/conflux_weave/paper_discovery.py": "d6d422e798a84bcdcc1e49fa72c3fe0cc8233ec6e1035d36c794fbf84313b298"
+    }
+  },
+  "preflight": {
+    "offline_focused_tests": "14 passed",
+    "offline_full_regression": "172 passed",
+    "provider_host": "www.dmxapi.cn",
+    "provider_model": "qwen3.7-flash",
+    "provider_api_key_configured": true,
+    "prompt_version": "arxiv-relevance-claims-zh-v3",
+    "secrets_must_not_be_recorded": true
+  },
+  "runtime_contract": {
+    "entrypoint": "conflux-weave durable-paper",
+    "workflow_version": "fixed-arxiv-paper-discovery-durable-v1",
+    "steps": [
+      "search_arxiv",
+      "rank_candidates",
+      "synthesize_claims",
+      "validate_delivery",
+      "publish_delivery"
+    ],
+    "worker_policy": "每次 worker --once 最多执行一个 Step；每 Run 最多调用五次，且仅当前一步成功后继续",
+    "automatic_retry": false,
+    "fallback": false,
+    "parallel_calls": false,
+    "unknown_provider_outcome": "停止并保留 waiting_for_user 或结构化失败，不重放"
+  },
+  "budget_per_run": {
+    "wall_clock_seconds": 180,
+    "input_tokens": 20000,
+    "output_tokens": 2048,
+    "tool_calls": 2,
+    "retrieval_rounds": 1,
+    "concurrency": 1,
+    "estimated_cost_limit": "provider-price-not-frozen",
+    "cost_enforcement": "unavailable",
+    "maximum_arxiv_calls": 1,
+    "maximum_provider_calls": 1,
+    "temperature": 0.0,
+    "enable_thinking": false,
+    "automatic_budget_expansion": false
+  },
+  "runs": [
+    {
+      "run_order": 1,
+      "id": "W3.6-LIVE-01",
+      "baseline_id": "W2.5-LIVE-01",
+      "query": "查找与 Agent/LLM 上下文管理直接相关的论文，说明每篇论文为什么相关，并明确预印本、摘要级证据和召回范围限制。",
+      "search_query": "all:agent AND all:context AND all:management",
+      "max_results": 15,
+      "database": "var/evaluations/w3/live-acceptance/W3.6-LIVE-01/runtime.sqlite3",
+      "artifact_root": "var/evaluations/w3/live-acceptance/W3.6-LIVE-01/artifacts/sha256",
+      "expected_disposition": "partial",
+      "w2_baseline": {
+        "selected": 8,
+        "claims": 3,
+        "evidence": 8,
+        "citations": 3,
+        "provider_calls": 1,
+        "input_tokens": 4344,
+        "output_tokens": 499
+      }
+    },
+    {
+      "run_order": 2,
+      "id": "W3.6-LIVE-03-R3",
+      "baseline_id": "W2.5-LIVE-03-R3",
+      "query": "查找将 LLM Agent 用于 GIS 或地理空间分析的论文；区分真正执行空间分析或调用 GIS 工具的工作，与仅处理地理文本、遥感识别或泛化多模态 Agent 的论文。",
+      "search_query": "all:geospatial AND all:agent",
+      "max_results": 15,
+      "database": "var/evaluations/w3/live-acceptance/W3.6-LIVE-03-R3/runtime.sqlite3",
+      "artifact_root": "var/evaluations/w3/live-acceptance/W3.6-LIVE-03-R3/artifacts/sha256",
+      "expected_disposition": "partial",
+      "w2_baseline": {
+        "selected": 8,
+        "claims": 8,
+        "evidence": 8,
+        "citations": 8,
+        "provider_calls": 1,
+        "input_tokens": 3888,
+        "output_tokens": 724
+      }
+    }
+  ],
+  "acceptance_criteria": [
+    "2/2 新 Run 均形成可理解、可用且不弱于对应 W2 基线的 partial。",
+    "每个 Run 最多一次 arXiv 调用和一次 Provider 调用；无 retry、fallback、查询改写或预算扩大。",
+    "关键 Claim/Evidence/Citation 闭合率为 100%，Citation 均解析到 Evidence，Evidence 均解析到 SourceSnapshot。",
+    "报告保持 arXiv 预印本、摘要级证据和未覆盖出版社、Crossref、会议页面及全文实验的确定性限制。",
+    "原始来源与 Provider 请求/响应、SQLite、Attempt/Lease、Budget、Error、Delivery、报告、hash 和 Trace/drop 引用完整保留。",
+    "用户通过 CLI status 能理解 Run、Step、预算、错误、恢复动作和 Delivery。",
+    "Artifact、SQLite、命令输出和验收文档中的 Provider API key 扫描为 0。"
+  ],
+  "failure_semantics": {
+    "single_run_failure": "立即停止该 Run，保留全部状态和 Artifact；不得 retry、fallback、改变查询、扩大预算或覆盖失败历史",
+    "overall_failure": "任一 Run 未接受则 W3.6 保持失败，不执行替代任务制造通过",
+    "allowed_next_action": "只审计已保留证据并报告；新的外部调用需要另行冻结和授权"
+  },
+  "stop_conditions": [
+    "冻结提交未推送或执行时源码 hash、Provider 主机、模型、Prompt、预算、查询任一不一致。",
+    "任一步退出失败、waiting_for_user、预算拒绝或出现未知 Provider 结果。",
+    "任一 Run 需要第二次 arXiv 或 Provider 调用才能继续。",
+    "关键原始 Artifact、SQLite 状态、Evidence/Citation 映射或报告缺失。",
+    "发现 Secret 进入 Artifact、SQLite、日志或文档。"
+  ],
+  "evidence_boundary": "两条有界真实 arXiv 与真实 Provider Run 只能证明冻结任务在当前环境的 live 非回归，不证明生产可用、一般化 Research Agent 能力、全文核验或跨数据库召回。",
+  "non_goals": [
+    "不修改 W3-scope-freeze.json。",
+    "不新增 Web/UI、调度器、多 Worker、自动恢复策略或其他工作流。",
+    "不接入 Dense、RRF、Reranker、Ragas、DeepEval、Phoenix 服务或跨数据库全文检索。",
+    "不以测试、HTTP 成功或结构计数替代用户报告内容审计。"
+  ]
+}
