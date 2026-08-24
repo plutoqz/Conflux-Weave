@@ -1,0 +1,278 @@
+{
+  "scope_version": "1.0.0",
+  "status": "scope_frozen",
+  "frozen_at": "2026-08-24",
+  "design_basis": "docs/design/current/Conflux-Weave设计文档v0.2.md",
+  "proposal": "docs/plans/current/W4-scope-proposal.json",
+  "implementation_plan": "docs/plans/current/W4-实施方案.md",
+  "w4_1_acceptance": "docs/plans/current/W4.1-基线与问题冻结.json",
+  "verification_base_revision": "01ffc319125f797210d5bfc7d60f7b5ec2cd1b76",
+  "milestone": {
+    "id": "W4",
+    "name": "Bounded Agent Strategy",
+    "goal": "判断受限 Planner 是否减少真实研究任务的手工编排并改善至少一个预登记问题",
+    "evidence_target": "bounded_strategy_validated_live",
+    "current_status": "w4_1_validated_offline",
+    "implementation_authorized_by_this_freeze": false
+  },
+  "stage_claim": {
+    "id": "H-W4-01",
+    "claim": "在相同来源、候选上限、答案合同和人工判定标准下，L2 至少改善检索候选覆盖或严格约束保持，并且收益足以抵偿额外调用、token、延迟和失败面。",
+    "claim_boundary": [
+      "只覆盖 arXiv 论文发现策略，不声明通用 Agent 能力。",
+      "Fixed Workflow 始终作为稳定基线和默认回滚路径。",
+      "W4.1 只冻结问题、输入、rubric、预算和文件边界，不实现或验证 Planner。",
+      "review-document 和 research-repository 不因 W4 冻结获得 W3 级耐用能力。",
+      "CLI 或 Codex 代操作不证明非终端产品入口；该缺口保留到 W5。"
+    ],
+    "falsifiers": [
+      "确定性策略 B 达到与 L2 相同的候选质量和约束保持。",
+      "L2 只减少输入形式而未改善候选或用户决策。",
+      "L2 需要案例特判、自动重试、fallback 或约束放宽。",
+      "L2 绕过 Tool、Policy、Budget、Evidence 或停止条件。",
+      "L2 的成本、延迟、失败或交付质量退化超过冻结上限。"
+    ]
+  },
+  "comparison": {
+    "unit": "one frozen research problem evaluated independently under A, B and C",
+    "strategies": [
+      {
+        "id": "A",
+        "strategy_id": "fixed-arxiv-v1",
+        "level": "L1",
+        "input": "frozen research case plus expert-authored search_query",
+        "planner_provider_calls": 0,
+        "role": "stable expert baseline and default"
+      },
+      {
+        "id": "B",
+        "strategy_id": "deterministic-arxiv-query-v1",
+        "level": "L0_L1",
+        "input": "same frozen research case without search_query",
+        "planner_provider_calls": 0,
+        "role": "non-agent alternative; rules may use only explicit frozen input fields"
+      },
+      {
+        "id": "C",
+        "strategy_id": "bounded-arxiv-planner-v1",
+        "level": "L2",
+        "input": "same frozen research case without search_query",
+        "planner_provider_calls": 1,
+        "role": "candidate only; must outperform B beyond input convenience"
+      }
+    ],
+    "fairness": [
+      "A/B/C use the same case bytes, source boundary, execution time boundary, max_results per search, selected candidate limit and answer contract.",
+      "A expert queries are frozen before B/C implementation and cannot be weakened after seeing results.",
+      "B cannot use hidden case-id branches, Provider calls or information absent from the frozen input.",
+      "C cannot see A/B outputs, rubric decisions or future live results in its ContextBundle.",
+      "Each strategy uses an independent Run and Artifact root; failures are retained without retry or fallback.",
+      "Human content review hides strategy labels; three strategy runs count as one task unit, not three."
+    ]
+  },
+  "planner_contract": {
+    "allowed_tools": ["search_arxiv"],
+    "allowed_actions": ["tool_call", "finish"],
+    "max_search_actions": 2,
+    "max_retrieval_rounds": 2,
+    "max_provider_calls": 2,
+    "automatic_retry": false,
+    "fallback": false,
+    "dynamic_unbounded_steps": false,
+    "authoritative_state_writes": false,
+    "direct_evidence_ledger_writes": false
+  },
+  "frozen_cases": [
+    {
+      "case_id": "CW-PR-005",
+      "case_line_sha256": "e73caa66db412951e737a284e9d60c4585d1b41b37a1ac776ec671ae38e22e63",
+      "problem": "broad_context_management_coverage",
+      "a_search_query": "all:agent AND (all:\"context management\" OR all:memory OR all:\"context compression\")",
+      "decision_question": "Does C improve direct coverage of agent context, memory, compression and retrieval themes relative to B without lowering relevance?"
+    },
+    {
+      "case_id": "CW-PR-009",
+      "case_line_sha256": "e4db84f0e536ea62fb5009b1b7e4f70b502a0d22e4551314f33460361e535cfa",
+      "problem": "strict_gis_agent_boundary",
+      "a_search_query": "all:agent AND (all:GIS OR all:geospatial) AND (all:\"spatial analysis\" OR all:tool)",
+      "decision_question": "Does C retrieve more direct GIS analysis or GIS-tool candidates while keeping remote-sensing-only and keyword-only work outside accepted results?"
+    },
+    {
+      "case_id": "CW-PR-010",
+      "case_line_sha256": "c8fea96ecf8365d43745af773df7090e01f777f296c7659c665e9edbe14c808d",
+      "problem": "overconstrained_no_answer",
+      "a_search_query": "all:\"context compression\" AND all:\"multi-agent\" AND submittedDate:[202601010000 TO 202612312359]",
+      "decision_question": "Does C preserve every hard constraint, separate near matches and retain no_answer when the arXiv boundary cannot verify all conditions?"
+    }
+  ],
+  "rubric": {
+    "aggregation": "no single composite score; hard vetoes cannot be averaged away",
+    "hard_vetoes": [
+      "silent relaxation of year, publication, code, ablation, task-count, GIS-analysis or exclusion constraints",
+      "non-whitelisted tool or more than two search actions",
+      "unsupported accepted candidate or fabricated source identity",
+      "Claim/Evidence/Citation closure below 1.0",
+      "automatic retry, fallback or overwritten failure evidence"
+    ],
+    "dimensions": [
+      {
+        "id": "manual_input_burden",
+        "measure": "whether search_query or an extra clarification turn is required",
+        "decision": "B/C should remove expert arXiv syntax; this alone cannot admit C"
+      },
+      {
+        "id": "direct_candidate_coverage",
+        "measure": "count and topical breadth of directly relevant candidates within the frozen source boundary",
+        "scale": "0=no direct candidate; 1=one narrow theme; 2=multiple required themes without padding"
+      },
+      {
+        "id": "constraint_preservation",
+        "measure": "all inclusion/exclusion/hard constraints remain explicit in queries and candidate disposition",
+        "scale": "0=relaxed or lost; 1=preserved but incompletely verifiable; 2=preserved and each candidate is dispositioned against them"
+      },
+      {
+        "id": "candidate_precision",
+        "measure": "directly relevant accepted candidates divided by accepted candidates",
+        "boundary": "near matches and pending verification are not accepted candidates"
+      },
+      {
+        "id": "no_answer_integrity",
+        "measure": "overconstrained cases return no_answer or bounded partial rather than silently broadening",
+        "applies_to": ["CW-PR-010"]
+      },
+      {
+        "id": "cost_latency_failure",
+        "measure": "arXiv calls, Provider calls, input/output tokens, wall time and structural failures per Run"
+      }
+    ],
+    "candidate_admission": [
+      "B/C remove handwritten search_query for 3/3 cases.",
+      "C beats B on direct candidate coverage or constraint preservation in at least 2/3 cases, with no material regression in the remainder.",
+      "All hard veto counts are zero and Claim/Evidence/Citation closure is 1.0.",
+      "C Provider-token and wall-time ratios are each <=2.5 relative to paired A, and absolute frozen budgets are respected."
+    ]
+  },
+  "budgets": {
+    "shared": {
+      "max_results_per_search": 15,
+      "selected_candidate_limit": 8,
+      "concurrency": 1,
+      "cost_enforcement": "unavailable_without_frozen_price_snapshot"
+    },
+    "A": {
+      "wall_clock_seconds": 180,
+      "input_tokens": 20000,
+      "output_tokens": 2048,
+      "tool_calls": 2,
+      "retrieval_rounds": 1,
+      "arxiv_calls": 1,
+      "provider_calls": 1
+    },
+    "B": {
+      "wall_clock_seconds": 180,
+      "input_tokens": 20000,
+      "output_tokens": 2048,
+      "tool_calls": 2,
+      "retrieval_rounds": 1,
+      "arxiv_calls": 1,
+      "provider_calls": 1
+    },
+    "C": {
+      "wall_clock_seconds": 300,
+      "input_tokens": 40000,
+      "output_tokens": 3072,
+      "planner_output_tokens": 768,
+      "synthesis_output_tokens": 2048,
+      "tool_calls": 4,
+      "retrieval_rounds": 2,
+      "arxiv_calls": 2,
+      "provider_calls": 2
+    }
+  },
+  "implementation_file_boundary": {
+    "W4_2_allowed": [
+      "src/conflux_weave/planning.py (new)",
+      "tests/test_planning.py (new)",
+      "src/conflux_weave/core/__init__.py (only if stable contract exports are required)"
+    ],
+    "W4_3_candidate_requires_separate_entry": [
+      "src/conflux_weave/runtime/bounded_paper_strategy.py (new)",
+      "src/conflux_weave/runtime/bounded_paper_steps.py (new)",
+      "src/conflux_weave/runtime/__init__.py",
+      "src/conflux_weave/cli.py",
+      "src/conflux_weave/cli_commands/durable_paper.py",
+      "src/conflux_weave/runtime/sqlite_*.py only for additive skipped-step or lineage support"
+    ],
+    "prohibited_without_scope_change": [
+      "existing fixed workflow semantics or default strategy",
+      "W1/W2 frozen datasets",
+      "Provider, search, Evidence or Core contracts unrelated to the accepted W4 plan",
+      "README, CHANGELOG, Web UI, FastAPI, SSE or W5 files",
+      "new framework, Agent, evaluation or observability dependencies"
+    ]
+  },
+  "acceptance_points": [
+    {
+      "id": "W4.0",
+      "name": "方案与范围确认",
+      "status_at_freeze": "scope_frozen"
+    },
+    {
+      "id": "W4.1",
+      "name": "L1/B 基线、案例、rubric、预算与文件边界冻结",
+      "status_at_freeze": "validated_offline",
+      "evidence": "docs/plans/current/W4.1-基线与问题冻结.json"
+    },
+    {
+      "id": "W4.2",
+      "name": "Context、Plan、Validator 与 Tool Gateway 合同",
+      "status_at_freeze": "pending"
+    },
+    {
+      "id": "W4.3",
+      "name": "静态两槽 L2 耐用执行",
+      "status_at_freeze": "pending"
+    },
+    {
+      "id": "W4.4",
+      "name": "安全、预算、恢复与故障矩阵",
+      "status_at_freeze": "pending"
+    },
+    {
+      "id": "W4.5",
+      "name": "离线 A/B/C 准入决策",
+      "status_at_freeze": "pending"
+    },
+    {
+      "id": "W4.6",
+      "name": "配对 live 与个人使用审计",
+      "status_at_freeze": "pending_separate_authorization"
+    }
+  ],
+  "authorization": {
+    "W4_1": "authorized_and_completed_by_current_user_instruction",
+    "W4_2_implementation": "not_authorized_until_next_explicit_entry",
+    "W4_3_or_later": "not_authorized",
+    "public_network": "not_authorized",
+    "provider_calls": "not_authorized",
+    "paid_services": "not_authorized",
+    "live_acceptance": "separate_freeze_and_authorization_required",
+    "deepeval": "not_admitted_or_authorized",
+    "ui_or_W5": "not_authorized"
+  },
+  "rollback": {
+    "default_strategy": "fixed-arxiv-v1",
+    "on_rejection": "Disable bounded entry and retain every Plan, response, SQLite record, Artifact and failure.",
+    "migration": "Additive forward fixes only; do not rewrite existing migrations."
+  },
+  "stop_conditions": [
+    "B reaches the same quality as C without a Planner.",
+    "Planner requires case-specific rules, retry, fallback or constraint relaxation.",
+    "Implementation requires unbounded dynamic Steps, multiple Workers, a message queue, distributed storage or a second scheduler.",
+    "Planner requires a non-whitelisted tool or arbitrary system access.",
+    "Evidence/Citation, source boundary, recovery semantics or L1 completion regresses.",
+    "Evaluation or Trace becomes a core task success dependency.",
+    "Continuing requires changing the W4 objective or acceptance standard."
+  ],
+  "next_acceptance_point": "W4.2 Agent contracts; requires explicit entry and is limited to the frozen W4.2 file boundary"
+}

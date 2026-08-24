@@ -35,6 +35,7 @@ class LeaseRepositoryMixin:
         worker_id: str,
         *,
         lease_seconds: int,
+        workflow_version: str | None = None,
         now: str | None = None,
     ) -> LeaseClaim | None:
         _validate_worker_request(worker_id, lease_seconds)
@@ -111,6 +112,7 @@ class LeaseRepositoryMixin:
                         FROM steps s
                         JOIN runs r ON r.run_id = s.run_id
                         WHERE r.status IN ('queued', 'running')
+                          AND (? IS NULL OR r.workflow_version = ?)
                           AND NOT EXISTS (
                               SELECT 1
                               FROM steps prior
@@ -144,7 +146,7 @@ class LeaseRepositoryMixin:
                         ORDER BY r.created_at, r.run_id, s.ordinal
                         LIMIT 1
                         """,
-                    (claimed_at,),
+                    (workflow_version, workflow_version, claimed_at),
                 ).fetchone()
                 if row is None:
                     return None
@@ -441,6 +443,77 @@ class LeaseRepositoryMixin:
                     event_type="step_succeeded",
                     detail={"artifact_refs": artifact_ids},
                     created_at=completed_at,
+                )
+                row = connection.execute(
+                    "SELECT * FROM steps WHERE step_id = ?", (claim.step_id,)
+                ).fetchone()
+        return _step_from_row(row)
+
+    def skip_attempt(
+        self,
+        claim: LeaseClaim,
+        artifacts: Sequence[ArtifactRef] = (),
+        *,
+        now: str | None = None,
+    ) -> StepRecord:
+        skipped_at = _normalize_timestamp(now or self.clock())
+        artifact_ids = tuple(artifact.artifact_id for artifact in artifacts)
+        if len(artifact_ids) != len(set(artifact_ids)):
+            raise PersistenceInvariantError("Step output Artifact ids must be unique")
+        for artifact in artifacts:
+            if artifact.producer_step_id != claim.step_id:
+                raise PersistenceInvariantError(
+                    "Step output Artifact producer does not match claimed Step"
+                )
+            self._validate_artifact(artifact)
+        with self._connect() as connection:
+            with _transaction(connection):
+                self._require_active_attempt(connection, claim, skipped_at)
+                self._close_active_reservation(
+                    connection, claim, "attempt_skipped", skipped_at
+                )
+                registrations = [
+                    self._register_artifact(connection, artifact)
+                    for artifact in artifacts
+                ]
+                for ordinal, registration_id in enumerate(registrations):
+                    connection.execute(
+                        """
+                            INSERT INTO attempt_artifacts(
+                                attempt_id, registration_id, ordinal
+                            ) VALUES (?, ?, ?)
+                            """,
+                        (claim.attempt_id, registration_id, ordinal),
+                    )
+                changed = connection.execute(
+                    """
+                        UPDATE steps
+                        SET status = 'skipped', output_refs_json = ?, error_ref = NULL
+                        WHERE step_id = ? AND status = 'running' AND attempt = ?
+                        """,
+                    (
+                        _canonical_json(artifact_ids),
+                        claim.step_id,
+                        claim.attempt_number,
+                    ),
+                ).rowcount
+                if changed != 1:
+                    raise LeaseConflict("claimed Step is no longer current")
+                self._finish_attempt(
+                    connection,
+                    claim,
+                    status="succeeded",
+                    finished_at=skipped_at,
+                    error_ref=None,
+                )
+                self._append_run_event(
+                    connection,
+                    run_id=claim.run_id,
+                    step_id=claim.step_id,
+                    attempt_id=claim.attempt_id,
+                    event_type="step_skipped",
+                    detail={"artifact_refs": artifact_ids},
+                    created_at=skipped_at,
                 )
                 row = connection.execute(
                     "SELECT * FROM steps WHERE step_id = ?", (claim.step_id,)

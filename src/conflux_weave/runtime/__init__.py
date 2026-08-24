@@ -55,6 +55,8 @@ __all__ = [
     "BudgetAmount",
     "BudgetEntryRecord",
     "BudgetStatus",
+    "BOUNDED_WORKFLOW_VERSION",
+    "BoundedPaperStrategyRuntime",
     "DeterministicValidationAdapter",
     "DURABLE_WORKFLOW_VERSION",
     "DurablePaperDiscoveryRuntime",
@@ -92,6 +94,10 @@ __all__ = [
 
 
 def __getattr__(name: str):
+    if name in {"BOUNDED_WORKFLOW_VERSION", "BoundedPaperStrategyRuntime"}:
+        from conflux_weave.runtime import bounded_paper_strategy
+
+        return getattr(bounded_paper_strategy, name)
     if name in {
         "DURABLE_WORKFLOW_VERSION",
         "DurablePaperDiscoveryRuntime",

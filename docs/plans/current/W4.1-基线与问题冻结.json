@@ -1,0 +1,102 @@
+{
+  "schema_version": "conflux-weave.w4.acceptance.v1",
+  "acceptance_point": "W4.1",
+  "name": "L1/B 基线、比较问题、rubric、预算与文件边界冻结",
+  "status": "validated_offline",
+  "accepted_at": "2026-08-24",
+  "base_revision": "01ffc319125f797210d5bfc7d60f7b5ec2cd1b76",
+  "scope_freeze": "docs/plans/current/W4-scope-freeze.json",
+  "source_dataset": {
+    "id": "personal-research-v1.0.0",
+    "status": "frozen_unchanged",
+    "cases_path": "datasets/regression/personal-research-v1.0.0/cases.jsonl",
+    "cases_file_sha256": "6f653f2e1c3db90f787d0a884998ccfedec8059e6aeacf88322060640f1da7b2",
+    "manifest_sha256": "2cd14178bf3d3aeb46ce58c0ae49a69670a41cf3eb062589cc1263c14032cefb",
+    "referenced_cases": [
+      {
+        "case_id": "CW-PR-005",
+        "line_sha256": "e73caa66db412951e737a284e9d60c4585d1b41b37a1ac776ec671ae38e22e63"
+      },
+      {
+        "case_id": "CW-PR-009",
+        "line_sha256": "e4db84f0e536ea62fb5009b1b7e4f70b502a0d22e4551314f33460361e535cfa"
+      },
+      {
+        "case_id": "CW-PR-010",
+        "line_sha256": "c8fea96ecf8365d43745af773df7090e01f777f296c7659c665e9edbe14c808d"
+      }
+    ],
+    "semantic_edits": 0
+  },
+  "frozen_decisions": {
+    "comparison": "A expert fixed vs B deterministic vs C bounded Planner",
+    "primary_question": "Does C improve direct candidate coverage or strict constraint preservation beyond B?",
+    "anti_shortcut": "Removing handwritten search_query is shared by B/C and cannot alone admit C.",
+    "aggregation": "hard vetoes plus case-level decisions; no single average score",
+    "strategy_default": "fixed-arxiv-v1",
+    "live_authorized": false
+  },
+  "baseline_environment": {
+    "python": "3.12.9",
+    "dependency_lock": "uv.lock",
+    "uv_lock_sha256": "dc5c4b5618ca95d34fe85345f10254791f090fd1d91d646f56b62aeb72bf2711",
+    "uv_lock_check": "passed",
+    "head_equals_origin_main": true,
+    "network_mode": "deterministic_fixture_tests_only",
+    "provider_calls": 0,
+    "public_network_calls": 0,
+    "evidence_boundary": "No packet-level network monitor was used; no live command, Provider configuration or authorized external call was invoked."
+  },
+  "test_runs": [
+    {
+      "attempt": 1,
+      "command": "uv run --frozen pytest -q",
+      "exit_code": 0,
+      "result": "172 passed in 23.73s",
+      "warning": "pytest cache and system temporary-directory cleanup raised WinError 5 permission diagnostics after tests passed"
+    },
+    {
+      "attempt": 2,
+      "command": "uv run --frozen pytest -q -p no:cacheprovider --basetemp var/evaluations/w4/w4.1/pytest-tmp",
+      "exit_code": 1,
+      "result": "78 passed, 94 setup errors in 8.88s",
+      "failure_class": "test_command_configuration",
+      "cause": "the parent of the requested basetemp path did not exist; pytest could not create the leaf directory",
+      "product_code_failure": false
+    },
+    {
+      "attempt": 3,
+      "precondition": "created ignored parent directory var/evaluations/w4/w4.1",
+      "command": "uv run --frozen pytest -q -p no:cacheprovider --basetemp var/evaluations/w4/w4.1/pytest-tmp",
+      "exit_code": 0,
+      "result": "172 passed in 68.87s",
+      "warnings": 0,
+      "accepted_baseline": true
+    }
+  ],
+  "additional_checks": {
+    "compileall": {
+      "command": "uv run --frozen python -m compileall -q src tests",
+      "status": "passed"
+    },
+    "lock": {
+      "command": "uv lock --check",
+      "status": "passed",
+      "resolved_packages": 9
+    },
+    "json_validation": "passed_with_scope_acceptance_case_hash_and_budget_cross_checks"
+  },
+  "acceptance": {
+    "cases_bound_to_exact_bytes": true,
+    "expert_A_queries_frozen_before_B_C_implementation": true,
+    "rubric_frozen": true,
+    "budgets_frozen": true,
+    "stop_conditions_frozen": true,
+    "implementation_file_boundary_frozen": true,
+    "current_regression_baseline": "172 passed",
+    "overall": "passed"
+  },
+  "evidence_boundary": "W4.1 proves only that the comparison contract is frozen and the pre-W4 code baseline passes deterministic offline regression. It does not prove ContextBuilder, Planner, Validator, Tool Gateway, L2 execution, quality improvement, live Agent capability or personal-use acceptance.",
+  "authorization_consumed": "W4.1 only",
+  "next_acceptance_point": "W4.2 Agent contracts; no implementation begins until the user explicitly enters W4.2"
+}

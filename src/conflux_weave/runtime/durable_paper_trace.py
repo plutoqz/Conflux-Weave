@@ -46,8 +46,18 @@ class DurablePaperTraceMixin:
         budget = self.repository.get_budget_status(claim.run_id)
         span_kind = {
             "search_arxiv": "TOOL",
+            "search_slot_1": "TOOL",
+            "search_slot_2_or_skip": "TOOL",
+            "propose_plan": "LLM",
             "synthesize_claims": "LLM",
         }.get(step_kind, "CHAIN")
+        prompt_version = {
+            "propose_plan": task.input.get("planner_prompt_version", "none"),
+            "synthesize_claims": task.input.get(
+                "synthesis_prompt_version",
+                task.input.get("prompt_version", "none"),
+            ),
+        }.get(step_kind, task.input.get("prompt_version", "none"))
         return TraceRecord(
             name=f"conflux_weave.{step_kind}",
             attributes={
@@ -58,7 +68,7 @@ class DurablePaperTraceMixin:
                 "attempt": claim.attempt_number,
                 "workflow_version": run.workflow_version,
                 "provider_model": str(task.input.get("model", "none")),
-                "prompt_version": str(task.input.get("prompt_version", "none")),
+                "prompt_version": str(prompt_version),
                 "budget_input_tokens_limit": budget.limit.input_tokens,
                 "budget_output_tokens_limit": budget.limit.output_tokens,
                 "budget_tool_calls_actual": budget.actual.tool_calls,

@@ -12,6 +12,7 @@ from conflux_weave.provider import (
     ProviderConfigurationError,
 )
 from conflux_weave.runtime import (
+    BoundedPaperStrategyRuntime,
     DurablePaperDiscoveryRuntime,
     LocalArtifactStore,
     RecordNotFound,
@@ -20,6 +21,24 @@ from conflux_weave.runtime import (
 
 
 def run(args, print_json) -> int:
+    if (
+        args.durable_command == "submit"
+        and getattr(args, "strategy", "fixed") == "bounded"
+    ):
+        print_json(
+            {
+                "status": "rejected",
+                "error_code": "strategy_rejected",
+                "message": (
+                    "bounded-arxiv-planner-v1 failed the frozen W4.5 offline "
+                    "admission rule; new bounded submissions are disabled"
+                ),
+                "decision": "reject",
+                "network_called": False,
+                "provider_called": False,
+            }
+        )
+        return 2
     store = LocalArtifactStore(args.artifact_root)
     repository = SQLiteRuntimeRepository(args.database, store)
     if args.durable_command == "status":
@@ -44,7 +63,12 @@ def run(args, print_json) -> int:
             }
         )
         return 2
-    runtime = DurablePaperDiscoveryRuntime(
+    runtime_class = (
+        BoundedPaperStrategyRuntime
+        if getattr(args, "strategy", "fixed") == "bounded"
+        else DurablePaperDiscoveryRuntime
+    )
+    runtime = runtime_class(
         repository,
         store,
         ArxivSearchAdapter(store),
@@ -53,11 +77,24 @@ def run(args, print_json) -> int:
     )
     if args.durable_command == "submit":
         try:
-            result = runtime.submit(
-                args.query,
-                search_query=args.search_query,
-                max_results=args.max_results,
-            )
+            if args.strategy == "bounded":
+                if args.search_query:
+                    raise ValueError("--search-query is only valid for --strategy fixed")
+                result = runtime.submit(
+                    args.query,
+                    task_summary=args.task_summary,
+                    inclusion_constraints=tuple(args.include),
+                    exclusion_constraints=tuple(args.exclude),
+                    hard_constraints=tuple(args.hard_constraint),
+                )
+            else:
+                if not args.search_query:
+                    raise ValueError("--search-query is required for --strategy fixed")
+                result = runtime.submit(
+                    args.query,
+                    search_query=args.search_query,
+                    max_results=args.max_results,
+                )
         except ValueError as exc:
             print_json(
                 {"status": "failed", "error_code": "input_invalid", "message": str(exc)}

@@ -1,0 +1,172 @@
+{
+  "schema_version": "conflux-weave.w4.acceptance.v1",
+  "acceptance_point": "W4.2",
+  "name": "Context、Plan、Validator 与 Tool Gateway 合同",
+  "status": "validated_offline",
+  "accepted_at": "2026-08-24",
+  "base_revision": "01ffc319125f797210d5bfc7d60f7b5ec2cd1b76",
+  "scope_freeze": "docs/plans/current/W4-scope-freeze.json",
+  "implementation": {
+    "source": "src/conflux_weave/planning.py",
+    "source_sha256": "0f8c3880aa36b4e3c7523b9966e498c96be0da6c57ee7b8079f9cfdae52ec04a",
+    "source_lines": 700,
+    "tests": "tests/test_planning.py",
+    "tests_sha256": "06faabaff574e2228f3cb19c5df2347c096d20ee696ec1fb4bd20d6d1dbf1d91",
+    "test_lines": 283,
+    "dependencies_added": 0,
+    "uv_lock_sha256": "dc5c4b5618ca95d34fe85345f10254791f090fd1d91d646f56b62aeb72bf2711"
+  },
+  "contracts": {
+    "context_bundle": {
+      "schema": "conflux-weave.context-bundle.v1",
+      "builder": "bounded-context-builder-v1",
+      "properties": [
+        "canonical JSON SHA-256 binds task, question, constraints, whitelist, budget, evidence refs, stop conditions, builder version and input refs",
+        "constraint ids are stable by include/exclude/hard kind and ordinal",
+        "allowed_tools is exactly search_arxiv",
+        "allowed_actions is exactly tool_call and finish",
+        "max_search_actions is restricted to one or two"
+      ]
+    },
+    "plan_proposal": {
+      "schema": "conflux-weave.plan-proposal.v1",
+      "strategy": "bounded-arxiv-planner-v1",
+      "max_json_bytes": 16384,
+      "max_actions": 3,
+      "properties": [
+        "strict root and action keys; unknown fields fail closed",
+        "one or two typed SearchArguments plus one finish action",
+        "context SHA-256 binding and canonical proposal SHA-256 self-check",
+        "expected Evidence and frozen constraint references retained per tool action"
+      ]
+    },
+    "plan_validator": {
+      "schema": "conflux-weave.plan-validation.v1",
+      "deterministic_checks": [
+        "strategy and exact ContextBundle hash",
+        "unique action ids and duplicate normalized query rejection",
+        "tool/action whitelist",
+        "exactly one final finish action",
+        "at least one and at most two searches",
+        "query length/control characters and max_results<=15",
+        "known and collectively acknowledged constraint refs",
+        "remaining tool-call and retrieval-round budget"
+      ],
+      "accepted_output": "ValidatedPlan with required budget, authorized search action ids and validation SHA-256",
+      "rejected_output": "stable PlanViolation codes and no ValidatedPlan"
+    },
+    "tool_gateway": {
+      "registry": ["search_arxiv"],
+      "behavior": [
+        "revalidates the exact ContextBundle and PlanProposal on every dispatch",
+        "dispatches only a tool_call action present in the accepted plan",
+        "cannot dispatch finish or an unknown action",
+        "requires ToolResult tool_id and action_id to match the authorized action"
+      ],
+      "runtime_boundary": "W4.2 uses only a fake handler; W3 Budget reservation, SQLite attempt ownership and Artifact publication are not integrated yet"
+    }
+  },
+  "adversarial_validation": [
+    {
+      "case": "unauthorized_tool",
+      "expected": "plan rejected and fake tool calls=0",
+      "status": "passed"
+    },
+    {
+      "case": "more_than_two_searches",
+      "expected": "parser rejects the plan before dispatch",
+      "status": "passed"
+    },
+    {
+      "case": "budget_insufficient",
+      "expected": "plan_budget_exceeded with no ValidatedPlan",
+      "status": "passed"
+    },
+    {
+      "case": "missing_or_unknown_constraint_refs",
+      "expected": "constraint violation with no dispatch",
+      "status": "passed"
+    },
+    {
+      "case": "wrong_context_hash_or_strategy",
+      "expected": "plan rejected against the exact frozen ContextBundle",
+      "status": "passed"
+    },
+    {
+      "case": "tool_result_not_bound_to_action",
+      "expected": "gateway_result_mismatch",
+      "status": "passed"
+    }
+  ],
+  "validation": {
+    "focused": {
+      "command": "uv run --frozen pytest -q -p no:cacheprovider --basetemp var/evaluations/w4/w4.2/planning-final-tmp tests/test_planning.py",
+      "result": "23 passed in 0.35s"
+    },
+    "full_regression": {
+      "command": "uv run --frozen pytest -q -p no:cacheprovider --basetemp var/evaluations/w4/w4.2/full-final-tmp",
+      "result": "195 passed in 72.24s"
+    },
+    "compileall": {
+      "command": "uv run --frozen python -m compileall -q src tests",
+      "status": "passed"
+    },
+    "lock": {
+      "command": "uv lock --check",
+      "status": "passed",
+      "resolved_packages": 9
+    },
+    "diff_check": "passed",
+    "governance_cross_check": [
+      {
+        "attempt": 1,
+        "status": "command_harness_failed",
+        "cause": "git status quoted Chinese paths with octal escapes, so the allowlist parser reported false unexpected paths"
+      },
+      {
+        "attempt": 2,
+        "status": "passed",
+        "command_adjustment": "git -c core.quotepath=false status --porcelain=v1",
+        "unexpected_paths": 0
+      }
+    ]
+  },
+  "call_boundary": {
+    "public_network_calls": 0,
+    "provider_calls": 0,
+    "real_arxiv_calls": 0,
+    "fake_tool_dispatches": 1,
+    "automatic_retry": false,
+    "fallback": false
+  },
+  "file_boundary": {
+    "implementation_files_changed": [
+      "src/conflux_weave/planning.py",
+      "tests/test_planning.py"
+    ],
+    "existing_runtime_files_changed": 0,
+    "frozen_dataset_files_changed": 0,
+    "dependency_files_changed": 0,
+    "status": "passed"
+  },
+  "known_boundaries": [
+    "Constraint refs prove explicit acknowledgement, not semantic equivalence between a search query and the referenced natural-language constraint.",
+    "PlanBudget validates a frozen remaining-budget snapshot; it does not reserve or write the W3 authoritative Budget ledger.",
+    "Tool Gateway has only been exercised with an in-memory fake handler, not ArxivSearchAdapter, SQLite, Step/Attempt/Lease or Artifact lineage.",
+    "No Planner Provider output, prompt, Context Artifact, Plan Artifact, recovery path or quality comparison has been executed.",
+    "The 700-line planning contract module is frozen for W4.2; W4.3 must use its separately allowed runtime modules rather than expanding it into a workflow implementation."
+  ],
+  "acceptance": {
+    "context_contract": "passed",
+    "strict_plan_parser": "passed",
+    "policy_budget_stop_validation": "passed",
+    "unauthorized_dispatch_zero_calls": "passed",
+    "tool_result_binding": "passed",
+    "framework_independent_standard_library_only": "passed",
+    "full_regression": "passed",
+    "overall": "passed"
+  },
+  "evidence_boundary": "W4.2 proves deterministic planning contracts and fake Tool Gateway fail-closed behavior only. It does not prove an LLM can produce valid plans, that Runtime budgets are enforced around Agent actions, that a durable L2 workflow recovers, that research quality improves, or that live Agent capability exists.",
+  "authorization_consumed": "W4.2 contract implementation only",
+  "next_acceptance_point": "W4.3 static two-slot durable L2 execution; no Runtime or CLI integration begins until the user explicitly enters W4.3"
+}

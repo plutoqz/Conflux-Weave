@@ -5,12 +5,14 @@ Updated: 2026-08-24
 | Area | Status | Evidence boundary |
 |---|---|---|
 | Design v0.2 | `proposed` | Current design basis; not implementation proof |
-| Repository framework | `validated_live` | Python 3.12.9; 172 tests passed; post-refactor W3 durable CLI paired live non-regression included |
+| Repository framework | `validated_live` | Python 3.12.9; 229 tests passed; W3 paired live boundary remains unchanged by offline W4 additions |
 | W0 | `validated_offline` | W0.1-W0.5 passed; 12 frozen cases, runtime contracts, and read-only legacy inventory are consistent |
 | W1 | `validated_live` | W1.0-W1.5 passed at frozen boundaries; LIVE-01 review note and LIVE-02 repository identity both delivered explicit partial results with raw evidence retained |
 | W2 | `validated_live` | BM25/Web Fetch/Evidence delivery validated offline; three accepted live tasks across paper discovery and project evidence Q&A produced bounded partial deliveries |
 | W3 | `validated_live` | Persistence/recovery passed offline; original W3.6 and post-refactor R1 each passed 2/2 frozen paired live Runs through the durable CLI |
-| W4-W6 | `pending` | No later product slice has been implemented |
+| W4 | `w4_6_preflight_blocked` | User entered W4.6, but W4.5 rejected C at 1/3 versus the required 2/3; no live or paid calls were started |
+| W5 | `proposed_for_scope_freeze` | Execution plan is refined; no W5 product code, dependency, browser, network, or Provider work has started |
+| W6 | `pending` | No second product slice has been implemented |
 | Live capability | `bounded_retrieval_evidence` | qwen3.7-flash completed bounded arXiv metadata/abstract discovery and GitHub evidence Q&A; failures and raw responses retained |
 
 W1.5 is validated live within its frozen scope. The authorized review PDF run
@@ -84,11 +86,55 @@ qwen3.7-flash call each, no retry/fallback, and usable `partial` reports. The tw
 files, no SQLite foreign-key failures, no Error/telemetry drop, and no Secret scan hit. This
 revalidates the refactored current implementation only for the same two bounded tasks.
 
+W4.2 is validated offline against base revision `01ffc319`. Framework-independent
+Context, strict Plan parsing, deterministic validation, and Tool Gateway contracts passed
+23 focused tests and the then-current 195-test full regression. This proves contract and
+fake-dispatch behavior only, not Provider planning or durable execution.
+
+W4.3 is validated offline against the same uncommitted W4 working tree. The bounded
+strategy prebuilds nine ordered Steps and reuses W3 SQLite, Lease/Fencing, Budget,
+Artifact, unknown-Provider, Evidence and Delivery semantics. Fixture tests passed one-
+and two-search plans, deterministic second-slot skip, structured Plan rejection, budget
+denial, committed-response reuse, unknown Planner protection, strategy queue isolation,
+and bounded CLI submission. The focused result is 9 passed and the full regression is
+204 passed. No public network, real arXiv, real Provider or paid call was made; quality
+comparison, broader fault matrices and live capability remain unverified.
+
+W4.4 is validated offline against the same W4 working tree. Six adversarial Plan/
+injection cases were rejected before arXiv, four budget/usage stop cases started no
+later external call, and queued/in-flight cancellation preserved the same boundary.
+Seven local child Workers were terminated at paid-unknown, replayable-read, committed-
+response and pre-publication points. Paid unknown results had zero automatic replay;
+the interrupted search replayed once under fencing; committed effects were reused;
+recovered Deliveries retained readable Artifacts and Citation/Evidence closure. Trace
+failure remained non-authoritative. The matrix found and fixed bounded span-kind and
+Prompt-version classification. Results were 23 focused, 83 W3/W4 combined and 227 full
+tests. All calls used fixtures; this is not live or production reliability evidence.
+
+W4.5 completed the frozen offline A/B/C decision against the same uncommitted W4 working
+tree. Nine independent SQLite/Artifact roots executed A expert fixed, B deterministic and
+C bounded Planner strategies over `CW-PR-005/009/010`. C matched B on 005 and 010 and
+improved direct GIS theme coverage only on 009, so it achieved 1/3 against a frozen 2/3
+minimum. All Runs retained `partial`, closure 1.0, zero hard vetoes, zero structural
+failures, Provider-token ratio 1.375 and logical fixture latency ratios 1.5-2.0. The
+mechanical decision is `reject`; fixed remains default and new bounded submissions are
+disabled while implementation and evidence remain readable. The blind pack is honestly
+marked `awaiting_human_review`; no human approval is claimed. No public network, real
+arXiv, Provider, paid call or W4.6 execution occurred.
+
+W4.6 preflight was explicitly authorized by the user and then stopped at its candidate
+gate. The frozen protocol requires C to pass W4.5 before paired live validation, while
+W4.5 mechanically rejected C and disabled new bounded submissions. Local Provider
+configuration is complete for `qwen3.7-flash`, but exact new cases, budgets and review
+protocol were not frozen because they cannot cure the failed prerequisite. No public
+network, real arXiv, Provider or paid call was started. Recovery requires either keeping
+fixed as the W4 outcome or freezing a materially revised C and repeating W4.5 first.
+
 Latest framework verification:
 
 ```text
 uv sync --frozen --python 3.12       passed
-uv run --frozen pytest               172 passed
+uv run --frozen pytest               229 passed
 uv run --frozen python -m compileall passed
 uv build                             sdist and wheel built
 ```

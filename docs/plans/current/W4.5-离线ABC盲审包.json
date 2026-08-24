@@ -1,0 +1,420 @@
+{
+  "schema_version": "conflux-weave.w4.blind-review-pack.v1",
+  "status": "awaiting_human_review",
+  "source_boundary": "synthetic arXiv Atom metadata and abstracts",
+  "review_instruction": "Judge relevance and constraint handling without inferring strategy identity.",
+  "strategy_key_withheld_from_reviewers": true,
+  "items": [
+    {
+      "case_id": "CW-PR-005",
+      "variant_code": "Variant-K",
+      "candidates": [
+        {
+          "arxiv_id": "2608.10002v1",
+          "title": "Memory Architectures for Language Model Agents",
+          "summary": "Agent memory and retrieval mechanisms for long-running tasks.",
+          "published": "2026-08-02T00:00:00Z",
+          "categories": [
+            "cs.AI"
+          ]
+        },
+        {
+          "arxiv_id": "2608.10001v1",
+          "title": "Context Management for Long-Running Language Model Agents",
+          "summary": "A framework for context selection and management in persistent language model agents.",
+          "published": "2026-08-01T00:00:00Z",
+          "categories": [
+            "cs.AI"
+          ]
+        },
+        {
+          "arxiv_id": "2608.10003v1",
+          "title": "Context Compression for Tool-Using Agents",
+          "summary": "Context compression methods for tool-using language model agents.",
+          "published": "2026-08-03T00:00:00Z",
+          "categories": [
+            "cs.AI"
+          ]
+        }
+      ],
+      "claims": [
+        {
+          "text": "Memory Architectures for Language Model Agents directly covers: memory.",
+          "evidence_arxiv_ids": [
+            "2608.10002v1"
+          ]
+        },
+        {
+          "text": "Context Management for Long-Running Language Model Agents directly covers: context_management.",
+          "evidence_arxiv_ids": [
+            "2608.10001v1"
+          ]
+        },
+        {
+          "text": "Context Compression for Tool-Using Agents directly covers: compression.",
+          "evidence_arxiv_ids": [
+            "2608.10003v1"
+          ]
+        }
+      ],
+      "review_status": "pending"
+    },
+    {
+      "case_id": "CW-PR-005",
+      "variant_code": "Variant-M",
+      "candidates": [
+        {
+          "arxiv_id": "2608.10002v1",
+          "title": "Memory Architectures for Language Model Agents",
+          "summary": "Agent memory and retrieval mechanisms for long-running tasks.",
+          "published": "2026-08-02T00:00:00Z",
+          "categories": [
+            "cs.AI"
+          ]
+        },
+        {
+          "arxiv_id": "2608.10004v1",
+          "title": "Retrieval for Long-Context Agent Systems",
+          "summary": "Retrieval and long-context organization for autonomous agent systems.",
+          "published": "2026-08-04T00:00:00Z",
+          "categories": [
+            "cs.IR",
+            "cs.AI"
+          ]
+        },
+        {
+          "arxiv_id": "2608.10001v1",
+          "title": "Context Management for Long-Running Language Model Agents",
+          "summary": "A framework for context selection and management in persistent language model agents.",
+          "published": "2026-08-01T00:00:00Z",
+          "categories": [
+            "cs.AI"
+          ]
+        },
+        {
+          "arxiv_id": "2608.10003v1",
+          "title": "Context Compression for Tool-Using Agents",
+          "summary": "Context compression methods for tool-using language model agents.",
+          "published": "2026-08-03T00:00:00Z",
+          "categories": [
+            "cs.AI"
+          ]
+        }
+      ],
+      "claims": [
+        {
+          "text": "Memory Architectures for Language Model Agents directly covers: memory.",
+          "evidence_arxiv_ids": [
+            "2608.10002v1"
+          ]
+        },
+        {
+          "text": "Retrieval for Long-Context Agent Systems directly covers: retrieval.",
+          "evidence_arxiv_ids": [
+            "2608.10004v1"
+          ]
+        },
+        {
+          "text": "Context Management for Long-Running Language Model Agents directly covers: context_management.",
+          "evidence_arxiv_ids": [
+            "2608.10001v1"
+          ]
+        },
+        {
+          "text": "Context Compression for Tool-Using Agents directly covers: compression.",
+          "evidence_arxiv_ids": [
+            "2608.10003v1"
+          ]
+        }
+      ],
+      "review_status": "pending"
+    },
+    {
+      "case_id": "CW-PR-005",
+      "variant_code": "Variant-R",
+      "candidates": [
+        {
+          "arxiv_id": "2608.10002v1",
+          "title": "Memory Architectures for Language Model Agents",
+          "summary": "Agent memory and retrieval mechanisms for long-running tasks.",
+          "published": "2026-08-02T00:00:00Z",
+          "categories": [
+            "cs.AI"
+          ]
+        },
+        {
+          "arxiv_id": "2608.10004v1",
+          "title": "Retrieval for Long-Context Agent Systems",
+          "summary": "Retrieval and long-context organization for autonomous agent systems.",
+          "published": "2026-08-04T00:00:00Z",
+          "categories": [
+            "cs.IR",
+            "cs.AI"
+          ]
+        },
+        {
+          "arxiv_id": "2608.10001v1",
+          "title": "Context Management for Long-Running Language Model Agents",
+          "summary": "A framework for context selection and management in persistent language model agents.",
+          "published": "2026-08-01T00:00:00Z",
+          "categories": [
+            "cs.AI"
+          ]
+        },
+        {
+          "arxiv_id": "2608.10003v1",
+          "title": "Context Compression for Tool-Using Agents",
+          "summary": "Context compression methods for tool-using language model agents.",
+          "published": "2026-08-03T00:00:00Z",
+          "categories": [
+            "cs.AI"
+          ]
+        }
+      ],
+      "claims": [
+        {
+          "text": "Memory Architectures for Language Model Agents directly covers: memory.",
+          "evidence_arxiv_ids": [
+            "2608.10002v1"
+          ]
+        },
+        {
+          "text": "Retrieval for Long-Context Agent Systems directly covers: retrieval.",
+          "evidence_arxiv_ids": [
+            "2608.10004v1"
+          ]
+        },
+        {
+          "text": "Context Management for Long-Running Language Model Agents directly covers: context_management.",
+          "evidence_arxiv_ids": [
+            "2608.10001v1"
+          ]
+        },
+        {
+          "text": "Context Compression for Tool-Using Agents directly covers: compression.",
+          "evidence_arxiv_ids": [
+            "2608.10003v1"
+          ]
+        }
+      ],
+      "review_status": "pending"
+    },
+    {
+      "case_id": "CW-PR-009",
+      "variant_code": "Variant-K",
+      "candidates": [
+        {
+          "arxiv_id": "2608.20002v1",
+          "title": "Tool-Grounded Geospatial Agents",
+          "summary": "A geospatial agent selects GIS tools for reproducible spatial operations.",
+          "published": "2026-08-06T00:00:00Z",
+          "categories": [
+            "cs.AI"
+          ]
+        },
+        {
+          "arxiv_id": "2608.20001v1",
+          "title": "GIS Agents for Vector Spatial Analysis",
+          "summary": "An agent executes GIS vector overlay and network analysis tools with verifiable tasks.",
+          "published": "2026-08-05T00:00:00Z",
+          "categories": [
+            "cs.AI"
+          ]
+        },
+        {
+          "arxiv_id": "2608.20003v1",
+          "title": "Remote Sensing Vision Agents for Image Classification",
+          "summary": "A vision agent classifies satellite imagery without GIS spatial analysis tools.",
+          "published": "2026-08-07T00:00:00Z",
+          "categories": [
+            "cs.CV"
+          ]
+        }
+      ],
+      "claims": [
+        {
+          "text": "Tool-Grounded Geospatial Agents directly covers: gis_tool_use.",
+          "evidence_arxiv_ids": [
+            "2608.20002v1"
+          ]
+        },
+        {
+          "text": "GIS Agents for Vector Spatial Analysis directly covers: spatial_analysis.",
+          "evidence_arxiv_ids": [
+            "2608.20001v1"
+          ]
+        }
+      ],
+      "review_status": "pending"
+    },
+    {
+      "case_id": "CW-PR-009",
+      "variant_code": "Variant-M",
+      "candidates": [
+        {
+          "arxiv_id": "2608.20001v1",
+          "title": "GIS Agents for Vector Spatial Analysis",
+          "summary": "An agent executes GIS vector overlay and network analysis tools with verifiable tasks.",
+          "published": "2026-08-05T00:00:00Z",
+          "categories": [
+            "cs.AI"
+          ]
+        },
+        {
+          "arxiv_id": "2608.20003v1",
+          "title": "Remote Sensing Vision Agents for Image Classification",
+          "summary": "A vision agent classifies satellite imagery without GIS spatial analysis tools.",
+          "published": "2026-08-07T00:00:00Z",
+          "categories": [
+            "cs.CV"
+          ]
+        }
+      ],
+      "claims": [
+        {
+          "text": "GIS Agents for Vector Spatial Analysis directly covers: spatial_analysis.",
+          "evidence_arxiv_ids": [
+            "2608.20001v1"
+          ]
+        }
+      ],
+      "review_status": "pending"
+    },
+    {
+      "case_id": "CW-PR-009",
+      "variant_code": "Variant-R",
+      "candidates": [
+        {
+          "arxiv_id": "2608.20002v1",
+          "title": "Tool-Grounded Geospatial Agents",
+          "summary": "A geospatial agent selects GIS tools for reproducible spatial operations.",
+          "published": "2026-08-06T00:00:00Z",
+          "categories": [
+            "cs.AI"
+          ]
+        },
+        {
+          "arxiv_id": "2608.20001v1",
+          "title": "GIS Agents for Vector Spatial Analysis",
+          "summary": "An agent executes GIS vector overlay and network analysis tools with verifiable tasks.",
+          "published": "2026-08-05T00:00:00Z",
+          "categories": [
+            "cs.AI"
+          ]
+        },
+        {
+          "arxiv_id": "2608.20003v1",
+          "title": "Remote Sensing Vision Agents for Image Classification",
+          "summary": "A vision agent classifies satellite imagery without GIS spatial analysis tools.",
+          "published": "2026-08-07T00:00:00Z",
+          "categories": [
+            "cs.CV"
+          ]
+        }
+      ],
+      "claims": [
+        {
+          "text": "Tool-Grounded Geospatial Agents directly covers: gis_tool_use.",
+          "evidence_arxiv_ids": [
+            "2608.20002v1"
+          ]
+        },
+        {
+          "text": "GIS Agents for Vector Spatial Analysis directly covers: spatial_analysis.",
+          "evidence_arxiv_ids": [
+            "2608.20001v1"
+          ]
+        }
+      ],
+      "review_status": "pending"
+    },
+    {
+      "case_id": "CW-PR-010",
+      "variant_code": "Variant-K",
+      "candidates": [
+        {
+          "arxiv_id": "2608.30002v1",
+          "title": "Open Multi-Agent Context Code without Ablations",
+          "summary": "An arXiv preprint links code but lacks context-compression ablations and three real multi-agent tasks.",
+          "published": "2026-08-09T00:00:00Z",
+          "categories": [
+            "cs.AI"
+          ]
+        },
+        {
+          "arxiv_id": "2608.30001v1",
+          "title": "Context Compression in Multi-Agent Benchmarks",
+          "summary": "A 2026 arXiv preprint reports context compression but does not verify formal publication, public code, a complete ablation, or three real tasks.",
+          "published": "2026-08-08T00:00:00Z",
+          "categories": [
+            "cs.AI"
+          ]
+        }
+      ],
+      "claims": [
+        {
+          "text": "Open Multi-Agent Context Code without Ablations is a near match; formal publication, public code, complete ablation, and three real multi-agent tasks remain unverified.",
+          "evidence_arxiv_ids": [
+            "2608.30002v1"
+          ]
+        },
+        {
+          "text": "Context Compression in Multi-Agent Benchmarks is a near match; formal publication, public code, complete ablation, and three real multi-agent tasks remain unverified.",
+          "evidence_arxiv_ids": [
+            "2608.30001v1"
+          ]
+        }
+      ],
+      "review_status": "pending"
+    },
+    {
+      "case_id": "CW-PR-010",
+      "variant_code": "Variant-M",
+      "candidates": [
+        {
+          "arxiv_id": "2608.30001v1",
+          "title": "Context Compression in Multi-Agent Benchmarks",
+          "summary": "A 2026 arXiv preprint reports context compression but does not verify formal publication, public code, a complete ablation, or three real tasks.",
+          "published": "2026-08-08T00:00:00Z",
+          "categories": [
+            "cs.AI"
+          ]
+        }
+      ],
+      "claims": [
+        {
+          "text": "Context Compression in Multi-Agent Benchmarks is a near match; formal publication, public code, complete ablation, and three real multi-agent tasks remain unverified.",
+          "evidence_arxiv_ids": [
+            "2608.30001v1"
+          ]
+        }
+      ],
+      "review_status": "pending"
+    },
+    {
+      "case_id": "CW-PR-010",
+      "variant_code": "Variant-R",
+      "candidates": [
+        {
+          "arxiv_id": "2608.30001v1",
+          "title": "Context Compression in Multi-Agent Benchmarks",
+          "summary": "A 2026 arXiv preprint reports context compression but does not verify formal publication, public code, a complete ablation, or three real tasks.",
+          "published": "2026-08-08T00:00:00Z",
+          "categories": [
+            "cs.AI"
+          ]
+        }
+      ],
+      "claims": [
+        {
+          "text": "Context Compression in Multi-Agent Benchmarks is a near match; formal publication, public code, complete ablation, and three real multi-agent tasks remain unverified.",
+          "evidence_arxiv_ids": [
+            "2608.30001v1"
+          ]
+        }
+      ],
+      "review_status": "pending"
+    }
+  ],
+  "human_review_completed": false
+}

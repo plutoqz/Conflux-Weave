@@ -1,0 +1,89 @@
+{
+  "schema_version": "conflux-weave.w4.preflight.v1",
+  "acceptance_point": "W4.6",
+  "name": "配对 live 与个人使用审计前置检查",
+  "status": "blocked_by_w4_5_rejection",
+  "checked_at": "2026-08-24",
+  "base_revision": "01ffc319125f797210d5bfc7d60f7b5ec2cd1b76",
+  "authorization": {
+    "user_entered_w4_6": true,
+    "separate_stage_authorization_satisfied": true,
+    "authorization_changes_w4_5_decision": false,
+    "authorization_allows_gate_bypass": false
+  },
+  "stage_task": [
+    "Run at least three new fixed-versus-Planner paired paper-discovery task units.",
+    "Audit at least five real task units across paper_discovery and evidence_question_answering.",
+    "Preserve independent raw requests, responses, failures, budgets, citations and recovery evidence.",
+    "Record at least one user-confirmed use of a delivery without treating CLI execution as Workbench acceptance."
+  ],
+  "expected_functionality": [
+    "A user can select a bounded strategy for an admitted paper-discovery candidate.",
+    "Fixed and bounded strategies can execute comparable live tasks with visible strategy, status, citations, limitations and recovery state.",
+    "The system preserves no-answer and partial semantics without retry, fallback or constraint relaxation.",
+    "Personal-use evidence remains separate from mechanism tests and offline evaluation."
+  ],
+  "acceptance_gates": [
+    {
+      "id": "candidate_admission",
+      "required": "W4.5 admits C after C beats B in at least 2/3 frozen cases.",
+      "actual": "W4.5 rejected C after improvement in only 1/3 cases.",
+      "status": "failed_blocking"
+    },
+    {
+      "id": "live_protocol_freeze",
+      "required": "Freeze new cases, Provider/model, Prompt, budget, network, exact inputs, blind review and stop conditions.",
+      "actual": "Not frozen because the blocking candidate gate failed first.",
+      "status": "not_reached"
+    },
+    {
+      "id": "paired_live_execution",
+      "required": "Execute isolated A/C Runs and retain raw evidence without retry or fallback.",
+      "actual": "No Runs started.",
+      "status": "not_reached"
+    },
+    {
+      "id": "personal_use_audit",
+      "required": "At least five real task units across two families and one user-confirmed use.",
+      "actual": "Not evaluated in W4.6.",
+      "status": "not_reached"
+    }
+  ],
+  "current_environment": {
+    "branch": "main",
+    "head_equals_origin_main": true,
+    "dotenv_present": true,
+    "provider_config_complete": true,
+    "provider_model": "qwen3.7-flash",
+    "api_key_recorded": false,
+    "bounded_new_submit": "disabled_after_w4_5_rejection"
+  },
+  "execution_evidence": {
+    "public_network_calls": 0,
+    "real_arxiv_calls": 0,
+    "real_provider_calls": 0,
+    "paid_calls": 0,
+    "live_runs_created": 0,
+    "automatic_retry": false,
+    "fallback": false
+  },
+  "decision": {
+    "value": "stop_before_live_execution",
+    "reason": "Paired live validation cannot validly admit a strategy that failed the frozen offline candidate gate.",
+    "fixed_strategy": "retained_as_default",
+    "bounded_history": "retained_readable",
+    "w4_6_completed": false
+  },
+  "recovery_paths": [
+    {
+      "id": "close_w4_with_fixed",
+      "description": "Keep fixed-arxiv-v1 as the W4 outcome and do not spend live budget on rejected C."
+    },
+    {
+      "id": "revise_then_repeat_w4_5",
+      "description": "Define a materially revised C with a new hypothesis and freeze, then repeat offline W4.5 before any W4.6 live run."
+    }
+  ],
+  "prohibited_shortcut": "A live diagnostic spike for rejected C, if separately approved later, cannot count as original W4.6 admission evidence or override the 2/3 gate.",
+  "evidence_boundary": "This preflight proves only that W4.6 cannot proceed under the frozen protocol after W4.5 rejection. It does not test live Provider, arXiv, Planner quality or personal use."
+}

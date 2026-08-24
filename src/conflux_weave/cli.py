@@ -138,13 +138,19 @@ def build_parser() -> argparse.ArgumentParser:
         "submit", help="persist one frozen Run without making an external call"
     )
     durable_submit.add_argument("--query", required=True)
-    durable_submit.add_argument("--search-query", required=True)
+    durable_submit.add_argument("--strategy", choices=("fixed", "bounded"), default="fixed")
+    durable_submit.add_argument("--search-query")
     durable_submit.add_argument("--max-results", type=int, default=15)
+    durable_submit.add_argument("--task-summary")
+    durable_submit.add_argument("--include", action="append", default=[])
+    durable_submit.add_argument("--exclude", action="append", default=[])
+    durable_submit.add_argument("--hard-constraint", action="append", default=[])
     durable_submit.add_argument("--dotenv", type=Path, default=Path(".env"))
     durable_worker = durable_subparsers.add_parser(
         "worker", help="claim and execute at most one durable Step"
     )
     durable_worker.add_argument("--once", action="store_true", required=True)
+    durable_worker.add_argument("--strategy", choices=("fixed", "bounded"), default="fixed")
     durable_worker.add_argument("--dotenv", type=Path, default=Path(".env"))
     durable_status = durable_subparsers.add_parser(
         "status", help="read Run, Step, budget, Error, and Delivery state"

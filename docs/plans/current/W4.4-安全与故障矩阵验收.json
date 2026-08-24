@@ -1,0 +1,200 @@
+{
+  "schema_version": "conflux-weave.w4.acceptance.v1",
+  "acceptance_point": "W4.4",
+  "name": "安全、预算、恢复与故障矩阵",
+  "status": "validated_offline",
+  "accepted_at": "2026-08-24",
+  "base_revision": "01ffc319125f797210d5bfc7d60f7b5ec2cd1b76",
+  "scope_freeze": "docs/plans/current/W4-scope-freeze.json",
+  "w4_3_acceptance": "docs/plans/current/W4.3-耐用L2执行验收.json",
+  "matrix": {
+    "adversarial_policy": [
+      "non-whitelisted shell tool",
+      "three search actions",
+      "missing finish action",
+      "duplicate normalized search query",
+      "unknown constraint reference",
+      "prompt injection requesting shell and secret access"
+    ],
+    "budget_stop": [
+      "reservation denial before second search",
+      "reservation denial before synthesis",
+      "Planner reported-token overage",
+      "synthesis reported-token overage"
+    ],
+    "cancellation": [
+      "queued Run cancellation",
+      "in-flight Planner cancellation",
+      "in-flight arXiv cancellation"
+    ],
+    "unknown_paid_outcome": [
+      "Planner process killed after request start",
+      "synthesis process killed after request start"
+    ],
+    "committed_effect_recovery": [
+      "Planner response committed",
+      "search response committed",
+      "synthesis response committed",
+      "delivery Artifacts written before publication transaction"
+    ],
+    "replayable_read_recovery": [
+      "search process killed after request start and before response commit"
+    ],
+    "trace_isolation": [
+      "Trace exporter timeout",
+      "OpenTelemetry dependency unavailable",
+      "bounded Planner/search/synthesis span classification and Prompt version"
+    ]
+  },
+  "implementation": {
+    "product_change": {
+      "path": "src/conflux_weave/runtime/durable_paper_trace.py",
+      "sha256": "bf94fb89ff026d2e87c1959ee755a50d5a50e47568424629076a06a7f59d758e",
+      "lines": 85,
+      "change": "classify propose_plan as LLM, both bounded search slots as TOOL, and select the frozen Planner or synthesis Prompt version",
+      "business_state_semantics_changed": false
+    },
+    "tests": [
+      {
+        "path": "tests/test_bounded_paper_fault_matrix.py",
+        "sha256": "57f99dd682e7e51b465a9b4fa8fcbb2cea88e9d14889dae54a617473997de487",
+        "lines": 305,
+        "collected_tests": 16
+      },
+      {
+        "path": "tests/test_bounded_fault_injection_subprocess.py",
+        "sha256": "4b5d92ffdbac39a25bbbecf729aab1fcc73059c13976e3d2e2d53f74ceb05712",
+        "lines": 287,
+        "collected_tests": 7
+      },
+      {
+        "path": "tests/fixtures/w4_fault_worker.py",
+        "sha256": "18dce1989640af8b67bdbd5d63bd0587f2f7f669147225b094d125e7350f61d9",
+        "lines": 169,
+        "role": "one-shot child Worker blocked at an explicit fault point until process.kill"
+      }
+    ],
+    "dependencies_added": 0,
+    "runtime_scheduler_changes": 0,
+    "sqlite_schema_changes": 0,
+    "frozen_dataset_changes": 0,
+    "default_strategy_changed": false
+  },
+  "results": {
+    "adversarial_policy": {
+      "plans_rejected": 6,
+      "arxiv_calls_after_rejection": 0,
+      "structured_error_code": "plan_contract_rejected",
+      "violations_preserved": true,
+      "status": "passed"
+    },
+    "budget_stop": {
+      "reservation_denials": 2,
+      "reported_usage_overages": 2,
+      "later_external_calls_after_stop": 0,
+      "automatic_budget_expansion": false,
+      "status": "passed"
+    },
+    "cancellation": {
+      "queued_external_calls": 0,
+      "in_flight_responses_committed_before_cancel": true,
+      "later_external_calls_after_cancel": 0,
+      "status": "passed"
+    },
+    "paid_unknown_outcome": {
+      "real_process_kills": 2,
+      "waiting_for_user": 2,
+      "automatic_replays": 0,
+      "status": "passed"
+    },
+    "committed_effect_recovery": {
+      "real_process_kills": 4,
+      "repeated_committed_calls": 0,
+      "deliveries_closed": 4,
+      "citation_evidence_closure": 1.0,
+      "status": "passed"
+    },
+    "replayable_search_recovery": {
+      "real_process_kills": 1,
+      "attempt_statuses": ["fenced", "succeeded"],
+      "replays_after_uncommitted_read": 1,
+      "delivery_closed": true,
+      "status": "passed"
+    },
+    "trace_isolation": {
+      "failure_modes": 2,
+      "business_deliveries_changed": 0,
+      "telemetry_drops_persisted_per_run": 9,
+      "planner_span_kind": "LLM",
+      "search_span_kind": "TOOL",
+      "synthesis_span_kind": "LLM",
+      "status": "passed"
+    }
+  },
+  "validation": {
+    "focused": {
+      "command": "uv run --frozen pytest -q -p no:cacheprovider --basetemp var/evaluations/w4/w4.4/focused-preflight-tmp tests/test_bounded_paper_fault_matrix.py tests/test_bounded_fault_injection_subprocess.py",
+      "result": "23 passed in 67.91s"
+    },
+    "combined_w3_w4": {
+      "command": "uv run --frozen pytest -q -p no:cacheprovider --basetemp var/evaluations/w4/w4.4/combined-tmp tests/test_planning.py tests/test_bounded_paper_strategy.py tests/test_bounded_paper_fault_matrix.py tests/test_bounded_fault_injection_subprocess.py tests/test_durable_paper_discovery.py tests/test_fault_injection_subprocess.py tests/test_budget_diagnostics.py tests/test_worker_leases.py",
+      "result": "83 passed in 139.88s"
+    },
+    "full_regression": {
+      "command": "uv run --frozen pytest -q -p no:cacheprovider --basetemp var/evaluations/w4/w4.4/full-final-tmp",
+      "result": "227 passed in 159.12s"
+    },
+    "compileall": "passed",
+    "uv_lock_check": "passed; 9 resolved packages",
+    "diff_check": "passed",
+    "failure_history": [
+      {
+        "attempt": 1,
+        "result": "15 passed, 1 failed",
+        "finding": "bounded propose_plan and search slots inherited CHAIN span classification",
+        "disposition": "product defect fixed with explicit LLM/TOOL mapping"
+      },
+      {
+        "attempt": 2,
+        "result": "15 passed, 1 failed",
+        "finding": "test expected an invented synthesis Prompt version instead of the frozen PROMPT_VERSION",
+        "disposition": "test corrected to reference the source constant"
+      }
+    ]
+  },
+  "call_boundary": {
+    "public_network_calls": 0,
+    "real_arxiv_calls": 0,
+    "real_provider_calls": 0,
+    "paid_calls": 0,
+    "fixture_transport_calls": true,
+    "subprocess_workers_killed": 7,
+    "automatic_retry": false,
+    "fallback": false
+  },
+  "acceptance": {
+    "unauthorized_actions_rejected_before_tool_call": "passed",
+    "budget_and_overage_fail_closed": "passed",
+    "queued_and_in_flight_cancellation": "passed",
+    "paid_unknown_outcomes_require_human_decision": "passed",
+    "replayable_read_recovery_is_bounded": "passed",
+    "committed_effects_are_reused": "passed",
+    "lease_fencing_is_enforced": "passed",
+    "delivery_publication_is_atomic": "passed",
+    "citation_evidence_closure_after_recovery": "passed",
+    "trace_failure_is_non_authoritative": "passed",
+    "fixed_and_w3_non_regression": "passed",
+    "full_regression": "passed",
+    "overall": "passed"
+  },
+  "known_boundaries": [
+    "The adversarial matrix is bounded to the frozen Plan schema, one whitelisted arXiv tool, budgets, cancellation and selected fault points; it is not a general security penetration test.",
+    "Subprocess tests kill local fixture Workers and use fake Provider and Atom transports; they do not establish network, Provider or production infrastructure reliability.",
+    "Explicit retry after a paid unknown outcome remains a user decision and was not used to manufacture success in W4.4.",
+    "W4.4 does not compare candidate quality among A/B/C and does not establish that Planner benefits justify its cost.",
+    "No non-terminal product entry or personal-use evidence exists; these remain later acceptance boundaries."
+  ],
+  "evidence_boundary": "W4.4 proves the frozen offline safety and fault matrix for the bounded nine-Step runtime using fixture transports and seven real local process kills. It does not prove live capability, general security, production reliability, comparative research quality, or user value.",
+  "authorization_consumed": "W4.4 offline safety, budget, recovery and fault matrix only",
+  "next_acceptance_point": "W4.5 offline A/B/C admission decision; no fixture comparison or admission work begins until the user explicitly enters W4.5"
+}

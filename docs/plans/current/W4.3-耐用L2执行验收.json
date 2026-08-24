@@ -1,0 +1,193 @@
+{
+  "schema_version": "conflux-weave.w4.acceptance.v1",
+  "acceptance_point": "W4.3",
+  "name": "静态两槽 L2 耐用执行",
+  "status": "validated_offline",
+  "accepted_at": "2026-08-24",
+  "base_revision": "01ffc319125f797210d5bfc7d60f7b5ec2cd1b76",
+  "scope_freeze": "docs/plans/current/W4-scope-freeze.json",
+  "workflow": {
+    "strategy_id": "bounded-arxiv-planner-v1",
+    "workflow_version": "bounded-arxiv-paper-discovery-durable-v1",
+    "default_strategy": "fixed",
+    "steps": [
+      "build_context",
+      "propose_plan",
+      "validate_plan",
+      "search_slot_1",
+      "search_slot_2_or_skip",
+      "merge_and_rank",
+      "synthesize_claims",
+      "validate_delivery",
+      "publish_delivery"
+    ],
+    "side_effects": {
+      "propose_plan": "paid_external_unknown",
+      "search_slot_1": "replayable_external_read",
+      "search_slot_2_or_skip": "replayable_external_read_or_deterministic_skip",
+      "synthesize_claims": "paid_external_unknown"
+    },
+    "limits": {
+      "arxiv_calls": 2,
+      "provider_calls": 2,
+      "retrieval_rounds": 2,
+      "tool_calls": 4,
+      "planner_output_tokens": 768,
+      "run_output_tokens": 3072,
+      "automatic_retry": false,
+      "fallback": false,
+      "concurrency": 1
+    }
+  },
+  "implementation": {
+    "new_sources": [
+      {
+        "path": "src/conflux_weave/runtime/bounded_paper_strategy.py",
+        "sha256": "c02547f46d6ecdd1b0c8038505500e1bfa895d57acfbbbcf528ee6effc72dce3",
+        "lines": 190
+      },
+      {
+        "path": "src/conflux_weave/runtime/bounded_paper_steps.py",
+        "sha256": "3a623782f57d2df8d284037356146f033d71b05d8f484f37a55799723c495339",
+        "lines": 576
+      }
+    ],
+    "focused_tests": {
+      "path": "tests/test_bounded_paper_strategy.py",
+      "sha256": "145736fcb87f7f30daaa7b1789af853611a640c74ac1e52d5cdc0fc5e0f264e7",
+      "lines": 324,
+      "test_count": 9
+    },
+    "additive_runtime_changes": [
+      "SQLite skip_attempt closes the current Attempt under lease/fencing, registers checkpoint Artifacts, releases the Lease, marks the Step skipped, and records step_skipped.",
+      "claim_next_step accepts an optional workflow_version filter; fixed and bounded workers bind their own workflow version.",
+      "durable-paper adds an explicit bounded strategy while fixed remains the parser and runtime default.",
+      "Bounded delivery manifest retains Context, Plan, validation, both search-slot dispositions, synthesis, usage, report, Evidence and Citation lineage."
+    ],
+    "necessary_boundary_extension": {
+      "path": "src/conflux_weave/runtime/durable_paper_runtime.py",
+      "sha256": "57e11f72cbbf253ea76361f2ab36020013ac607bdf96fd84ae331eeff9d425b6",
+      "change": "bind the existing fixed Runtime worker to DURABLE_WORKFLOW_VERSION",
+      "reason": "prevent a fixed worker and bounded worker sharing one SQLite queue from claiming each other's Steps",
+      "fixed_step_semantics_changed": false,
+      "default_strategy_changed": false
+    },
+    "dependencies_added": 0,
+    "uv_lock_sha256": "dc5c4b5618ca95d34fe85345f10254791f090fd1d91d646f56b62aeb72bf2711"
+  },
+  "fixture_acceptance": [
+    {
+      "case": "one_search_plan",
+      "result": "nine Steps reached terminal state; second slot skipped with a checkpoint",
+      "arxiv_calls": 1,
+      "provider_calls": 2,
+      "tool_calls": 3,
+      "retrieval_rounds": 1,
+      "status": "passed"
+    },
+    {
+      "case": "two_search_plan",
+      "result": "both search slots succeeded and duplicate arXiv ids were merged before BM25 ranking",
+      "arxiv_calls": 2,
+      "provider_calls": 2,
+      "tool_calls": 4,
+      "retrieval_rounds": 2,
+      "status": "passed"
+    },
+    {
+      "case": "invalid_tool_plan",
+      "result": "plan_contract_rejected with preserved violations and zero arXiv calls",
+      "arxiv_calls": 0,
+      "provider_calls": 1,
+      "status": "passed"
+    },
+    {
+      "case": "planner_outcome_unknown",
+      "result": "Run entered waiting_for_user after lease expiry and did not replay Planner",
+      "automatic_replay": 0,
+      "status": "passed"
+    },
+    {
+      "case": "committed_external_response_recovery",
+      "result": "committed Planner and search responses were reused after simulated process exit",
+      "repeated_committed_calls": 0,
+      "status": "passed"
+    },
+    {
+      "case": "budget_denied",
+      "result": "zero Planner and arXiv calls after transactional reservation denial",
+      "provider_calls": 0,
+      "arxiv_calls": 0,
+      "status": "passed"
+    },
+    {
+      "case": "strategy_queue_isolation",
+      "result": "fixed and bounded workers claimed only their own workflow in one SQLite repository",
+      "status": "passed"
+    },
+    {
+      "case": "bounded_cli_submit",
+      "result": "bounded submit persisted a queued Run without handwritten search_query or external calls",
+      "status": "passed"
+    }
+  ],
+  "validation": {
+    "focused": {
+      "command": "uv run --frozen pytest -q -p no:cacheprovider --basetemp var/evaluations/w4/w4.3/bounded-final-tmp tests/test_bounded_paper_strategy.py",
+      "result": "9 passed in 18.20s"
+    },
+    "combined_w3_w4": {
+      "command": "uv run --frozen pytest -q -p no:cacheprovider --basetemp var/evaluations/w4/w4.3/focused-final-2-tmp tests/test_bounded_paper_strategy.py tests/test_planning.py tests/test_durable_cli.py tests/test_durable_paper_discovery.py",
+      "result": "46 passed in 54.37s"
+    },
+    "runtime_architecture": {
+      "command": "uv run --frozen pytest -q -p no:cacheprovider --basetemp var/evaluations/w4/w4.3/runtime-architecture-2-tmp tests/test_architecture.py tests/test_sqlite_runtime.py tests/test_worker_leases.py tests/test_budget_diagnostics.py tests/test_fault_injection_subprocess.py",
+      "result": "31 passed in 31.36s"
+    },
+    "full_regression": {
+      "command": "uv run --frozen pytest -q -p no:cacheprovider --basetemp var/evaluations/w4/w4.3/full-final-tmp",
+      "result": "204 passed in 91.53s"
+    },
+    "compileall": "passed",
+    "uv_lock_check": "passed; 9 resolved packages",
+    "diff_check": "passed",
+    "preflight_harness_incident": {
+      "result": "24 passed, 13 setup errors",
+      "cause": "the selected Windows basetemp parent did not exist",
+      "implementation_failure": false,
+      "resolution": "created the ignored evidence parent and reran successfully"
+    }
+  },
+  "call_boundary": {
+    "public_network_calls": 0,
+    "real_arxiv_calls": 0,
+    "real_provider_calls": 0,
+    "paid_calls": 0,
+    "fixture_transports_only": true,
+    "automatic_retry": false,
+    "fallback": false
+  },
+  "acceptance": {
+    "static_nine_step_graph": "passed",
+    "deterministic_skipped_checkpoint": "passed",
+    "planner_and_synthesis_unknown_outcome_protection": "passed",
+    "two_search_absolute_limit": "passed",
+    "budget_fail_closed": "passed",
+    "structured_plan_rejection": "passed",
+    "committed_response_reuse": "passed",
+    "fixed_default_non_regression": "passed",
+    "artifact_lineage": "passed",
+    "full_regression": "passed",
+    "overall": "passed"
+  },
+  "known_boundaries": [
+    "Fixture Provider responses prove orchestration semantics, not that a real model can produce valid or useful Plans.",
+    "Fixture Atom responses prove the two-slot durable path, not live arXiv behavior or research-quality improvement.",
+    "W4.3 does not compare A/B/C candidate quality and does not admit bounded as a user-selectable production strategy beyond the explicit experimental CLI flag.",
+    "Cancellation, subprocess kill and broader injection combinations for the bounded nine-Step graph remain W4.4 work; W3 mechanisms only passed their existing regression tests.",
+    "No non-terminal Workbench entry exists; this remains a W5 product gap."
+  ],
+  "evidence_boundary": "W4.3 proves offline durable orchestration of a static bounded two-slot strategy with fixture transports. It does not prove live Planner capability, live arXiv execution, quality gain over deterministic strategy B, personal-use acceptance, or general Agent capability.",
+  "authorization_consumed": "W4.3 offline Runtime and CLI integration only",
+  "next_acceptance_point": "W4.4 safety, budget, recovery and fault matrix; no W4.4 implementation begins until the user explicitly enters W4.4"
+}

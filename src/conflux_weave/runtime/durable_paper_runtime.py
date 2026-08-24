@@ -67,7 +67,9 @@ class DurablePaperDiscoveryRuntime(DurablePaperStepMixin, DurablePaperTraceMixin
         self.artifact_store = artifact_store
         self.search_adapter = search_adapter
         self.chat_adapter = chat_adapter
-        self.worker = SQLiteStepWorker(repository, worker_id, lease_seconds)
+        self.worker = SQLiteStepWorker(
+            repository, worker_id, lease_seconds, DURABLE_WORKFLOW_VERSION
+        )
         self.clock = clock or repository.clock
         self.id_factory = id_factory or _new_id
         self.code_revision = code_revision
