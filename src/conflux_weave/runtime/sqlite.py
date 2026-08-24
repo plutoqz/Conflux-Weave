@@ -16,6 +16,8 @@ from conflux_weave.core import (
     BudgetLedger,
     DeliveryDisposition,
     DeliveryRecord,
+    ErrorCategory,
+    ErrorRecord,
     RunRecord,
     RunStatus,
     StepRecord,
@@ -59,6 +61,50 @@ class RecoveryDecisionRequired(PersistenceInvariantError):
     """Raised when recovery requires an explicit decision about unknown effects."""
 
 
+@dataclass(frozen=True, slots=True)
+class BudgetAmount:
+    input_tokens: int = 0
+    output_tokens: int = 0
+    tool_calls: int = 0
+    retrieval_rounds: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class BudgetStatus:
+    run_id: str
+    state: str
+    limit: BudgetAmount
+    actual: BudgetAmount
+    reserved: BudgetAmount
+    wall_clock_seconds: int
+    concurrency: int
+    estimated_cost_limit: str
+    cost_enforcement: str
+
+
+@dataclass(frozen=True, slots=True)
+class BudgetEntryRecord:
+    entry_id: int
+    run_id: str
+    step_id: str
+    attempt_id: str
+    reservation_id: str
+    entry_kind: str
+    amount: BudgetAmount
+    source: str
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class StoredErrorRecord:
+    error_id: str
+    run_id: str
+    step_id: str | None
+    attempt_id: str | None
+    record: ErrorRecord
+    created_at: str
+
+
 class SideEffectClass(StrEnum):
     NONE = "none"
     REPLAYABLE_EXTERNAL_READ = "replayable_external_read"
@@ -69,6 +115,14 @@ class SideEffectClass(StrEnum):
 class RecoveryDecision(StrEnum):
     RETRY_UNKNOWN_EXTERNAL = "retry_unknown_external"
     FAIL_UNKNOWN_EXTERNAL = "fail_unknown_external"
+
+
+_BUDGET_DIMENSIONS = (
+    "input_tokens",
+    "output_tokens",
+    "tool_calls",
+    "retrieval_rounds",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,6 +396,110 @@ _MIGRATIONS = (
             """,
         ),
     ),
+    _Migration(
+        version=4,
+        name="w3_budget_diagnostics",
+        statements=(
+            """
+            CREATE TABLE budget_limits (
+                run_id TEXT PRIMARY KEY REFERENCES runs(run_id) ON DELETE RESTRICT,
+                wall_clock_seconds INTEGER NOT NULL CHECK (wall_clock_seconds > 0),
+                input_tokens INTEGER NOT NULL CHECK (input_tokens >= 0),
+                output_tokens INTEGER NOT NULL CHECK (output_tokens >= 0),
+                tool_calls INTEGER NOT NULL CHECK (tool_calls >= 0),
+                retrieval_rounds INTEGER NOT NULL CHECK (retrieval_rounds >= 0),
+                concurrency INTEGER NOT NULL CHECK (concurrency > 0),
+                estimated_cost_limit TEXT NOT NULL,
+                cost_enforcement TEXT NOT NULL CHECK (cost_enforcement IN ('available', 'unavailable')),
+                state TEXT NOT NULL CHECK (state IN ('active', 'stopped')),
+                created_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE TABLE budget_reservations (
+                reservation_id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE RESTRICT,
+                step_id TEXT NOT NULL REFERENCES steps(step_id) ON DELETE RESTRICT,
+                attempt_id TEXT NOT NULL UNIQUE REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
+                input_tokens INTEGER NOT NULL CHECK (input_tokens >= 0),
+                output_tokens INTEGER NOT NULL CHECK (output_tokens >= 0),
+                tool_calls INTEGER NOT NULL CHECK (tool_calls >= 0),
+                retrieval_rounds INTEGER NOT NULL CHECK (retrieval_rounds >= 0),
+                status TEXT NOT NULL CHECK (status IN ('active', 'settled', 'released')),
+                created_at TEXT NOT NULL,
+                closed_at TEXT
+            )
+            """,
+            """
+            CREATE INDEX budget_reservations_run_idx
+            ON budget_reservations(run_id, status)
+            """,
+            """
+            CREATE TABLE budget_entries (
+                entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE RESTRICT,
+                step_id TEXT NOT NULL REFERENCES steps(step_id) ON DELETE RESTRICT,
+                attempt_id TEXT NOT NULL REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
+                reservation_id TEXT NOT NULL REFERENCES budget_reservations(reservation_id) ON DELETE RESTRICT,
+                entry_kind TEXT NOT NULL CHECK (entry_kind IN ('reservation', 'actual', 'release', 'unknown_actual')),
+                input_tokens INTEGER NOT NULL CHECK (input_tokens >= 0),
+                output_tokens INTEGER NOT NULL CHECK (output_tokens >= 0),
+                tool_calls INTEGER NOT NULL CHECK (tool_calls >= 0),
+                retrieval_rounds INTEGER NOT NULL CHECK (retrieval_rounds >= 0),
+                source TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE INDEX budget_entries_run_idx ON budget_entries(run_id, entry_id)
+            """,
+            """
+            CREATE TABLE errors (
+                error_id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE RESTRICT,
+                step_id TEXT REFERENCES steps(step_id) ON DELETE RESTRICT,
+                attempt_id TEXT REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
+                code TEXT NOT NULL,
+                category TEXT NOT NULL,
+                stage TEXT NOT NULL,
+                retryable INTEGER NOT NULL CHECK (retryable IN (0, 1)),
+                user_message TEXT NOT NULL,
+                technical_detail_ref TEXT NOT NULL REFERENCES artifacts(artifact_id) ON DELETE RESTRICT,
+                recovery_action TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE INDEX errors_run_idx ON errors(run_id, created_at, error_id)
+            """,
+            """
+            CREATE TABLE error_artifacts (
+                error_id TEXT NOT NULL REFERENCES errors(error_id) ON DELETE RESTRICT,
+                ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+                artifact_id TEXT NOT NULL REFERENCES artifacts(artifact_id) ON DELETE RESTRICT,
+                PRIMARY KEY (error_id, ordinal),
+                UNIQUE (error_id, artifact_id)
+            )
+            """,
+            """
+            INSERT INTO budget_limits(
+                run_id, wall_clock_seconds, input_tokens, output_tokens,
+                tool_calls, retrieval_rounds, concurrency,
+                estimated_cost_limit, cost_enforcement, state, created_at
+            )
+            SELECT run_id,
+                   json_extract(budget_json, '$.wall_clock_seconds'),
+                   json_extract(budget_json, '$.input_tokens'),
+                   json_extract(budget_json, '$.output_tokens'),
+                   json_extract(budget_json, '$.tool_calls'),
+                   json_extract(budget_json, '$.retrieval_rounds'),
+                   json_extract(budget_json, '$.concurrency'),
+                   json_extract(budget_json, '$.estimated_cost'),
+                   'unavailable', 'active', created_at
+            FROM runs
+            """,
+        ),
+    ),
 )
 
 
@@ -526,6 +684,27 @@ class SQLiteRuntimeRepository:
                             _canonical_json(asdict(run.budget)),
                             run.created_at,
                             run.updated_at,
+                        ),
+                    )
+                    connection.execute(
+                        """
+                        INSERT INTO budget_limits(
+                            run_id, wall_clock_seconds, input_tokens,
+                            output_tokens, tool_calls, retrieval_rounds,
+                            concurrency, estimated_cost_limit,
+                            cost_enforcement, state, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'unavailable', 'active', ?)
+                        """,
+                        (
+                            run.run_id,
+                            run.budget.wall_clock_seconds,
+                            run.budget.input_tokens,
+                            run.budget.output_tokens,
+                            run.budget.tool_calls,
+                            run.budget.retrieval_rounds,
+                            run.budget.concurrency,
+                            run.budget.estimated_cost,
+                            run.created_at,
                         ),
                     )
                     for ordinal, step in enumerate(steps):
@@ -1059,6 +1238,9 @@ class SQLiteRuntimeRepository:
         with self._connect() as connection:
             with _transaction(connection):
                 self._require_active_attempt(connection, claim, failed_at)
+                self._close_active_reservation(
+                    connection, claim, "attempt_failed_before_usage_report", failed_at
+                )
                 changed = connection.execute(
                     """
                     UPDATE steps
@@ -1111,6 +1293,110 @@ class SQLiteRuntimeRepository:
             raise RecordNotFound("Attempt effect not found")
         return _attempt_effect_from_row(row)
 
+    def get_budget_status(self, run_id: str) -> BudgetStatus:
+        with self._connect() as connection:
+            limit = connection.execute(
+                "SELECT * FROM budget_limits WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if limit is None:
+                raise RecordNotFound("BudgetLimit not found")
+            actual = self._budget_totals(connection, run_id, "actual")
+            reserved = self._active_reservation_totals(connection, run_id)
+        return BudgetStatus(
+            run_id=run_id,
+            state=str(limit["state"]),
+            limit=BudgetAmount(**{
+                dimension: int(limit[dimension]) for dimension in _BUDGET_DIMENSIONS
+            }),
+            actual=BudgetAmount(**actual),
+            reserved=BudgetAmount(**reserved),
+            wall_clock_seconds=int(limit["wall_clock_seconds"]),
+            concurrency=int(limit["concurrency"]),
+            estimated_cost_limit=str(limit["estimated_cost_limit"]),
+            cost_enforcement=str(limit["cost_enforcement"]),
+        )
+
+    def get_budget_entries(self, run_id: str) -> tuple[BudgetEntryRecord, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM budget_entries WHERE run_id = ? ORDER BY entry_id",
+                (run_id,),
+            ).fetchall()
+        return tuple(
+            BudgetEntryRecord(
+                entry_id=int(row["entry_id"]), run_id=str(row["run_id"]),
+                step_id=str(row["step_id"]), attempt_id=str(row["attempt_id"]),
+                reservation_id=str(row["reservation_id"]),
+                entry_kind=str(row["entry_kind"]),
+                amount=BudgetAmount(**{
+                    dimension: int(row[dimension]) for dimension in _BUDGET_DIMENSIONS
+                }),
+                source=str(row["source"]), created_at=str(row["created_at"]),
+            )
+            for row in rows
+        )
+
+    def get_errors(self, run_id: str) -> tuple[StoredErrorRecord, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM errors WHERE run_id = ? ORDER BY created_at, error_id",
+                (run_id,),
+            ).fetchall()
+            records = []
+            for row in rows:
+                affected = tuple(
+                    str(item["artifact_id"])
+                    for item in connection.execute(
+                        "SELECT artifact_id FROM error_artifacts WHERE error_id = ? ORDER BY ordinal",
+                        (row["error_id"],),
+                    ).fetchall()
+                )
+                records.append(
+                    StoredErrorRecord(
+                        error_id=str(row["error_id"]), run_id=str(row["run_id"]),
+                        step_id=row["step_id"], attempt_id=row["attempt_id"],
+                        record=ErrorRecord(
+                            code=str(row["code"]), category=ErrorCategory(row["category"]),
+                            stage=str(row["stage"]), retryable=bool(row["retryable"]),
+                            user_message=str(row["user_message"]),
+                            technical_detail_ref=str(row["technical_detail_ref"]),
+                            affected_artifact_refs=affected,
+                            recovery_action=str(row["recovery_action"]),
+                        ),
+                        created_at=str(row["created_at"]),
+                    )
+                )
+        return tuple(records)
+
+    def record_error(
+        self,
+        claim: LeaseClaim,
+        error: ErrorRecord,
+        artifacts: Sequence[ArtifactRef],
+        *,
+        now: str | None = None,
+    ) -> StoredErrorRecord:
+        created_at = _normalize_timestamp(now or self.clock())
+        for artifact in artifacts:
+            self._validate_artifact(artifact)
+        with self._connect() as connection:
+            with _transaction(connection):
+                for artifact in artifacts:
+                    self._register_artifact(connection, artifact)
+                error_id = f"error:{claim.attempt_id}:{error.code}"
+                self._persist_error(
+                    connection,
+                    error_id=error_id,
+                    run_id=claim.run_id,
+                    step_id=claim.step_id,
+                    attempt_id=claim.attempt_id,
+                    error=error,
+                    created_at=created_at,
+                )
+        return next(
+            item for item in self.get_errors(claim.run_id) if item.error_id == error_id
+        )
+
     def get_step_artifacts(self, step_id: str) -> tuple[ArtifactRef, ...]:
         with self._connect() as connection:
             rows = connection.execute(
@@ -1130,19 +1416,24 @@ class SQLiteRuntimeRepository:
             ).fetchall()
         return tuple(_artifact_from_row(row) for row in rows)
 
-    def mark_external_call_started(
+    def authorize_external_call(
         self,
         claim: LeaseClaim,
         intent_artifact: ArtifactRef,
+        reservation: BudgetAmount,
+        denial_detail: ArtifactRef,
+        denial_error: ErrorRecord,
         *,
         now: str | None = None,
-    ) -> None:
+    ) -> bool:
         started_at = _normalize_timestamp(now or self.clock())
         if intent_artifact.producer_step_id != claim.step_id:
             raise PersistenceInvariantError(
                 "external call intent producer does not match claimed Step"
             )
         self._validate_artifact(intent_artifact)
+        self._validate_artifact(denial_detail)
+        _validate_budget_amount(reservation)
         with self._connect() as connection:
             with _transaction(connection):
                 self._require_active_attempt(connection, claim, started_at)
@@ -1166,7 +1457,80 @@ class SQLiteRuntimeRepository:
                     raise PersistenceInvariantError(
                         "Step policy does not permit an external call"
                     )
+                limit = connection.execute(
+                    "SELECT * FROM budget_limits WHERE run_id = ?",
+                    (claim.run_id,),
+                ).fetchone()
+                if limit is None:
+                    raise PersistenceInvariantError("Run has no BudgetLimit snapshot")
+                self._release_stale_reservations(connection, claim.run_id, started_at)
+                actual = self._budget_totals(connection, claim.run_id, "actual")
+                active = self._active_reservation_totals(connection, claim.run_id)
+                sufficient = limit["state"] == "active" and all(
+                    actual[dimension] + active[dimension] + getattr(reservation, dimension)
+                    <= int(limit[dimension])
+                    for dimension in _BUDGET_DIMENSIONS
+                )
                 self._register_artifact(connection, intent_artifact)
+                if not sufficient:
+                    self._register_artifact(connection, denial_detail)
+                    self._persist_error(
+                        connection,
+                        error_id=f"error-budget-denied:{claim.attempt_id}",
+                        run_id=claim.run_id,
+                        step_id=claim.step_id,
+                        attempt_id=claim.attempt_id,
+                        error=denial_error,
+                        created_at=started_at,
+                    )
+                    connection.execute(
+                        "UPDATE budget_limits SET state = 'stopped' WHERE run_id = ?",
+                        (claim.run_id,),
+                    )
+                    connection.execute(
+                        """
+                        UPDATE steps SET status = 'failed', error_ref = ?
+                        WHERE step_id = ? AND status = 'running' AND attempt = ?
+                        """,
+                        (denial_detail.artifact_id, claim.step_id, claim.attempt_number),
+                    )
+                    connection.execute(
+                        "UPDATE steps SET status = 'skipped' WHERE run_id = ? AND status = 'pending'",
+                        (claim.run_id,),
+                    )
+                    self._finish_attempt(
+                        connection, claim, status="failed", finished_at=started_at,
+                        error_ref=denial_detail.artifact_id,
+                    )
+                    connection.execute(
+                        "UPDATE runs SET status = 'failed', updated_at = ? WHERE run_id = ?",
+                        (started_at, claim.run_id),
+                    )
+                    self._append_run_event(
+                        connection, run_id=claim.run_id, step_id=claim.step_id,
+                        attempt_id=claim.attempt_id, event_type="budget_reservation_denied",
+                        detail={"reservation": asdict(reservation)}, created_at=started_at,
+                    )
+                    return False
+                reservation_id = f"budget-reservation:{claim.attempt_id}"
+                connection.execute(
+                    """
+                    INSERT INTO budget_reservations(
+                        reservation_id, run_id, step_id, attempt_id,
+                        input_tokens, output_tokens, tool_calls, retrieval_rounds,
+                        status, created_at, closed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, NULL)
+                    """,
+                    (
+                        reservation_id, claim.run_id, claim.step_id, claim.attempt_id,
+                        reservation.input_tokens, reservation.output_tokens,
+                        reservation.tool_calls, reservation.retrieval_rounds, started_at,
+                    ),
+                )
+                self._insert_budget_entry(
+                    connection, claim, reservation_id, "reservation", reservation,
+                    "pre_call_worst_case", started_at,
+                )
                 connection.execute(
                     """
                     UPDATE attempt_effects
@@ -1185,6 +1549,7 @@ class SQLiteRuntimeRepository:
                     detail={"side_effect": str(effect["side_effect"])},
                     created_at=started_at,
                 )
+        return True
 
     def complete_external_attempt(
         self,
@@ -1194,6 +1559,9 @@ class SQLiteRuntimeRepository:
         request_artifact_ref: str,
         response_artifact_ref: str,
         external_response_id: str | None = None,
+        actual_usage: BudgetAmount = BudgetAmount(),
+        overage_detail: ArtifactRef | None = None,
+        overage_error: ErrorRecord | None = None,
         now: str | None = None,
     ) -> StepRecord:
         completed_at = _normalize_timestamp(now or self.clock())
@@ -1210,6 +1578,11 @@ class SQLiteRuntimeRepository:
                     "Step output Artifact producer does not match claimed Step"
                 )
             self._validate_artifact(artifact)
+        _validate_budget_amount(actual_usage)
+        if (overage_detail is None) != (overage_error is None):
+            raise PersistenceInvariantError("budget overage detail and ErrorRecord are paired")
+        if overage_detail is not None:
+            self._validate_artifact(overage_detail)
         with self._connect() as connection:
             with _transaction(connection):
                 self._require_active_attempt(connection, claim, completed_at)
@@ -1221,6 +1594,32 @@ class SQLiteRuntimeRepository:
                     raise PersistenceInvariantError(
                         "external response cannot commit before call intent"
                     )
+                reservation = connection.execute(
+                    "SELECT * FROM budget_reservations WHERE attempt_id = ? AND status = 'active'",
+                    (claim.attempt_id,),
+                ).fetchone()
+                if reservation is None:
+                    raise PersistenceInvariantError("external response has no active reservation")
+                reservation_id = str(reservation["reservation_id"])
+                reserved = BudgetAmount(**{
+                    dimension: int(reservation[dimension]) for dimension in _BUDGET_DIMENSIONS
+                })
+                self._insert_budget_entry(
+                    connection, claim, reservation_id, "actual", actual_usage,
+                    "provider_or_tool_reported", completed_at,
+                )
+                released = BudgetAmount(**{
+                    dimension: max(0, getattr(reserved, dimension) - getattr(actual_usage, dimension))
+                    for dimension in _BUDGET_DIMENSIONS
+                })
+                self._insert_budget_entry(
+                    connection, claim, reservation_id, "release", released,
+                    "reservation_reconciliation", completed_at,
+                )
+                connection.execute(
+                    "UPDATE budget_reservations SET status = 'settled', closed_at = ? WHERE reservation_id = ?",
+                    (completed_at, reservation_id),
+                )
                 registrations = [
                     self._register_artifact(connection, artifact)
                     for artifact in artifacts
@@ -1284,10 +1683,199 @@ class SQLiteRuntimeRepository:
                     },
                     created_at=completed_at,
                 )
+                limit = connection.execute(
+                    "SELECT * FROM budget_limits WHERE run_id = ?", (claim.run_id,)
+                ).fetchone()
+                totals = self._budget_totals(connection, claim.run_id, "actual")
+                over_limit = any(
+                    totals[dimension] > int(limit[dimension])
+                    for dimension in _BUDGET_DIMENSIONS
+                )
+                if over_limit:
+                    if overage_detail is None or overage_error is None:
+                        raise PersistenceInvariantError(
+                            "actual Budget overage requires structured diagnostics"
+                        )
+                    self._register_artifact(connection, overage_detail)
+                    self._persist_error(
+                        connection,
+                        error_id=f"error-budget-overage:{claim.attempt_id}",
+                        run_id=claim.run_id, step_id=claim.step_id,
+                        attempt_id=claim.attempt_id, error=overage_error,
+                        created_at=completed_at,
+                    )
+                    connection.execute(
+                        "UPDATE budget_limits SET state = 'stopped' WHERE run_id = ?",
+                        (claim.run_id,),
+                    )
+                    connection.execute(
+                        "UPDATE steps SET status = 'skipped' WHERE run_id = ? AND status = 'pending'",
+                        (claim.run_id,),
+                    )
+                    connection.execute(
+                        "UPDATE runs SET status = 'failed', updated_at = ? WHERE run_id = ?",
+                        (completed_at, claim.run_id),
+                    )
+                    self._append_run_event(
+                        connection, run_id=claim.run_id, step_id=claim.step_id,
+                        attempt_id=claim.attempt_id, event_type="budget_actual_exceeded",
+                        detail={"actual": totals}, created_at=completed_at,
+                    )
                 row = connection.execute(
                     "SELECT * FROM steps WHERE step_id = ?", (claim.step_id,)
                 ).fetchone()
         return _step_from_row(row)
+
+    def _budget_totals(
+        self, connection: sqlite3.Connection, run_id: str, entry_kind: str
+    ) -> dict[str, int]:
+        row = connection.execute(
+            """
+            SELECT COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                   COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                   COALESCE(SUM(tool_calls), 0) AS tool_calls,
+                   COALESCE(SUM(retrieval_rounds), 0) AS retrieval_rounds
+            FROM budget_entries WHERE run_id = ? AND entry_kind = ?
+            """,
+            (run_id, entry_kind),
+        ).fetchone()
+        return {dimension: int(row[dimension]) for dimension in _BUDGET_DIMENSIONS}
+
+    def _active_reservation_totals(
+        self, connection: sqlite3.Connection, run_id: str
+    ) -> dict[str, int]:
+        row = connection.execute(
+            """
+            SELECT COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                   COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                   COALESCE(SUM(tool_calls), 0) AS tool_calls,
+                   COALESCE(SUM(retrieval_rounds), 0) AS retrieval_rounds
+            FROM budget_reservations WHERE run_id = ? AND status = 'active'
+            """,
+            (run_id,),
+        ).fetchone()
+        return {dimension: int(row[dimension]) for dimension in _BUDGET_DIMENSIONS}
+
+    def _insert_budget_entry(
+        self, connection: sqlite3.Connection, claim: LeaseClaim,
+        reservation_id: str, entry_kind: str, amount: BudgetAmount,
+        source: str, created_at: str,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO budget_entries(
+                run_id, step_id, attempt_id, reservation_id, entry_kind,
+                input_tokens, output_tokens, tool_calls, retrieval_rounds,
+                source, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                claim.run_id, claim.step_id, claim.attempt_id, reservation_id,
+                entry_kind, amount.input_tokens, amount.output_tokens,
+                amount.tool_calls, amount.retrieval_rounds, source, created_at,
+            ),
+        )
+
+    def _release_stale_reservations(
+        self, connection: sqlite3.Connection, run_id: str, now: str
+    ) -> None:
+        rows = connection.execute(
+            """
+            SELECT br.*, l.expires_at, l.released_at, a.status AS attempt_status
+            FROM budget_reservations br
+            JOIN attempts a ON a.attempt_id = br.attempt_id
+            JOIN leases l ON l.attempt_id = br.attempt_id
+            WHERE br.run_id = ? AND br.status = 'active'
+              AND (a.status != 'running' OR l.released_at IS NOT NULL OR l.expires_at <= ?)
+            """,
+            (run_id, now),
+        ).fetchall()
+        for row in rows:
+            self._close_reservation_row(
+                connection, row, "external_outcome_not_reported", now
+            )
+
+    def _close_active_reservation(
+        self, connection: sqlite3.Connection, claim: LeaseClaim, source: str, now: str
+    ) -> None:
+        row = connection.execute(
+            "SELECT * FROM budget_reservations WHERE attempt_id = ? AND status = 'active'",
+            (claim.attempt_id,),
+        ).fetchone()
+        if row is not None:
+            self._close_reservation_row(connection, row, source, now)
+
+    def _close_reservation_row(
+        self, connection: sqlite3.Connection, row: sqlite3.Row, source: str, now: str
+    ) -> None:
+        values = tuple(int(row[dimension]) for dimension in _BUDGET_DIMENSIONS)
+        connection.execute(
+            """
+            INSERT INTO budget_entries(
+                run_id, step_id, attempt_id, reservation_id, entry_kind,
+                input_tokens, output_tokens, tool_calls, retrieval_rounds,
+                source, created_at
+            ) VALUES (?, ?, ?, ?, 'unknown_actual', 0, 0, 0, 0, ?, ?)
+            """,
+            (
+                row["run_id"], row["step_id"], row["attempt_id"],
+                row["reservation_id"], source, now,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO budget_entries(
+                run_id, step_id, attempt_id, reservation_id, entry_kind,
+                input_tokens, output_tokens, tool_calls, retrieval_rounds,
+                source, created_at
+            ) VALUES (?, ?, ?, ?, 'release', ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                row["run_id"], row["step_id"], row["attempt_id"],
+                row["reservation_id"], *values, source, now,
+            ),
+        )
+        connection.execute(
+            "UPDATE budget_reservations SET status = 'released', closed_at = ? WHERE reservation_id = ?",
+            (now, row["reservation_id"]),
+        )
+
+    def _persist_error(
+        self, connection: sqlite3.Connection, *, error_id: str, run_id: str,
+        step_id: str | None, attempt_id: str | None, error: ErrorRecord,
+        created_at: str,
+    ) -> None:
+        if not error.recovery_action.strip():
+            raise PersistenceInvariantError("structured Error requires a recovery action")
+        if connection.execute(
+            "SELECT 1 FROM artifacts WHERE artifact_id = ?", (error.technical_detail_ref,)
+        ).fetchone() is None:
+            raise PersistenceInvariantError("Error technical detail Artifact is not registered")
+        for artifact_id in error.affected_artifact_refs:
+            if connection.execute(
+                "SELECT 1 FROM artifacts WHERE artifact_id = ?", (artifact_id,)
+            ).fetchone() is None:
+                raise PersistenceInvariantError("affected Error Artifact is not registered")
+        connection.execute(
+            """
+            INSERT INTO errors(
+                error_id, run_id, step_id, attempt_id, code, category, stage,
+                retryable, user_message, technical_detail_ref, recovery_action,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                error_id, run_id, step_id, attempt_id, error.code,
+                error.category.value, error.stage, int(error.retryable),
+                error.user_message, error.technical_detail_ref,
+                error.recovery_action, created_at,
+            ),
+        )
+        for ordinal, artifact_id in enumerate(error.affected_artifact_refs):
+            connection.execute(
+                "INSERT INTO error_artifacts(error_id, ordinal, artifact_id) VALUES (?, ?, ?)",
+                (error_id, ordinal, artifact_id),
+            )
 
     def block_unknown_external_outcome(
         self,
@@ -1318,6 +1906,9 @@ class SQLiteRuntimeRepository:
                     raise PersistenceInvariantError(
                         "Attempt has no unknown paid external outcome"
                     )
+                self._close_active_reservation(
+                    connection, claim, "provider_outcome_unknown", blocked_at
+                )
                 self._register_artifact(connection, detail_artifact)
                 connection.execute(
                     """
@@ -1377,6 +1968,9 @@ class SQLiteRuntimeRepository:
         with self._connect() as connection:
             with _transaction(connection):
                 self._require_active_attempt(connection, claim, cancelled_at)
+                self._close_active_reservation(
+                    connection, claim, "attempt_cancelled_before_usage_report", cancelled_at
+                )
                 connection.execute(
                     """
                     UPDATE attempts SET status = 'fenced', finished_at = ?
@@ -2157,6 +2751,11 @@ def _canonical_json(value: object) -> str:
         sort_keys=True,
         separators=(",", ":"),
     )
+
+
+def _validate_budget_amount(amount: BudgetAmount) -> None:
+    if any(getattr(amount, dimension) < 0 for dimension in _BUDGET_DIMENSIONS):
+        raise PersistenceInvariantError("Budget amounts must be non-negative")
 
 
 def _validate_worker_request(worker_id: str, lease_seconds: int) -> None:

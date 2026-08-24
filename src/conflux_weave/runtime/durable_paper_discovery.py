@@ -12,6 +12,8 @@ from conflux_weave.core import (
     BudgetLedger,
     DeliveryDisposition,
     DeliveryRecord,
+    ErrorCategory,
+    ErrorRecord,
     RunRecord,
     RunStatus,
     StepRecord,
@@ -20,6 +22,7 @@ from conflux_weave.core import (
 )
 from conflux_weave.evidence import (
     AnswerBlock,
+    ArtifactRef,
     Citation,
     Claim,
     EvidenceRef,
@@ -45,6 +48,7 @@ from conflux_weave.provider import OpenAICompatibleChatAdapter
 from conflux_weave.retrieval import BM25Retriever, RetrievalDocument
 from conflux_weave.runtime.artifacts import LocalArtifactStore
 from conflux_weave.runtime.sqlite import (
+    BudgetAmount,
     LeaseClaim,
     RecoveryDecision,
     SideEffectClass,
@@ -109,6 +113,7 @@ class DurablePaperDiscoveryRuntime:
         *,
         search_query: str,
         max_results: int = 15,
+        budget: BudgetLedger | None = None,
     ) -> SubmissionResult:
         normalized_query = query.strip()
         normalized_search = search_query.strip()
@@ -120,6 +125,9 @@ class DurablePaperDiscoveryRuntime:
         run_id = self.id_factory("run")
         step_ids = {kind: f"{run_id}:{kind}" for kind in STEP_KINDS}
         created_at = self.clock()
+        frozen_budget = budget or BudgetLedger(
+            180, 20_000, MAX_OUTPUT_TOKENS, "provider-price-not-frozen", 2, 1, 1
+        )
         config = self.artifact_store.put_json(
             {
                 "schema_version": SCHEMA_VERSION,
@@ -136,6 +144,8 @@ class DurablePaperDiscoveryRuntime:
                 "automatic_retry": False,
                 "fallback": False,
                 "secret_recorded": False,
+                "budget": asdict(frozen_budget),
+                "cost_enforcement": "unavailable",
             },
             producer_step_id=step_ids["search_arxiv"],
             schema_version=SCHEMA_VERSION,
@@ -155,6 +165,7 @@ class DurablePaperDiscoveryRuntime:
                 "max_output_tokens": MAX_OUTPUT_TOKENS,
                 "enable_thinking": False,
             },
+            "budget": asdict(frozen_budget),
         }
         task = TaskSpec(
             task_id=task_id,
@@ -169,15 +180,7 @@ class DurablePaperDiscoveryRuntime:
             status=RunStatus.ACCEPTED,
             workflow_version=DURABLE_WORKFLOW_VERSION,
             config_snapshot_ref=config.artifact_id,
-            budget=BudgetLedger(
-                180,
-                20_000,
-                MAX_OUTPUT_TOKENS,
-                "provider-price-not-frozen",
-                2,
-                1,
-                1,
-            ),
+            budget=frozen_budget,
             created_at=created_at,
             updated_at=created_at,
         )
@@ -258,9 +261,37 @@ class DurablePaperDiscoveryRuntime:
                 producer_step_id=claim.step_id,
                 schema_version="conflux-weave.w3.step-failure.v1",
             )
-            if (
+            unknown_provider = (
                 effect.side_effect is SideEffectClass.PAID_EXTERNAL_UNKNOWN
                 and effect.effect_state == "request_started"
+            )
+            error = ErrorRecord(
+                code=(
+                    "provider_outcome_unknown"
+                    if unknown_provider
+                    else "step_execution_failed"
+                ),
+                category=(ErrorCategory.PROVIDER if unknown_provider else ErrorCategory.UNKNOWN),
+                stage=step.kind,
+                retryable=False,
+                user_message=(
+                    "Provider outcome is unknown; no automatic replay was started."
+                    if unknown_provider
+                    else "The workflow Step failed; no automatic retry or fallback was started."
+                ),
+                technical_detail_ref=detail.artifact_id,
+                affected_artifact_refs=(
+                    (effect.intent_artifact_ref,) if effect.intent_artifact_ref else ()
+                ),
+                recovery_action=(
+                    "Choose an explicit retry or fail decision after inspecting the request intent."
+                    if unknown_provider
+                    else "Inspect the technical detail Artifact and create a new Run after correcting the cause."
+                ),
+            )
+            self.repository.record_error(claim, error, (detail,), now=now)
+            if (
+                unknown_provider
             ):
                 self.repository.block_unknown_external_outcome(
                     claim, detail, now=now
@@ -304,7 +335,14 @@ class DurablePaperDiscoveryRuntime:
                 "max_results": task.input["max_results"],
             },
         )
-        self.repository.mark_external_call_started(claim, intent, now=now)
+        if not self._authorize_external_call(
+            claim,
+            intent,
+            BudgetAmount(tool_calls=1, retrieval_rounds=1),
+            stage="search_arxiv",
+            now=now,
+        ):
+            return
         result = self.search_adapter.search(
             str(task.input["search_query"]),
             max_results=int(task.input["max_results"]),
@@ -333,6 +371,7 @@ class DurablePaperDiscoveryRuntime:
             ),
             request_artifact_ref=intent.artifact_id,
             response_artifact_ref=result.response_artifact.artifact_id,
+            actual_usage=BudgetAmount(tool_calls=1, retrieval_rounds=1),
             now=now,
         )
 
@@ -383,7 +422,14 @@ class DurablePaperDiscoveryRuntime:
                 "evidence_ids": [item.evidence_id for item in evidence],
             },
         )
-        self.repository.mark_external_call_started(claim, intent, now=now)
+        if not self._authorize_external_call(
+            claim,
+            intent,
+            BudgetAmount(output_tokens=MAX_OUTPUT_TOKENS, tool_calls=1),
+            stage="synthesize_claims",
+            now=now,
+        ):
+            return
         completion = self.chat_adapter.complete(
             system_prompt=SYSTEM_PROMPT,
             user_prompt=_paper_prompt(str(task.input["query"]), evidence),
@@ -409,6 +455,38 @@ class DurablePaperDiscoveryRuntime:
             producer_step_id=claim.step_id,
             schema_version=SYNTHESIS_CHECKPOINT,
         )
+        actual_usage = BudgetAmount(
+            input_tokens=completion.input_tokens,
+            output_tokens=completion.output_tokens,
+            tool_calls=1,
+        )
+        budget = self.repository.get_budget_status(claim.run_id)
+        will_exceed = any(
+            getattr(budget.actual, dimension) + getattr(actual_usage, dimension)
+            > getattr(budget.limit, dimension)
+            for dimension in (
+                "input_tokens", "output_tokens", "tool_calls", "retrieval_rounds"
+            )
+        )
+        if will_exceed:
+            overage_detail, overage_error = self._budget_error(
+                claim,
+                code="budget_actual_exceeded",
+                stage="synthesize_claims",
+                message=(
+                    "Provider reported usage exceeded the frozen Run budget; "
+                    "no subsequent external call is allowed."
+                ),
+                affected=(
+                    intent.artifact_id,
+                    completion.request_artifact.artifact_id,
+                    completion.response_artifact.artifact_id,
+                    checkpoint.artifact_id,
+                ),
+                recovery_action="Inspect usage and partial Artifacts; create a new Run with an explicitly frozen budget.",
+            )
+        else:
+            overage_detail = overage_error = None
         self.repository.complete_external_attempt(
             claim,
             (
@@ -420,7 +498,67 @@ class DurablePaperDiscoveryRuntime:
             request_artifact_ref=completion.request_artifact.artifact_id,
             response_artifact_ref=completion.response_artifact.artifact_id,
             external_response_id=completion.response_id,
+            actual_usage=actual_usage,
+            overage_detail=overage_detail,
+            overage_error=overage_error,
             now=now,
+        )
+
+    def _authorize_external_call(
+        self,
+        claim: LeaseClaim,
+        intent: ArtifactRef,
+        reservation: BudgetAmount,
+        *,
+        stage: str,
+        now: str | None,
+    ) -> bool:
+        detail, error = self._budget_error(
+            claim,
+            code="budget_reservation_denied",
+            stage=stage,
+            message="The frozen Run budget cannot cover this external call; the call was not started.",
+            affected=(self.repository.get_run(claim.run_id).config_snapshot_ref, intent.artifact_id),
+            recovery_action="Inspect the budget ledger; create a new Run with an explicitly frozen budget if the task should continue.",
+        )
+        return self.repository.authorize_external_call(
+            claim, intent, reservation, detail, error, now=now
+        )
+
+    def _budget_error(
+        self,
+        claim: LeaseClaim,
+        *,
+        code: str,
+        stage: str,
+        message: str,
+        affected: tuple[str, ...],
+        recovery_action: str,
+    ) -> tuple[ArtifactRef, ErrorRecord]:
+        detail = self.artifact_store.put_json(
+            {
+                "schema_version": "conflux-weave.w3.budget-error.v1",
+                "run_id": claim.run_id,
+                "step_id": claim.step_id,
+                "attempt_id": claim.attempt_id,
+                "code": code,
+                "stage": stage,
+                "automatic_retry": False,
+                "automatic_budget_expansion": False,
+                "cost_enforcement": "unavailable",
+            },
+            producer_step_id=claim.step_id,
+            schema_version="conflux-weave.w3.budget-error.v1",
+        )
+        return detail, ErrorRecord(
+            code=code,
+            category=ErrorCategory.BUDGET,
+            stage=stage,
+            retryable=False,
+            user_message=message,
+            technical_detail_ref=detail.artifact_id,
+            affected_artifact_refs=affected,
+            recovery_action=recovery_action,
         )
 
     def _execute_validate_delivery(
