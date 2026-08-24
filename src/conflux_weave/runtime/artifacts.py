@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import tempfile
 from typing import Any
 
 from conflux_weave.evidence import ArtifactRef
@@ -57,18 +58,26 @@ class LocalArtifactStore:
         if path.exists():
             self._verify(path, digest)
         else:
+            temporary_path: Path | None = None
             try:
-                with path.open("xb") as handle:
-                    try:
-                        handle.write(content)
-                        handle.flush()
-                        os.fsync(handle.fileno())
-                    except BaseException:
-                        handle.close()
-                        path.unlink(missing_ok=True)
-                        raise
-            except FileExistsError:
-                self._verify(path, digest)
+                descriptor, temporary_name = tempfile.mkstemp(
+                    dir=path.parent,
+                    prefix=f".{digest}.",
+                    suffix=".tmp",
+                )
+                temporary_path = Path(temporary_name)
+                with os.fdopen(descriptor, "wb") as handle:
+                    handle.write(content)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary_path, path)
+                temporary_path = None
+                self._fsync_directory(path.parent)
+            finally:
+                if temporary_path is not None:
+                    temporary_path.unlink(missing_ok=True)
+
+            self._verify(path, digest)
 
         return ArtifactRef(
             artifact_id=f"artifact-sha256-{digest}",
@@ -106,3 +115,13 @@ class LocalArtifactStore:
             raise ArtifactIntegrityError(
                 f"artifact hash mismatch: expected {expected_digest}, got {actual_digest}"
             )
+
+    @staticmethod
+    def _fsync_directory(path: Path) -> None:
+        if os.name == "nt":
+            return
+        descriptor = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
