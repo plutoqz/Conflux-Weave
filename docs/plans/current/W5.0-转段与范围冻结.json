@@ -1,0 +1,109 @@
+{
+  "acceptance_id": "W5.0",
+  "status": "validated_offline",
+  "accepted_at": "2026-08-24",
+  "scope_freeze": "docs/plans/current/W5-scope-freeze.json",
+  "implementation_plan": "docs/plans/current/W5-实施方案.md",
+  "verification_base_revision": "af69a33d3513a0fadd145d08b810ba4e1b4a5de4",
+  "verification_base_tree": "5cf39f1a00635d3503d701650b8df54394f6bba8",
+  "baseline": {
+    "branch": "main",
+    "head_equals_origin_main": true,
+    "working_tree_clean_before_freeze": true,
+    "python": "3.12.9",
+    "uv": "0.6.9",
+    "resolved_package_count": 9,
+    "default_port": 8000,
+    "default_port_occupied": false,
+    "workbench_service_running": false,
+    "dotenv_present": true,
+    "dotenv_values_read": false,
+    "database_present": false,
+    "artifact_root_present": true
+  },
+  "w4_closeout": {
+    "stage_disposition": "closed_negative_fixed_default",
+    "bounded_candidate": "rejected_and_new_submission_disabled",
+    "fixed_strategy": "retained_as_default",
+    "w4_6_live_execution": "not_started_because_candidate_gate_failed",
+    "personal_use_audit": "unmet_and_carried_to_w5_release_gate",
+    "history_and_failures": "retained_without_rewrite_or_deletion"
+  },
+  "commands": [
+    {
+      "command": "uv lock --check",
+      "result": "passed; resolved 9 packages"
+    },
+    {
+      "command": "uv run --frozen pytest --basetemp var/tmp/w5_0_pytest",
+      "attempt": 1,
+      "result": "102 passed, 127 setup errors",
+      "cause": "The explicitly selected ignored basetemp parent var/tmp did not exist; pytest could not create the final basetemp directory.",
+      "evidence_boundary": "No affected test reached its test body; this attempt is retained as a validation-environment failure."
+    },
+    {
+      "command": "New-Item -ItemType Directory -Path var/tmp -Force",
+      "result": "created the ignored runtime parent without modifying tracked files"
+    },
+    {
+      "command": "uv run --frozen pytest --basetemp var/tmp/w5_0_pytest",
+      "attempt": 2,
+      "result": "229 passed, 1 PytestCacheWarning in 217.58 seconds",
+      "warning": "Windows denied creation of the repository .pytest_cache path; test execution and the explicit basetemp succeeded."
+    },
+    {
+      "command": "uv build --offline --out-dir var/tmp/w5_0_dist",
+      "result": "passed; baseline sdist and wheel built without network access"
+    },
+    {
+      "command": "uv run --frozen pytest --basetemp var/tmp/w5_0_final_pytest",
+      "result": "233 passed, 1 PytestCacheWarning in 224.71 seconds",
+      "purpose": "final full regression after adding W5.0 scope documents and four machine-check tests"
+    },
+    {
+      "command": "uv run --frozen python -m compileall -q src tests",
+      "result": "passed"
+    },
+    {
+      "command": "uv build --offline --out-dir var/tmp/w5_0_final_dist",
+      "result": "passed; final sdist and wheel built without network access"
+    }
+  ],
+  "build_artifacts": [
+    {
+      "name": "conflux_weave-0.0.1-py3-none-any.whl",
+      "bytes": 119734,
+      "sha256": "19e431cb812d489a957e4402bc0a648418ffb7fb004a5713ab9e1bb634d8a6ca"
+    },
+    {
+      "name": "conflux_weave-0.0.1.tar.gz",
+      "bytes": 314804,
+      "sha256": "24b953c0f3a1f3e52c4e647399ca007c7e3cb50029d0b5902bf3a671b4ba2c97"
+    }
+  ],
+  "execution_evidence": {
+    "product_files_modified_in_w5_0": 0,
+    "dependencies_added": 0,
+    "fastapi_installed": false,
+    "uvicorn_installed": false,
+    "browser_runs": 0,
+    "public_network_calls": 0,
+    "real_provider_calls": 0,
+    "paid_calls": 0,
+    "live_runs_created": 0,
+    "automatic_retry": false,
+    "fallback": false
+  },
+  "acceptance": {
+    "w4_negative_decision_preserved": true,
+    "baseline_revision_and_tree_frozen": true,
+    "dependencies_and_runtime_layout_frozen": true,
+    "product_surface_and_non_goals_frozen": true,
+    "complete_offline_regression_passed": true,
+    "offline_distribution_build_passed": true,
+    "scope_is_machine_checkable": true,
+    "decision": "pass"
+  },
+  "evidence_boundary": "W5.0 proves only a clean, buildable, regression-passing baseline and a frozen product scope. It does not prove API, FastAPI, SSE, Workbench, browser usability, clean-environment onboarding, live Provider capability or personal-use success.",
+  "next_acceptance_point": "W5.1 应用查询与 API 合同；not authorized by W5.0 and requires explicit user entry"
+}

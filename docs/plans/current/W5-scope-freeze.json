@@ -1,0 +1,275 @@
+{
+  "scope_version": "1.0.0",
+  "status": "scope_frozen",
+  "frozen_at": "2026-08-24",
+  "design_basis": "docs/design/current/Conflux-Weave设计文档v0.2.md",
+  "implementation_plan": "docs/plans/current/W5-实施方案.md",
+  "w5_0_acceptance": "docs/plans/current/W5.0-转段与范围冻结.json",
+  "verification_base_revision": "af69a33d3513a0fadd145d08b810ba4e1b4a5de4",
+  "verification_base_tree": "5cf39f1a00635d3503d701650b8df54394f6bba8",
+  "baseline_remote": {
+    "branch": "main",
+    "origin": "https://github.com/plutoqz/Conflux-Weave.git",
+    "head_equals_origin_main": true,
+    "working_tree_clean_before_freeze": true,
+    "tracked_file_count": 168,
+    "files_changed_since_w3_base": 31
+  },
+  "milestone": {
+    "id": "W5",
+    "name": "产品可用性与开源首次成功",
+    "goal": "让本人和不了解内部实现的新用户通过一个本地优先 Workbench 持续完成核心研究任务，并在清洁环境中完成首次带引用查询。",
+    "evidence_target": "open_source_first_success_validated_live",
+    "current_status": "w5_0_validated_offline",
+    "implementation_authorized_by_this_freeze": false
+  },
+  "w4_transition": {
+    "previous_stage_status": "w4_6_preflight_blocked",
+    "final_disposition": "closed_negative_fixed_default",
+    "candidate": "bounded-arxiv-planner-v1",
+    "candidate_decision": "reject",
+    "candidate_result": "improved 1/3 frozen cases against a required minimum of 2/3",
+    "default_strategy": "fixed-arxiv-v1",
+    "bounded_new_submission": "disabled",
+    "bounded_history": "retained_readable",
+    "live_runs_created_in_w4_6": 0,
+    "public_network_calls_in_w4_6": 0,
+    "provider_calls_in_w4_6": 0,
+    "paid_calls_in_w4_6": 0,
+    "unmet_personal_use_debt": "Five real task units across two existing families and one user-confirmed use remain a W5 release prerequisite.",
+    "evidence": [
+      "docs/plans/current/W4.5-离线ABC准入验收.json",
+      "docs/plans/current/W4.6-配对Live准入前置检查.json",
+      "docs/plans/current/W4-实施方案.md"
+    ]
+  },
+  "stage_claim": {
+    "id": "H-W5-01",
+    "claim": "A single FastAPI application, SQLite authority, one Worker and a minimal same-origin Workbench can provide a recoverable cited-answer path and a clean-environment first success without a second service or frontend build toolchain.",
+    "falsifiers": [
+      "The first query still requires understanding Runtime, Step, Artifact or internal database concepts.",
+      "Refresh, SSE disconnect, cancellation, failure or service restart loses authoritative Run state or recovery actions.",
+      "A final Citation cannot resolve to Evidence and SourceSnapshot lineage.",
+      "Fresh clone to cited answer exceeds 10 minutes after Provider wait time is separated.",
+      "The default install requires Node.js, LangGraph, Phoenix, Ragas, DeepEval or an external Trace service.",
+      "Mechanism tests pass while real user task completion, answer usability or recovery experience fails."
+    ]
+  },
+  "selected_architecture": {
+    "decision": "single_fastapi_with_packaged_static_workbench",
+    "web_assets": "packaged HTML, CSS and ES modules served same-origin without CDN or Node.js",
+    "service_count": 1,
+    "authority": "one SQLite database",
+    "worker_count": 1,
+    "queue": "existing persistent SQLite work queue",
+    "default_strategy": "fixed-arxiv-v1",
+    "default_user_entry": "conflux-weave serve",
+    "default_port": 8000,
+    "uvicorn_processes": 1,
+    "rejected_alternatives": [
+      "React/Vite for the first release because it adds a Node.js build and release chain before a second UI consumer exists.",
+      "Streamlit, Gradio or a second frontend service because they create a second service/state boundary and weaken the frozen recovery contract."
+    ]
+  },
+  "golden_path": {
+    "task_family": "paper_discovery",
+    "workflow": "bounded-paper-discovery-durable-v1",
+    "strategy": "fixed-arxiv-v1",
+    "steps": [
+      "fresh_clone",
+      "install",
+      "configure_one_provider",
+      "start",
+      "ask_first_question",
+      "observe_progress",
+      "receive_cited_answer",
+      "inspect_evidence_and_limitations",
+      "reopen_or_recover_run"
+    ],
+    "first_success_minutes_max": 10,
+    "provider_wait_time_recorded_separately": true,
+    "second_durable_vertical_slice_in_w5": false
+  },
+  "product_surface": {
+    "first_screen": "research_workbench_not_marketing_page",
+    "required_capabilities": [
+      "submit one natural-language paper-discovery task",
+      "view user-language Run progress and compact budget state",
+      "cancel before later external calls start",
+      "perform only Runtime-authorized explicit recovery",
+      "read answer text with numeric Citations",
+      "open registered Evidence and SourceSnapshot locators",
+      "read limitations, unmet criteria and recovery actions",
+      "list and reopen recent Runs"
+    ],
+    "prohibited_primary_ui": [
+      "Agent count",
+      "LangGraph node names",
+      "SQLite status names",
+      "Trace dashboard",
+      "evaluation scores",
+      "bounded-arxiv-planner-v1 strategy selection"
+    ]
+  },
+  "api_contract": {
+    "prefix": "/api/v1",
+    "endpoints": [
+      "POST /api/v1/tasks/research",
+      "GET /api/v1/runs?cursor=&limit=",
+      "GET /api/v1/runs/{run_id}",
+      "POST /api/v1/runs/{run_id}/cancel",
+      "POST /api/v1/runs/{run_id}/resume",
+      "GET /api/v1/runs/{run_id}/events?after={event_id}",
+      "GET /api/v1/runs/{run_id}/artifacts",
+      "GET /api/v1/evidence/{evidence_id}",
+      "GET /api/v1/health/live",
+      "GET /api/v1/health/ready"
+    ],
+    "invariants": [
+      "POST persists or returns one idempotent Task/Run and does not execute the whole workflow in the request thread.",
+      "SSE is a projection of SQLite run_events and event_id is the reconnect cursor.",
+      "The Run snapshot, not the last browser event, is terminal-state authority.",
+      "Resume accepts only an explicit recovery decision already admitted by Runtime policy.",
+      "An unknown paid external result is never automatically replayed.",
+      "Artifact and Evidence reads accept only registered identifiers, never arbitrary filesystem paths.",
+      "Errors do not expose API keys, raw Provider responses or local absolute paths."
+    ]
+  },
+  "runtime_layout": {
+    "data_root": "var",
+    "database": "var/db/conflux-weave.sqlite3",
+    "artifacts": "var/artifacts/sha256",
+    "indexes": "var/indexes",
+    "exports": "var/exports",
+    "logs": "var/logs",
+    "default_port": 8000,
+    "port_was_free_at_freeze": true,
+    "workbench_service_running_at_freeze": false,
+    "database_present_at_freeze": false,
+    "artifact_root_present_at_freeze": true,
+    "dotenv_present_at_freeze": true,
+    "dotenv_values_read_for_freeze": false
+  },
+  "dependency_contract": {
+    "python": "3.12.9",
+    "uv": "0.6.9",
+    "project_version": "0.0.1",
+    "resolved_package_count": 9,
+    "baseline_runtime_dependencies": [
+      "pypdf>=5,<7",
+      "python-dotenv>=1,<2"
+    ],
+    "baseline_dev_dependencies": [
+      "pytest>=8.3,<9"
+    ],
+    "pyproject_git_blob": "cb3b0e42a2048d6adbe15f26faecf14e9fc6f3bb",
+    "uv_lock_git_blob": "4e32f390163759d2f97705bed1fbc95bdb96c604",
+    "planned_dependency_decision": "FastAPI and Uvicorn require an accepted ADR and lock diff at W5.1 before use.",
+    "default_install_prohibited": [
+      "Node.js",
+      "LangGraph",
+      "Phoenix",
+      "Ragas",
+      "DeepEval"
+    ]
+  },
+  "offline_smoke_contract": {
+    "network": false,
+    "provider": false,
+    "fixture_adapters_only": true,
+    "sample_corpus_versioned": true,
+    "required_path": "install -> API -> Run -> Delivery -> Citation -> Workbench read",
+    "required_label": "offline_smoke",
+    "capability_claim": "installation and local mechanism validation only; not live research capability"
+  },
+  "acceptance_points": [
+    {
+      "id": "W5.0",
+      "name": "转段、基线与范围冻结",
+      "status_at_freeze": "validated_offline"
+    },
+    {
+      "id": "W5.1",
+      "name": "应用查询与 API 合同",
+      "status_at_freeze": "pending"
+    },
+    {
+      "id": "W5.2",
+      "name": "单 FastAPI 与 Worker",
+      "status_at_freeze": "pending"
+    },
+    {
+      "id": "W5.3",
+      "name": "最小 Workbench",
+      "status_at_freeze": "pending"
+    },
+    {
+      "id": "W5.4",
+      "name": "安装、配置与离线 smoke",
+      "status_at_freeze": "pending"
+    },
+    {
+      "id": "W5.5",
+      "name": "可用性与故障验收",
+      "status_at_freeze": "pending"
+    },
+    {
+      "id": "W5.6",
+      "name": "清洁环境首次成功",
+      "status_at_freeze": "pending_separate_live_authorization"
+    },
+    {
+      "id": "W5.7",
+      "name": "个人持续使用与发布裁决",
+      "status_at_freeze": "pending_separate_live_authorization"
+    }
+  ],
+  "w5_1_candidate_file_boundary": {
+    "allowed_after_explicit_w5_1_entry": [
+      "docs/decisions/* for the accepted FastAPI/Uvicorn dependency decision",
+      "pyproject.toml and uv.lock for the accepted minimal HTTP dependencies",
+      "src/conflux_weave/api_contracts.py (new)",
+      "src/conflux_weave/runtime/sqlite_task_runs.py for paginated read queries only",
+      "src/conflux_weave/runtime/sqlite_leases.py for cursor-based event reads only",
+      "src/conflux_weave/runtime/sqlite_delivery.py for registered Artifact/Evidence reads only",
+      "tests/test_api_contracts.py (new)",
+      "tests/test_w5_scope_freeze.py"
+    ],
+    "prohibited_until_later_acceptance_points": [
+      "ASGI server startup or background Worker loop",
+      "Workbench HTML, CSS or JavaScript",
+      "browser execution or screenshots",
+      "offline smoke corpus and fixture mode",
+      "README onboarding rewrite",
+      "public network, Provider or paid calls"
+    ]
+  },
+  "out_of_scope": [
+    "Revising or re-enabling the rejected W4 bounded Planner.",
+    "A second durable vertical slice, full-text paper verification or cross-database review.",
+    "React, Vite, Node.js, Streamlit, Gradio, Electron or a second service.",
+    "Multiple Workers, message queues, distributed databases, object storage or orchestration.",
+    "Experiment management, evaluation dashboards, Trace UI or evaluator configuration pages.",
+    "Memory, Skills, MCP, multi-Agent, plugin marketplace or multi-tenancy.",
+    "Automatic retry, fallback, constraint relaxation or replay of unknown paid calls."
+  ],
+  "authorization": {
+    "w5_0_documentation_and_machine_checks": "completed",
+    "implementation": "not_authorized_by_this_acceptance_point",
+    "dependency_changes": "not_authorized_by_this_acceptance_point",
+    "browser_execution": "not_authorized_by_this_acceptance_point",
+    "public_network_search": "explicit_live_run_authorization_required",
+    "model_provider_calls": "provider_model_budget_and_live_run_authorization_required",
+    "paid_services": "not_authorized",
+    "w5_6_and_w5_7": "separate_freeze_and_authorization_required"
+  },
+  "stop_conditions": [
+    "Workbench requires changing Evidence, Budget, Lease/Fencing or unknown-effect authority.",
+    "One-command startup requires a second scheduler, service, Worker pool or Node build environment.",
+    "First success requires writing a Secret to Git, SQLite, URL, browser storage or Artifact.",
+    "UI state cannot be reconstructed from SQLite after refresh or service restart.",
+    "The ten-minute goal can be met only by weakening Citation closure, error retention or real installation.",
+    "W5 requires migration of a second vertical slice and thereby changes the frozen goal or acceptance."
+  ],
+  "next_acceptance_point_at_freeze": "W5.1 应用查询与 API 合同；必须由用户明确进入后才允许修改依赖或产品代码"
+}

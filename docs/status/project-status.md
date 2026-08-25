@@ -5,13 +5,13 @@ Updated: 2026-08-24
 | Area | Status | Evidence boundary |
 |---|---|---|
 | Design v0.2 | `proposed` | Current design basis; not implementation proof |
-| Repository framework | `validated_live` | Python 3.12.9; 229 tests passed; W3 paired live boundary remains unchanged by offline W4 additions |
+| Repository framework | `validated_live` | Python 3.12.9; 255 tests passed; W3 paired live boundary remains unchanged by offline W4/W5.0-W5.2 additions |
 | W0 | `validated_offline` | W0.1-W0.5 passed; 12 frozen cases, runtime contracts, and read-only legacy inventory are consistent |
 | W1 | `validated_live` | W1.0-W1.5 passed at frozen boundaries; LIVE-01 review note and LIVE-02 repository identity both delivered explicit partial results with raw evidence retained |
 | W2 | `validated_live` | BM25/Web Fetch/Evidence delivery validated offline; three accepted live tasks across paper discovery and project evidence Q&A produced bounded partial deliveries |
 | W3 | `validated_live` | Persistence/recovery passed offline; original W3.6 and post-refactor R1 each passed 2/2 frozen paired live Runs through the durable CLI |
-| W4 | `w4_6_preflight_blocked` | User entered W4.6, but W4.5 rejected C at 1/3 versus the required 2/3; no live or paid calls were started |
-| W5 | `proposed_for_scope_freeze` | Execution plan is refined; no W5 product code, dependency, browser, network, or Provider work has started |
+| W4 | `closed_negative_fixed_default` | W4.5 rejected C at 1/3 versus the required 2/3; W4.6 stayed blocked with zero live/paid calls, and W5.0 closed the candidate while retaining Fixed as default |
+| W5 | `w5_2_validated_offline` | Single FastAPI boundary, lifespan Worker and persisted SSE passed offline; no Workbench, Uvicorn process, browser, research network, Provider or live Run has started |
 | W6 | `pending` | No second product slice has been implemented |
 | Live capability | `bounded_retrieval_evidence` | qwen3.7-flash completed bounded arXiv metadata/abstract discovery and GitHub evidence Q&A; failures and raw responses retained |
 
@@ -130,11 +130,43 @@ protocol were not frozen because they cannot cure the failed prerequisite. No pu
 network, real arXiv, Provider or paid call was started. Recovery requires either keeping
 fixed as the W4 outcome or freezing a materially revised C and repeating W4.5 first.
 
+W5.0 is validated offline against clean revision `af69a33` and Git tree `5cf39f1`.
+It closes W4 as a negative candidate decision while preserving Fixed as default, and
+freezes the single FastAPI/static Workbench direction, port 8000, `var/` data layout,
+golden path, API boundary, non-goals and later authorization gates. The first explicit
+basetemp run retained `102 passed, 127 setup errors` because its ignored parent did not
+exist; after creating that parent the unchanged baseline passed 229 tests. With four
+W5 scope checks added, the final suite passed 233 tests and offline sdist/wheel build.
+No FastAPI/Uvicorn dependency, product code, browser, public network, Provider, paid
+call or live Run was introduced; W5.0 does not prove Workbench or first-success ability.
+
+W5.1 is validated offline on the W5.0 working baseline. ADR 0002 accepts FastAPI and
+Uvicorn for the future single HTTP boundary; the lock now resolves 22 packages, including
+FastAPI 0.141.1, Pydantic 2.13.4 and Uvicorn 0.52.4. The first offline-only lock attempt
+failed because the required distributions were not cached; normal dependency acquisition
+then accessed the package registry and succeeded. This access is not research-network or
+live capability evidence. Read-only contracts now provide stable Run pagination, persisted
+Event cursors, user-facing Run details, registered Delivery Artifact reads, fail-closed
+Evidence lookup from registered rank checkpoints, sanitized errors and local readiness.
+Focused tests passed 24 and the full suite passed 249. No FastAPI app, Uvicorn process,
+Worker, SSE transport, Workbench, browser, research source, Provider, paid call or live Run
+was executed; at W5.1 acceptance, W5.2 remained separately gated.
+
+W5.2 is validated offline on the same W5 working tree. A single FastAPI ASGI app now
+exposes task submission, Run query/cancel/resume, persisted Event SSE, Artifact/Evidence
+reads and local health routes. Its lifespan owns one injected WorkerLoop, while the
+explicit CLI `serve` command fixes Uvicorn to one worker. Mutations write through the
+existing SQLite authority; SSE resumes by persisted `event_id` and ends after terminal
+state. Focused tests passed 30 and the full suite passed 255; compileall and direct server
+imports passed. No Uvicorn process, Workbench asset, browser, research source, Provider,
+paid call or live Run was started. W5.3 is the next acceptance point and is now explicitly
+authorized, but its implementation is not part of this committed W5.0-W5.2 baseline.
+
 Latest framework verification:
 
 ```text
-uv sync --frozen --python 3.12       passed
-uv run --frozen pytest               229 passed
-uv run --frozen python -m compileall passed
-uv build                             sdist and wheel built
+uv lock --check                                      passed; 22 packages
+uv run --frozen pytest -q -p no:cacheprovider        255 passed
+uv run --frozen python -m compileall -q src tests    passed
+uv build --offline --out-dir <ignored path>          sdist and wheel built
 ```

@@ -1,0 +1,109 @@
+{
+  "acceptance_id": "W5.1",
+  "status": "validated_offline",
+  "accepted_at": "2026-08-24",
+  "scope_freeze": "docs/plans/current/W5-scope-freeze.json",
+  "implementation_plan": "docs/plans/current/W5-实施方案.md",
+  "verification_base_revision": "af69a33d3513a0fadd145d08b810ba4e1b4a5de4",
+  "working_tree_mode": "W5.0 and W5.1 changes remain uncommitted on top of the clean verification base",
+  "dependency_decision": {
+    "adr": "docs/decisions/0002-use-fastapi-for-single-http-boundary.md",
+    "resolved_package_count": 22,
+    "fastapi": "0.141.1",
+    "pydantic": "2.13.4",
+    "uvicorn": "0.52.4",
+    "offline_lock_attempt": "failed because required FastAPI and Pydantic distributions were not present in the local cache",
+    "normal_lock_attempt": "passed after package-registry dependency acquisition",
+    "evidence_boundary": "Package registry access acquired dependencies only; it did not call a research source, model Provider or live workflow."
+  },
+  "implemented_contracts": {
+    "request_response_models": "strict frozen Pydantic models with extra fields rejected",
+    "run_state_projection": "internal RunStatus mapped to stable user-facing states and messages",
+    "run_pagination": "descending created_at and run_id keyset cursor with no duplicate continuation",
+    "event_projection": "persisted run_events read after an event_id cursor with structured detail validation",
+    "run_detail": "query, user state, progress, budget, Delivery and sanitized Error without config snapshots or internal Step names",
+    "artifact_access": "only Artifact registrations published by the requested Run Delivery are readable",
+    "evidence_access": "Delivery reference required; only registered successful rank checkpoints for the Run are parsed; missing, invalid, corrupt or conflicting definitions fail closed",
+    "readiness": "local database, Artifact root and Provider-configured boolean checks without network calls, paths or secrets",
+    "error_mapping": "stable status and error bodies without internal exception detail"
+  },
+  "commands": [
+    {
+      "command": "uv lock --offline",
+      "attempt": 1,
+      "result": "failed",
+      "cause": "FastAPI and Pydantic package distributions required by the new dependency graph were not available in the local cache.",
+      "evidence_boundary": "Failure retained; no research or Provider call was attempted."
+    },
+    {
+      "command": "uv lock",
+      "attempt": 2,
+      "result": "passed; resolved 22 packages",
+      "network_classification": "dependency registry acquisition only"
+    },
+    {
+      "command": "uv sync --frozen",
+      "result": "passed"
+    },
+    {
+      "command": "uv run --frozen pytest -q -p no:cacheprovider tests/test_api_contracts.py tests/test_architecture.py tests/test_w5_scope_freeze.py",
+      "result": "24 passed in 4.17 seconds"
+    },
+    {
+      "command": "uv run --frozen pytest -q -p no:cacheprovider --basetemp=var/tmp/w5_1_pytest_full_20260824_1",
+      "result": "249 passed in 218.04 seconds"
+    },
+    {
+      "command": "uv lock --check",
+      "result": "passed; resolved 22 packages"
+    },
+    {
+      "command": "uv run --frozen python -m compileall -q src tests",
+      "result": "passed"
+    },
+    {
+      "command": "uv build --offline --out-dir var/tmp/w5_1_dist_20260824_1",
+      "result": "passed; sdist and wheel built without network access"
+    }
+  ],
+  "build_artifacts": [
+    {
+      "name": "conflux_weave-0.0.1-py3-none-any.whl",
+      "bytes": 126702,
+      "sha256": "339fc062ab4db2ce0a57e4413de1cfbfd7bb5cb374d4b3b2113fb5556fc2778e"
+    },
+    {
+      "name": "conflux_weave-0.0.1.tar.gz",
+      "bytes": 337811,
+      "sha256": "30ff638597aa1025aa525d5bfb28c11c07a98e24fddd41b5a01889e14d0345cf"
+    }
+  ],
+  "execution_evidence": {
+    "dependency_registry_acquisition": true,
+    "research_source_calls": 0,
+    "real_provider_calls": 0,
+    "paid_calls": 0,
+    "live_runs_created": 0,
+    "fastapi_app_instances_created": 0,
+    "uvicorn_processes_started": 0,
+    "worker_loops_started": 0,
+    "sse_transports_started": 0,
+    "workbench_assets_created": 0,
+    "browser_runs": 0,
+    "automatic_retry": false,
+    "fallback": false
+  },
+  "acceptance": {
+    "repository_query_contracts_passed": true,
+    "api_model_contracts_passed": true,
+    "cursor_continuation_passed": true,
+    "artifact_and_evidence_access_fail_closed": true,
+    "error_and_readiness_outputs_sanitized": true,
+    "complete_offline_regression_passed": true,
+    "offline_distribution_build_passed": true,
+    "later_stage_boundaries_preserved": true,
+    "decision": "pass"
+  },
+  "evidence_boundary": "W5.1 proves offline application-query and API data-contract mechanisms only. It does not prove HTTP routing, ASGI lifecycle, Worker execution, SSE reconnect behavior over a network, Workbench usability, clean-environment onboarding or new live research capability.",
+  "next_acceptance_point": "W5.2 单 FastAPI 与 Worker；not authorized by W5.1 and requires explicit user entry"
+}

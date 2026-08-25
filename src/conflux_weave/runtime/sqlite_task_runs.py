@@ -23,6 +23,9 @@ from conflux_weave.runtime.sqlite_contracts import (
     RecordNotFound,
     RecoveryDecision,
     RecoveryDecisionRequired,
+    RunCursor,
+    RunListPage,
+    RunOverviewRecord,
     SideEffectClass,
     StepPolicy,
     SubmissionResult,
@@ -245,6 +248,59 @@ class TaskRunRepositoryMixin:
         if row is None:
             raise RecordNotFound("Run not found")
         return _run_from_row(row)
+
+    def list_runs(
+        self,
+        *,
+        cursor: RunCursor | None = None,
+        limit: int = 20,
+    ) -> RunListPage:
+        if not 1 <= limit <= 100:
+            raise ValueError("Run page limit must be between 1 and 100")
+        if cursor is not None and (
+            not cursor.created_at.strip() or not cursor.run_id.strip()
+        ):
+            raise ValueError("Run cursor fields must not be empty")
+        where = ""
+        parameters: list[object] = []
+        if cursor is not None:
+            where = """
+                WHERE r.created_at < ?
+                   OR (r.created_at = ? AND r.run_id < ?)
+            """
+            parameters.extend(
+                (cursor.created_at, cursor.created_at, cursor.run_id)
+            )
+        parameters.append(limit + 1)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                    SELECT r.*, t.kind AS task_kind, t.input_json AS task_input_json
+                    FROM runs r
+                    JOIN tasks t ON t.task_id = r.task_id
+                    {where}
+                    ORDER BY r.created_at DESC, r.run_id DESC
+                    LIMIT ?
+                """,
+                parameters,
+            ).fetchall()
+        visible = rows[:limit]
+        items = tuple(
+            RunOverviewRecord(
+                run=_run_from_row(row),
+                task_kind=str(row["task_kind"]),
+                task_input=json.loads(row["task_input_json"]),
+            )
+            for row in visible
+        )
+        next_cursor = None
+        if len(rows) > limit and visible:
+            last = visible[-1]
+            next_cursor = RunCursor(
+                created_at=str(last["created_at"]),
+                run_id=str(last["run_id"]),
+            )
+        return RunListPage(items=items, next_cursor=next_cursor)
 
     def get_steps(self, run_id: str) -> tuple[StepRecord, ...]:
         with self._connect() as connection:

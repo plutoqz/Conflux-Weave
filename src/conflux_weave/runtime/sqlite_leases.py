@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from typing import Sequence
 
@@ -14,6 +15,7 @@ from conflux_weave.runtime.sqlite_contracts import (
     LeaseConflict,
     PersistenceInvariantError,
     RecordNotFound,
+    RunEventRecord,
     SideEffectClass,
 )
 from conflux_weave.runtime.sqlite_base import (
@@ -587,6 +589,52 @@ class LeaseRepositoryMixin:
         if row is None:
             raise RecordNotFound("Attempt effect not found")
         return _attempt_effect_from_row(row)
+
+    def get_run_events(
+        self,
+        run_id: str,
+        *,
+        after_event_id: int = 0,
+        limit: int = 100,
+    ) -> tuple[RunEventRecord, ...]:
+        if after_event_id < 0:
+            raise ValueError("Event cursor must not be negative")
+        if not 1 <= limit <= 500:
+            raise ValueError("Event page limit must be between 1 and 500")
+        with self._connect() as connection:
+            exists = connection.execute(
+                "SELECT 1 FROM runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if exists is None:
+                raise RecordNotFound("Run not found")
+            rows = connection.execute(
+                """
+                    SELECT event_id, run_id, step_id, attempt_id,
+                           event_type, detail_json, created_at
+                    FROM run_events
+                    WHERE run_id = ? AND event_id > ?
+                    ORDER BY event_id
+                    LIMIT ?
+                """,
+                (run_id, after_event_id, limit),
+            ).fetchall()
+        records = []
+        for row in rows:
+            detail = json.loads(row["detail_json"])
+            if not isinstance(detail, dict):
+                raise PersistenceInvariantError("Run Event detail must be an object")
+            records.append(
+                RunEventRecord(
+                    event_id=int(row["event_id"]),
+                    run_id=str(row["run_id"]),
+                    step_id=row["step_id"],
+                    attempt_id=row["attempt_id"],
+                    event_type=str(row["event_type"]),
+                    detail=detail,
+                    created_at=str(row["created_at"]),
+                )
+            )
+        return tuple(records)
 
     def cancel_claim(self, claim: LeaseClaim, *, now: str | None = None) -> RunRecord:
         cancelled_at = _normalize_timestamp(now or self.clock())

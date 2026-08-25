@@ -32,6 +32,27 @@ from conflux_weave.runtime.sqlite_base import (
 
 
 class DeliveryArtifactRepositoryMixin:
+    def get_artifact_registrations(self, artifact_id: str) -> tuple[ArtifactRef, ...]:
+        if not artifact_id.strip():
+            raise ValueError("Artifact id must not be empty")
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                    SELECT
+                        a.artifact_id, a.content_hash, a.storage_uri,
+                        ar.media_type, ar.producer_step_id, ar.schema_version
+                    FROM artifacts a
+                    JOIN artifact_registrations ar
+                      ON ar.artifact_id = a.artifact_id
+                    WHERE a.artifact_id = ?
+                    ORDER BY ar.registration_id
+                """,
+                (artifact_id,),
+            ).fetchall()
+        if not rows:
+            raise RecordNotFound("Artifact registration not found")
+        return tuple(_artifact_from_row(row) for row in rows)
+
     def get_step_artifacts(self, step_id: str) -> tuple[ArtifactRef, ...]:
         with self._connect() as connection:
             rows = connection.execute(

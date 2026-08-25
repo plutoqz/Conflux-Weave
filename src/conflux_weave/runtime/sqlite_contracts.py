@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Any
 
-from conflux_weave.core import ErrorRecord
+from conflux_weave.core import ErrorRecord, RunRecord
 
 
 class PersistenceError(RuntimeError):
@@ -92,6 +93,36 @@ class TelemetryDropRecord:
     attempt_id: str | None
     span_name: str
     reason: str
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class RunCursor:
+    created_at: str
+    run_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class RunOverviewRecord:
+    run: RunRecord
+    task_kind: str
+    task_input: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class RunListPage:
+    items: tuple[RunOverviewRecord, ...]
+    next_cursor: RunCursor | None
+
+
+@dataclass(frozen=True, slots=True)
+class RunEventRecord:
+    event_id: int
+    run_id: str
+    step_id: str | None
+    attempt_id: str | None
+    event_type: str
+    detail: dict[str, Any]
     created_at: str
 
 

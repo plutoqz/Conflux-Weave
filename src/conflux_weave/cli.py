@@ -167,6 +167,18 @@ def build_parser() -> argparse.ArgumentParser:
             type=Path,
             default=Path("var") / "artifacts" / "sha256",
         )
+    serve = subparsers.add_parser(
+        "serve", help="start the single local FastAPI application and Worker"
+    )
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument("--dotenv", type=Path, default=Path(".env"))
+    serve.add_argument(
+        "--database", type=Path, default=Path("var") / "db" / "conflux-weave.sqlite3"
+    )
+    serve.add_argument(
+        "--artifact-root", type=Path, default=Path("var") / "artifacts" / "sha256"
+    )
     return parser
 
 
@@ -177,6 +189,21 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "durable-paper":
         return run_durable_paper(args, _print_json)
+    if args.command == "serve":
+        from conflux_weave.server import build_local_app
+        uvicorn = __import__("uvicorn")
+
+        uvicorn.run(
+            build_local_app(
+                database=args.database,
+                artifact_root=args.artifact_root,
+                dotenv_path=args.dotenv,
+            ),
+            host=args.host,
+            port=args.port,
+            workers=1,
+        )
+        return 0
     if args.command in _LIVE_RESEARCH_COMMANDS:
         return run_live_research(args, _print_json)
     if args.command in _SOURCE_INGESTION_COMMANDS:

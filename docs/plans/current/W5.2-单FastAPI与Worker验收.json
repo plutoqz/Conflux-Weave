@@ -1,0 +1,61 @@
+{
+  "acceptance_id": "W5.2",
+  "status": "validated_offline",
+  "accepted_at": "2026-08-25",
+  "scope_freeze": "docs/plans/current/W5-scope-freeze.json",
+  "implementation_plan": "docs/plans/current/W5-实施方案.md",
+  "verification_base_revision": "af69a33d3513a0fadd145d08b810ba4e1b4a5de4",
+  "working_tree_mode": "W5.0 through W5.2 changes remain uncommitted on top of the clean verification base",
+  "implemented_scope": {
+    "http_boundary": "one FastAPI ASGI application",
+    "worker_lifecycle": "one injected WorkerLoop started and stopped by ASGI lifespan",
+    "cli": "explicit serve command with Uvicorn workers fixed to 1",
+    "mutations": "research submission, cancellation and explicit resume write through the SQLite authority",
+    "queries": "Run list/detail, Delivery Artifact and Evidence routes reuse W5.1 application contracts",
+    "events": "SSE projects persisted run_events after an event_id cursor and closes after terminal state",
+    "health": "local liveness and readiness; missing Provider configuration degrades readiness without an external call"
+  },
+  "commands": [
+    {
+      "command": "uv run --frozen pytest -q -p no:cacheprovider tests/test_server.py tests/test_api_contracts.py tests/test_architecture.py tests/test_w5_scope_freeze.py",
+      "result": "30 passed in 6.20 seconds"
+    },
+    {
+      "command": "uv run --frozen pytest -q -p no:cacheprovider",
+      "result": "255 passed in 261.86 seconds"
+    },
+    {
+      "command": "uv run --frozen python -m compileall -q src tests",
+      "result": "passed"
+    },
+    {
+      "command": "uv run --frozen python -c \"from conflux_weave.server import create_app, WorkerLoop\"",
+      "result": "passed"
+    }
+  ],
+  "execution_evidence": {
+    "uvicorn_processes_started": 0,
+    "injected_worker_fixture_start_count": 1,
+    "workbench_assets_created": 0,
+    "browser_runs": 0,
+    "research_source_calls": 0,
+    "real_provider_calls": 0,
+    "paid_calls": 0,
+    "live_runs_created": 0,
+    "automatic_retry": false,
+    "fallback": false
+  },
+  "acceptance": {
+    "single_asgi_boundary_passed": true,
+    "single_worker_lifecycle_passed": true,
+    "sqlite_mutation_round_trip_passed": true,
+    "persisted_sse_projection_passed": true,
+    "terminal_sse_close_passed": true,
+    "local_readiness_degradation_passed": true,
+    "no_workbench_boundary_passed": true,
+    "complete_offline_regression_passed": true,
+    "decision": "pass"
+  },
+  "evidence_boundary": "W5.2 proves the offline single-process FastAPI, Worker lifecycle, SQLite mutation and persisted SSE mechanisms. It does not prove a real socket server, multi-process deployment, Workbench usability, clean-environment onboarding, real Provider execution, new live research capability or production reliability.",
+  "next_acceptance_point": "W5.3 最小 Workbench；explicitly authorized by the user, not implemented in W5.2"
+}
