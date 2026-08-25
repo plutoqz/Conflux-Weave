@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+import mimetypes
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Protocol
 
 from fastapi import FastAPI, Query
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 
 from conflux_weave.api_contracts import (
     ApiErrorResponse,
+    ArtifactContentResponse,
     ResearchTaskAcceptedResponse,
     ResearchTaskRequest,
     RunDetailResponse,
@@ -82,6 +85,10 @@ class WorkerLoop:
 class RecoveryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     decision: RecoveryDecision | None = None
+
+
+WORKBENCH_ROOT = Path(__file__).with_name("workbench")
+mimetypes.add_type("text/javascript", ".js")
 
 
 def create_app(
@@ -204,6 +211,24 @@ def create_app(
         except Exception as exc:
             return error_response(exc)
 
+    @app.get(
+        "/api/v1/runs/{run_id}/artifacts/{artifact_id}/content",
+        response_model=ArtifactContentResponse,
+    )
+    async def read_artifact(run_id: str, artifact_id: str):
+        try:
+            metadata, content = query_service.read_delivery_artifact(run_id, artifact_id)
+            if len(content) > 2_000_000:
+                raise ValueError("Delivery Artifact exceeds the Workbench display limit")
+            return ArtifactContentResponse(
+                artifact=metadata,
+                content=content.decode("utf-8"),
+            )
+        except UnicodeDecodeError as exc:
+            return error_response(ValueError("Delivery Artifact is not UTF-8 text"))
+        except Exception as exc:
+            return error_response(exc)
+
     @app.get("/api/v1/evidence/{evidence_id}")
     async def get_evidence(evidence_id: str, run_id: str):
         try:
@@ -218,6 +243,12 @@ def create_app(
     @app.get("/api/v1/health/ready")
     async def ready_health():
         return query_service.readiness(provider_configured=provider_configured)
+
+    app.mount("/assets", StaticFiles(directory=WORKBENCH_ROOT), name="workbench-assets")
+
+    @app.get("/", include_in_schema=False)
+    async def workbench_index() -> FileResponse:
+        return FileResponse(WORKBENCH_ROOT / "index.html", media_type="text/html")
 
     return app
 

@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>Conflux Weave</title>
+    <link rel="stylesheet" href="/assets/styles.css?v=w5.3">
+    <script type="module" src="/assets/app.js?v=w5.3"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Conflux Weave 工作台">
+        <span class="brand-mark" aria-hidden="true">CW</span>
+        <span>
+          <strong>Conflux Weave</strong>
+          <small>Research Workbench</small>
+        </span>
+      </a>
+      <div id="health" class="health" role="status">
+        <span class="health-dot" aria-hidden="true"></span>
+        <span>正在检查</span>
+      </div>
+    </header>
+
+    <div class="app-shell">
+      <aside class="run-sidebar" aria-label="研究历史">
+        <div class="sidebar-heading">
+          <div>
+            <span class="eyebrow">History</span>
+            <h2>最近研究</h2>
+          </div>
+          <button class="icon-button" id="new-task" type="button" title="新建研究" aria-label="新建研究">+</button>
+        </div>
+        <div id="run-list" class="run-list" aria-live="polite"></div>
+        <button id="load-more" class="quiet-button full-width" type="button" hidden>加载更多</button>
+      </aside>
+
+      <main class="workspace">
+        <section id="empty-view" class="empty-view">
+          <div class="empty-mark" aria-hidden="true">01</div>
+          <p class="eyebrow">Research query</p>
+          <h1>开始一次有证据边界的研究</h1>
+          <p>提交问题后，结果、引用、限制与恢复动作会保存在同一个 Run 中。</p>
+          <button class="primary-button" data-open-task type="button">新建研究</button>
+        </section>
+
+        <section id="run-view" class="run-view" hidden>
+          <header class="run-header">
+            <div class="run-title-block">
+              <div class="run-kicker">
+                <span id="run-family">论文发现</span>
+                <span id="run-date"></span>
+              </div>
+              <h1 id="run-query"></h1>
+              <p id="run-message" class="run-message"></p>
+            </div>
+            <div class="run-actions">
+              <span id="run-state" class="state-badge"></span>
+              <button id="cancel-run" class="danger-button" type="button" hidden>取消</button>
+              <button id="retry-run" class="primary-button" type="button" hidden>重新执行</button>
+              <button id="fail-run" class="quiet-button" type="button" hidden>标记失败</button>
+            </div>
+          </header>
+
+          <div class="summary-strip" aria-label="运行摘要">
+            <section>
+              <span>进度</span>
+              <strong id="progress-value">0 / 0</strong>
+              <div class="progress-track" aria-hidden="true"><i id="progress-bar"></i></div>
+            </section>
+            <section>
+              <span>模型用量</span>
+              <strong id="token-value">0 tokens</strong>
+              <small id="budget-state"></small>
+            </section>
+            <section>
+              <span>检索轮次</span>
+              <strong id="retrieval-value">0 / 0</strong>
+              <small id="tool-value"></small>
+            </section>
+          </div>
+
+          <div class="tabs" role="tablist" aria-label="Run 视图">
+            <button id="answer-tab" role="tab" aria-selected="true" aria-controls="answer-panel" type="button">结果</button>
+            <button id="activity-tab" role="tab" aria-selected="false" aria-controls="activity-panel" type="button">动态 <span id="event-count">0</span></button>
+          </div>
+
+          <section id="answer-panel" role="tabpanel" aria-labelledby="answer-tab">
+            <div id="answer-loading" class="inline-status">正在读取交付结果...</div>
+            <article id="answer-content" class="answer-content" hidden></article>
+            <div id="answer-empty" class="panel-empty" hidden>
+              <strong>结果尚未生成</strong>
+              <span>当前 Run 的状态更新会自动显示在这里。</span>
+            </div>
+
+            <section id="evidence-section" class="content-section" hidden>
+              <div class="section-heading">
+                <div>
+                  <span class="eyebrow">Evidence</span>
+                  <h2>引用证据</h2>
+                </div>
+                <span id="evidence-count" class="count-label"></span>
+              </div>
+              <div id="evidence-list" class="evidence-list"></div>
+            </section>
+
+            <section id="limitations-section" class="content-section" hidden>
+              <div class="section-heading">
+                <div>
+                  <span class="eyebrow">Boundaries</span>
+                  <h2>限制与后续动作</h2>
+                </div>
+              </div>
+              <div id="limitations-list" class="boundary-list"></div>
+            </section>
+          </section>
+
+          <section id="activity-panel" role="tabpanel" aria-labelledby="activity-tab" hidden>
+            <div id="event-list" class="event-list"></div>
+            <div id="event-empty" class="panel-empty">
+              <strong>暂无新的运行动态</strong>
+              <span>页面会从持久化事件流接收后续状态。</span>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="task-dialog" class="task-dialog">
+      <form id="task-form" method="dialog">
+        <header class="dialog-header">
+          <div>
+            <span class="eyebrow">New research</span>
+            <h2>新建研究</h2>
+          </div>
+          <button class="icon-button" value="cancel" formmethod="dialog" type="submit" aria-label="关闭" title="关闭">&times;</button>
+        </header>
+        <label class="field-label" for="query">研究问题</label>
+        <textarea id="query" name="query" rows="6" maxlength="4000" required></textarea>
+        <div class="field-grid">
+          <label>
+            <span class="field-label">主题</span>
+            <input id="topics" name="topics" type="text" maxlength="600">
+          </label>
+          <label>
+            <span class="field-label">候选数量</span>
+            <input id="max-results" name="max_results" type="number" min="1" max="50" value="15" required>
+          </label>
+        </div>
+        <p id="task-error" class="form-error" role="alert" hidden></p>
+        <footer class="dialog-actions">
+          <button class="quiet-button" value="cancel" formmethod="dialog" type="submit">取消</button>
+          <button id="submit-task" class="primary-button" type="button">创建 Run</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="evidence-dialog" class="evidence-dialog">
+      <article>
+        <header class="dialog-header">
+          <div>
+            <span class="eyebrow">Source evidence</span>
+            <h2 id="evidence-title">证据</h2>
+          </div>
+          <button class="icon-button" data-close-evidence type="button" aria-label="关闭" title="关闭">&times;</button>
+        </header>
+        <blockquote id="evidence-quote"></blockquote>
+        <dl class="evidence-meta">
+          <div><dt>来源快照</dt><dd id="evidence-source"></dd></div>
+          <div><dt>提取方式</dt><dd id="evidence-method"></dd></div>
+          <div><dt>定位</dt><dd><pre id="evidence-locator"></pre></dd></div>
+        </dl>
+      </article>
+    </dialog>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  </body>
+</html>

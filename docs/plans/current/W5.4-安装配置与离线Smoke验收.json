@@ -1,0 +1,66 @@
+{
+  "acceptance_id": "W5.4",
+  "status": "validated_offline",
+  "accepted_at": "2026-08-25",
+  "scope_freeze": "docs/plans/current/W5-scope-freeze.json",
+  "implementation_plan": "docs/plans/current/W5-实施方案.md",
+  "verification_base_revision": "2e1219c60c55834021eeb121a95f313c79e1acb3",
+  "working_tree_mode": "W5.4 changes remain uncommitted on top of W5.0-W5.3 changes",
+  "implemented_scope": {
+    "command": "conflux-weave offline-smoke",
+    "network_boundary": "no URL, socket, Provider or .env Provider value is read",
+    "fixture": "src/conflux_weave/offline_smoke_fixture.json with schema conflux-weave.offline-smoke.v1",
+    "dataset": "datasets/smoke/w5-offline-smoke-v1.0.0 with manifest file hashes",
+    "closed_path": "Task request -> SQLite Run -> registered Delivery Artifact -> Citation/Evidence -> Workbench asset read",
+    "configuration": ".env.example labels live-only configuration; var/README.md documents smoke and failure recovery",
+    "packaging": "sdist and wheel preserve offline smoke module, fixture JSON and Workbench assets"
+  },
+  "commands": [
+    {"command": "focused W5.4 tests", "result": "37 passed in 5.37 seconds"},
+    {"command": "uv run --frozen python -m conflux_weave offline-smoke --data-root var/tmp/w5_4_smoke_manual_20260825_1", "result": "passed; zero external calls; 2 citations; 2 evidence; 3 Workbench assets"},
+    {"command": "uv build --offline --out-dir var/tmp/w5_4_dist_20260825_2", "result": "passed; sdist and wheel built"},
+    {"command": "isolated wheel install + conflux-weave.exe offline-smoke", "result": "passed"},
+    {"command": "isolated sdist install + conflux-weave.exe offline-smoke", "result": "passed"},
+    {"command": "uv run --frozen pytest -q -p no:cacheprovider --basetemp=var/tmp/w5_4_pytest_full_20260825_1", "result": "262 passed in 202.50 seconds"},
+    {"command": "uv run --frozen python -m compileall -q src tests; git diff --check", "result": "passed"}
+  ],
+  "dataset": {
+    "path": "datasets/smoke/w5-offline-smoke-v1.0.0",
+    "manifest": "conflux-weave-w5-offline-smoke",
+    "version": "1.0.0",
+    "case_count": 1,
+    "files": {
+      "README.md": "sha256:0fa02530caaebd4e90d775951d60b44e8141d33e7ec1804d4dc51feba175fe8b",
+      "cases.jsonl": "sha256:8b9ef544876a528bd3f983b5c837c4cdc2eff5c05b27d3e2f6445fa3d68ab778",
+      "schema.json": "sha256:c2756ac7817bbf405603883a575e2a11770465cc7a52b5ffb8adbe3992ba3f2f"
+    }
+  },
+  "build_artifacts": [
+    {"name": "conflux_weave-0.0.1-py3-none-any.whl", "bytes": 144121, "sha256": "481956c7eb2b47ff53165cb094fb4a162cdd25b55137c3504040d9a39e5963ce"},
+    {"name": "conflux_weave-0.0.1.tar.gz", "bytes": 367883, "sha256": "1356800feef88a95ae603482d0861b70384d78e1b29329b07cbeccff3269dac1"}
+  ],
+  "execution_evidence": {
+    "network_calls": 0,
+    "research_source_calls": 0,
+    "real_provider_calls": 0,
+    "paid_calls": 0,
+    "live_runs_created": 0,
+    "uvicorn_processes_started": 0,
+    "browser_runs": 0,
+    "automatic_retry": false,
+    "fallback": false
+  },
+  "acceptance": {
+    "offline_command_passed": true,
+    "task_run_delivery_closed": true,
+    "citation_evidence_closed": true,
+    "wheel_resource_check_passed": true,
+    "sdist_resource_check_passed": true,
+    "minimal_dependency_boundary_passed": true,
+    "complete_offline_regression_passed": true,
+    "later_stage_boundaries_preserved": true,
+    "decision": "pass"
+  },
+  "evidence_boundary": "W5.4 proves installed distribution resource completeness and deterministic no-network smoke only. It does not prove clean-clone onboarding, ten-minute first success, browser fault recovery, real Provider execution, public research access, new live capability or production release readiness.",
+  "next_acceptance_point": "W5.5 可用性与故障验收；not authorized by W5.4 and requires explicit user entry"
+}

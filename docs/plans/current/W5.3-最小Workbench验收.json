@@ -1,0 +1,101 @@
+{
+  "acceptance_id": "W5.3",
+  "status": "validated_offline",
+  "accepted_at": "2026-08-25",
+  "scope_freeze": "docs/plans/current/W5-scope-freeze.json",
+  "implementation_plan": "docs/plans/current/W5-实施方案.md",
+  "verification_base_revision": "2e1219c60c55834021eeb121a95f313c79e1acb3",
+  "working_tree_mode": "W5.3 changes remain uncommitted on top of the committed W5.0-W5.2 baseline",
+  "implemented_scope": {
+    "delivery": "packaged same-origin HTML, CSS and ES module assets served by the single FastAPI app",
+    "frontend_dependencies": "no Node.js build, CDN, frontend framework or second service",
+    "task_flow": "submit a research query, list and reopen Runs, inspect user-facing state, progress and budget, cancel, and choose one of two explicit unknown-effect recovery decisions",
+    "result_flow": "read registered Delivery text, Evidence details, limitations, unmet criteria and recovery actions",
+    "events": "consume persisted SSE updates and refresh authoritative Run snapshots",
+    "artifact_content": "Run-scoped registered Delivery Artifact only; content hash verification, 2 MB display limit and UTF-8 gate",
+    "responsive_layout": "desktop workbench and mobile single-column layout without horizontal page overflow"
+  },
+  "retained_failures": [
+    {
+      "stage": "focused test collection",
+      "result": "failed",
+      "cause": "Starlette TestClient required the unavailable httpx2 package.",
+      "decision": "Do not add a W5.3 runtime or dev dependency; use existing ASGI endpoint-direct contracts and real fixture Uvicorn browser acceptance."
+    },
+    {
+      "stage": "first browser load",
+      "result": "HTML and CSS loaded but the ES module did not execute",
+      "cause": "Windows MIME mapping served app.js as text/plain and the browser enforced module MIME requirements.",
+      "fix": "Register .js as text/javascript and version static asset URLs to invalidate the cached response."
+    }
+  ],
+  "commands": [
+    {
+      "command": "uv run --frozen pytest -q -p no:cacheprovider tests/test_workbench.py tests/test_server.py tests/test_api_contracts.py tests/test_architecture.py tests/test_w5_scope_freeze.py",
+      "result": "32 passed in 5.06 seconds"
+    },
+    {
+      "command": "uv run --frozen pytest -q -p no:cacheprovider --basetemp=var/tmp/w5_3_pytest_full_20260825_1",
+      "result": "257 passed in 205.09 seconds"
+    },
+    {
+      "command": "uv run --frozen python -m compileall -q src tests",
+      "result": "passed"
+    },
+    {
+      "command": "node --check src/conflux_weave/workbench/app.js",
+      "result": "passed with the bundled workspace Node.js runtime"
+    },
+    {
+      "command": "git diff --check",
+      "result": "passed"
+    }
+  ],
+  "browser_acceptance": {
+    "target": "http://127.0.0.1:8013/",
+    "fixture_app": "tests/fixtures/w5_workbench_app.py",
+    "fixture_data_root": "var/tmp/w5_3_browser_20260825_1",
+    "desktop_viewport": "1440x900",
+    "mobile_viewport": "390x844",
+    "flows_passed": [
+      "load persisted partial Delivery after page start",
+      "read answer text and two registered Evidence items",
+      "open Evidence quote, SourceSnapshot id, extraction method and locator",
+      "read limitations, unmet criteria and recovery action",
+      "submit a new fixture Run",
+      "cancel the new Run and observe persisted cancelled state",
+      "reload and reconstruct both Runs from SQLite",
+      "mobile page has no horizontal overflow",
+      "mobile new-task dialog fits within the viewport"
+    ],
+    "console_errors_or_warnings": 0,
+    "screenshots": [
+      "var/tmp/w5_3_browser_evidence/desktop-1440x900.png",
+      "var/tmp/w5_3_browser_evidence/mobile-390x844.png"
+    ]
+  },
+  "execution_evidence": {
+    "fixture_uvicorn_processes_started": 2,
+    "fixture_worker_loops_started": 2,
+    "browser_acceptance_runs": 1,
+    "research_source_calls": 0,
+    "real_provider_calls": 0,
+    "paid_calls": 0,
+    "live_runs_created": 0,
+    "automatic_retry": false,
+    "fallback": false
+  },
+  "acceptance": {
+    "same_origin_workbench_passed": true,
+    "registered_delivery_content_only_passed": true,
+    "task_create_and_cancel_passed": true,
+    "run_history_and_refresh_passed": true,
+    "answer_evidence_and_boundaries_passed": true,
+    "responsive_layout_passed": true,
+    "complete_offline_regression_passed": true,
+    "later_stage_boundaries_preserved": true,
+    "decision": "pass"
+  },
+  "evidence_boundary": "W5.3 proves the minimal same-origin Workbench and responsive fixture browser mechanisms only. It does not prove packaged-install resource completeness, offline smoke, clean-environment onboarding, real research-source access, real Provider execution, new live research capability or production reliability.",
+  "next_acceptance_point": "W5.4 安装、配置与离线 smoke；not authorized by W5.3 and requires explicit user entry"
+}

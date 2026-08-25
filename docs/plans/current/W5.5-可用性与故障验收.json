@@ -1,0 +1,73 @@
+{
+  "stage": "W5.5",
+  "title": "可用性与故障验收",
+  "status": "partial_fixture_validated_browser_evidence_blocked",
+  "date": "2026-08-25",
+  "scope": [
+    "键盘可操作性合同",
+    "320px/390px 响应式布局合同",
+    "200% 缩放下的文本换行与控件稳定性",
+    "SSE 断线后按 event cursor 续读并去重",
+    "刷新与复用 SQLite 状态",
+    "取消与终态动作边界",
+    "缺少 Provider 配置的可行动 readiness",
+    "fixture-only 失败/恢复错误边界"
+  ],
+  "implementation": {
+    "changed": [
+      "src/conflux_weave/workbench/app.js",
+      "tests/test_workbench.py"
+    ],
+    "sse_recovery": {
+      "cursor_source": "persisted run event cursor",
+      "reconnect": "explicit EventSource reopen with after=last_cursor",
+      "deduplication": "client event id set plus monotonic cursor",
+      "terminal_authority": "Run snapshot remains authoritative"
+    },
+    "non_goals": [
+      "真实 Provider 或公共网络",
+      "付费调用或 live Run",
+      "Node/React/Vite/CDN",
+      "W5.6 清洁环境首次成功"
+    ]
+  },
+  "verification": {
+    "focused_tests": {
+      "command": "uv run pytest -q tests/test_workbench.py tests/test_server.py",
+      "result": "8 passed",
+      "external_calls": 0
+    },
+    "fixture_http": {
+      "base_url": "http://127.0.0.1:8015",
+      "health": "ready",
+      "provider_readiness": "ready (fixture flag only)",
+      "seeded_runs": 1,
+      "network_boundary": "localhost fixture only"
+    },
+    "browser_evidence": {
+      "status": "blocked",
+      "reason": "当前执行环境未提供可用 Playwright/Chrome 浏览器运行时",
+      "required_follow_up": [
+        "桌面 1440x900 截图",
+        "320px 与 390px 截图及 document scrollWidth 检查",
+        "200% 缩放截图与关键控件 bounding-box 不重叠检查",
+        "Tab/Enter/Escape、断线续读、刷新/重启、取消交互录证"
+      ],
+      "not_claimed": "未将静态合同测试冒充浏览器视觉验收"
+    }
+  },
+  "acceptance": {
+    "passed": [
+      "SSE 客户端显式保存最后 cursor，并以 after=cursor 重连",
+      "客户端按 cursor 去重，Run 快照继续作为终态权威",
+      "WorkBench 原生 dialog、tablist、按钮语义和窄屏换行合同存在",
+      "既有 API SSE、取消、缺 Provider readiness 合同回归通过"
+    ],
+    "pending": [
+      "真实浏览器键盘和视觉布局证据",
+      "服务重启后浏览器端完整交互证据",
+      "fixture Provider/来源失败页面截图证据"
+    ]
+  },
+  "evidence_boundary": "本记录证明本地 fixture 的 API/静态 Workbench 合同和 SSE cursor 实现；由于浏览器运行时不可用，不证明视觉无重叠、真实键盘交互或真实 Provider/来源能力。"
+}

@@ -1,0 +1,12 @@
+{
+  "schema_version": "conflux-weave.offline-smoke.v1",
+  "case_fields": {
+    "case_id": "stable string identifier",
+    "query": "fixed local research input",
+    "expected_citation_count": "non-negative integer",
+    "expected_evidence_count": "non-negative integer"
+  },
+  "network": false,
+  "provider": false,
+  "capability_claim": "installation and local mechanism validation only"
+}

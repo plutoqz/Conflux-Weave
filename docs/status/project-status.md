@@ -5,13 +5,13 @@ Updated: 2026-08-24
 | Area | Status | Evidence boundary |
 |---|---|---|
 | Design v0.2 | `proposed` | Current design basis; not implementation proof |
-| Repository framework | `validated_live` | Python 3.12.9; 255 tests passed; W3 paired live boundary remains unchanged by offline W4/W5.0-W5.2 additions |
+| Repository framework | `validated_live` | Python 3.12.9; 262 tests passed; W3 paired live boundary remains unchanged by offline W4/W5.0-W5.4 additions |
 | W0 | `validated_offline` | W0.1-W0.5 passed; 12 frozen cases, runtime contracts, and read-only legacy inventory are consistent |
 | W1 | `validated_live` | W1.0-W1.5 passed at frozen boundaries; LIVE-01 review note and LIVE-02 repository identity both delivered explicit partial results with raw evidence retained |
 | W2 | `validated_live` | BM25/Web Fetch/Evidence delivery validated offline; three accepted live tasks across paper discovery and project evidence Q&A produced bounded partial deliveries |
 | W3 | `validated_live` | Persistence/recovery passed offline; original W3.6 and post-refactor R1 each passed 2/2 frozen paired live Runs through the durable CLI |
 | W4 | `closed_negative_fixed_default` | W4.5 rejected C at 1/3 versus the required 2/3; W4.6 stayed blocked with zero live/paid calls, and W5.0 closed the candidate while retaining Fixed as default |
-| W5 | `w5_2_validated_offline` | Single FastAPI boundary, lifespan Worker and persisted SSE passed offline; no Workbench, Uvicorn process, browser, research network, Provider or live Run has started |
+| W5 | `w5_4_validated_offline` | Installed wheel/sdist offline smoke passed with packaged Workbench resources; no research network, real Provider, paid call or live Run was started |
 | W6 | `pending` | No second product slice has been implemented |
 | Live capability | `bounded_retrieval_evidence` | qwen3.7-flash completed bounded arXiv metadata/abstract discovery and GitHub evidence Q&A; failures and raw responses retained |
 
@@ -162,11 +162,44 @@ imports passed. No Uvicorn process, Workbench asset, browser, research source, P
 paid call or live Run was started. W5.3 is the next acceptance point and is now explicitly
 authorized, but its implementation is not part of this committed W5.0-W5.2 baseline.
 
+W5.3 is validated offline on top of committed W5.0-W5.2 revision `2e1219c`.
+The single FastAPI app now serves a packaged HTML/CSS/ES-module Workbench for task
+submission, Run history/detail, user-facing progress and budget, cancellation, explicit
+unknown-effect recovery decisions, Delivery text, Evidence detail, limitations and SSE
+updates. Delivery content reads remain registered-Artifact-only with hash verification,
+UTF-8 and size gates. The first TestClient approach failed because current Starlette
+requires an unavailable `httpx2`; endpoint-direct contracts plus a real local Uvicorn
+fixture covered the HTTP/UI boundary without adding that dependency. The first browser
+load exposed Windows `.js` as `text/plain`; explicit JavaScript MIME registration and
+asset cache busting fixed it. Focused tests passed 32 and the full suite passed 257.
+Desktop 1440x900 and mobile 390x844 checks covered answer, two Evidence details, limits,
+create/cancel, refresh persistence, no horizontal overflow and zero console errors.
+Two sequential fixture Uvicorn/Worker processes were started during diagnosis; research
+network, real Provider, paid calls and live Runs remained zero. W5.3 was then authorized
+and completed before this W5.4 acceptance.
+
+W5.4 is validated offline on top of W5.3. The new `conflux-weave offline-smoke` command
+uses a versioned local fixture to close Task request, SQLite Run, registered Delivery,
+Citation/Evidence and packaged Workbench asset reads without reading Provider config or
+making any network call. Focused tests passed 37 and the full suite passed 262. Offline
+sdist and wheel builds passed; each distribution was installed into an isolated target
+and its installed `conflux-weave.exe offline-smoke` entrypoint passed. Dataset file hashes,
+package hashes and failure/recovery boundaries are recorded in the W5.4 acceptance JSON.
+W5.5 has entered execution on the W5.4 working tree. The Workbench SSE client now
+stores the last persisted event cursor, explicitly reconnects with `after=cursor`,
+and deduplicates events while retaining the Run snapshot as terminal authority.
+Workbench keyboard/semantic and narrow-layout contracts were added to the focused
+tests; the local fixture Uvicorn health and seeded Run were reachable with zero
+external calls. Focused W5.5 tests passed 8. The current environment has no usable
+Playwright/Chrome runtime, so 320px/390px/200% screenshots and real browser keyboard,
+restart, cancel, and fault-recovery interaction evidence remain pending and are not
+claimed as validated. See `docs/plans/current/W5.5-可用性与故障验收.json`.
+
 Latest framework verification:
 
 ```text
 uv lock --check                                      passed; 22 packages
-uv run --frozen pytest -q -p no:cacheprovider        255 passed
+uv run --frozen pytest -q -p no:cacheprovider        262 passed
 uv run --frozen python -m compileall -q src tests    passed
 uv build --offline --out-dir <ignored path>          sdist and wheel built
 ```

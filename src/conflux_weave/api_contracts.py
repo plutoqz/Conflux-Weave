@@ -158,6 +158,11 @@ class ArtifactMetadataResponse(_ApiModel):
     schema_version: str
 
 
+class ArtifactContentResponse(_ApiModel):
+    artifact: ArtifactMetadataResponse
+    content: str
+
+
 class EvidenceResponse(_ApiModel):
     evidence_id: str
     source_snapshot_id: str
@@ -555,6 +560,7 @@ def _readiness_check(
 
 __all__ = [
     "ApiErrorResponse",
+    "ArtifactContentResponse",
     "ArtifactMetadataResponse",
     "BudgetResponse",
     "DeliveryResponse",

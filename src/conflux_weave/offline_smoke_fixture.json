@@ -1,0 +1,33 @@
+{
+  "schema_version": "conflux-weave.offline-smoke.v1",
+  "label": "offline_smoke",
+  "task": {
+    "query": "How does durable recovery preserve evidence lineage?",
+    "topics": ["durable runtime", "evidence"],
+    "max_results": 3
+  },
+  "answer": "Durable state preserves the Run and its registered evidence after restart [1]. Fencing prevents stale attempts from publishing after recovery [2].",
+  "evidence": [
+    {
+      "evidence_id": "evidence-smoke-1",
+      "source_snapshot_id": "snapshot-smoke-runtime",
+      "locator": {"section": "abstract", "sentence": 2},
+      "quote": "Durable state preserves the Run and its registered evidence after restart.",
+      "extraction_method": "versioned-offline-fixture"
+    },
+    {
+      "evidence_id": "evidence-smoke-2",
+      "source_snapshot_id": "snapshot-smoke-recovery",
+      "locator": {"section": "results", "paragraph": 1},
+      "quote": "Fencing prevents stale attempts from publishing after recovery.",
+      "extraction_method": "versioned-offline-fixture"
+    }
+  ],
+  "citations": [
+    {"citation_id": "citation-smoke-1", "claim_id": "claim-smoke-1", "evidence_id": "evidence-smoke-1", "display_index": 1},
+    {"citation_id": "citation-smoke-2", "claim_id": "claim-smoke-2", "evidence_id": "evidence-smoke-2", "display_index": 2}
+  ],
+  "limitations": ["This is a deterministic offline fixture and does not prove live research capability."],
+  "unmet_criteria": ["No external Provider or public research source was called."],
+  "recovery_actions": ["Authorize a separate live Run before using external sources."]
+}

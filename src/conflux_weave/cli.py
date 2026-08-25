@@ -179,6 +179,15 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument(
         "--artifact-root", type=Path, default=Path("var") / "artifacts" / "sha256"
     )
+    subparsers.add_parser(
+        "offline-smoke",
+        help="run the deterministic no-network package and Workbench smoke path",
+    ).add_argument(
+        "--data-root",
+        type=Path,
+        default=None,
+        help="isolated output root; defaults to a temporary directory",
+    )
     return parser
 
 
@@ -204,6 +213,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             workers=1,
         )
         return 0
+    if args.command == "offline-smoke":
+        from conflux_weave.offline_smoke import main as run_offline_smoke
+
+        smoke_args = [] if args.data_root is None else ["--data-root", str(args.data_root)]
+        return run_offline_smoke(smoke_args)
     if args.command in _LIVE_RESEARCH_COMMANDS:
         return run_live_research(args, _print_json)
     if args.command in _SOURCE_INGESTION_COMMANDS:

@@ -79,17 +79,16 @@ def test_w1_runtime_shell_has_no_network_or_optional_framework_dependency() -> N
     assert violations == []
 
 
-def test_w5_1_defines_contracts_without_starting_http_or_shipping_workbench() -> None:
+def test_w5_application_contracts_remain_framework_independent() -> None:
     api_contracts = PACKAGE_ROOT / "api_contracts.py"
     modules = imported_modules(api_contracts)
 
     assert "fastapi" not in modules
     assert "uvicorn" not in modules
     assert not (PACKAGE_ROOT / "asgi.py").exists()
-    assert not (PACKAGE_ROOT / "workbench").exists()
 
 
-def test_w5_2_server_uses_one_lifespan_worker_and_no_workbench_assets() -> None:
+def test_w5_server_uses_one_lifespan_worker_and_one_packaged_workbench() -> None:
     server = (PACKAGE_ROOT / "server.py").read_text(encoding="utf-8")
     cli = (PACKAGE_ROOT / "cli.py").read_text(encoding="utf-8")
 
@@ -97,4 +96,20 @@ def test_w5_2_server_uses_one_lifespan_worker_and_no_workbench_assets() -> None:
     assert "WorkerLoop" in server
     assert "workers=1" in cli
     assert "EventSourceResponse" not in server
-    assert not (PACKAGE_ROOT / "workbench").exists()
+    workbench = PACKAGE_ROOT / "workbench"
+    assert sorted(path.name for path in workbench.iterdir()) == [
+        "app.js",
+        "index.html",
+        "styles.css",
+    ]
+    assert "StaticFiles" in server
+
+
+def test_w5_4_smoke_is_local_and_has_no_new_runtime_dependency() -> None:
+    smoke = (PACKAGE_ROOT / "offline_smoke.py").read_text(encoding="utf-8")
+    cli = (PACKAGE_ROOT / "cli.py").read_text(encoding="utf-8")
+    assert "offline-smoke" in cli
+    assert "network_calls" in smoke
+    assert "provider_calls" in smoke
+    assert "urlopen" not in smoke
+    assert "requests" not in smoke

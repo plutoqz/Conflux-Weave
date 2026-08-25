@@ -30,3 +30,28 @@ The durable paper-discovery path exchanges five JSON checkpoints through the
 Artifact store. User-facing CLI status views, a deployed Trace backend, indexes,
 imports, exports, logs, and evaluation consumers remain planned for their named
 acceptance points.
+
+## Offline installation smoke
+
+Run the deterministic package/API/Run/Delivery/Citation/Workbench check without
+Provider configuration or network access:
+
+```text
+conflux-weave offline-smoke
+```
+
+The default uses a temporary data root. To retain the SQLite database and Artifacts for
+inspection, pass `--data-root <local-directory>`. A successful JSON result must keep
+`label=offline_smoke`, all external-call counters at zero, Citation and Evidence counts
+equal, and Workbench assets equal to `app.js`, `index.html`, and `styles.css`.
+
+Troubleshooting boundaries:
+
+- `fixture schema or label is invalid`: reinstall from an intact wheel or sdist; do not
+  edit packaged fixture bytes in place.
+- Artifact integrity or SQLite errors: use a new writable `--data-root`; preserve the
+  failed root for inspection rather than deleting evidence.
+- Missing Workbench assets: rebuild/reinstall the distribution and inspect package
+  contents. Do not fetch replacement JavaScript from a CDN.
+- Provider configuration is not required. If the command attempts a network or Provider
+  call, stop and report it as a contract violation.

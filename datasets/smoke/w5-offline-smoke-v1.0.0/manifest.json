@@ -1,0 +1,16 @@
+{
+  "dataset_id": "conflux-weave-w5-offline-smoke",
+  "version": "1.0.0",
+  "purpose": "deterministic package/API/Run/Delivery/Citation/Workbench smoke",
+  "schema_version": "conflux-weave.offline-smoke.v1",
+  "source_lineage": "author-authored local fixture; no Provider or public source",
+  "case_count": 1,
+  "files": {
+    "README.md": "sha256:0fa02530caaebd4e90d775951d60b44e8141d33e7ec1804d4dc51feba175fe8b",
+    "cases.jsonl": "sha256:8b9ef544876a528bd3f983b5c837c4cdc2eff5c05b27d3e2f6445fa3d68ab778",
+    "schema.json": "sha256:c2756ac7817bbf405603883a575e2a11770465cc7a52b5ffb8adbe3992ba3f2f"
+  },
+  "network": false,
+  "provider": false,
+  "capability_claim": "installation and local mechanism validation only"
+}
