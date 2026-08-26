@@ -1,6 +1,6 @@
 import json
 
-from conflux_weave.cli import _print_json, main
+from conflux_weave.cli import _print_json, build_parser, main
 
 
 def test_cli_runs_deterministic_workflow_and_prints_evidence_boundary(
@@ -51,3 +51,11 @@ def test_json_output_escapes_characters_missing_from_console_encoding(monkeypatc
     parsed = json.loads(output.value)
     assert parsed == {"description": "Use ⌥ to switch modes"}
     assert "\\u2325" in output.value
+
+
+def test_serve_accepts_an_isolated_workspace_root(tmp_path) -> None:
+    args = build_parser().parse_args(
+        ["serve", "--workspace-root", str(tmp_path / "workspace")]
+    )
+
+    assert args.workspace_root == tmp_path / "workspace"

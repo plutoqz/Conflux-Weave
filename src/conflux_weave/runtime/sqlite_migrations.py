@@ -343,4 +343,34 @@ _MIGRATIONS = (
             """,
         ),
     ),
+    _Migration(
+        version=6,
+        name="v03_agent_messages",
+        statements=(
+            """
+            CREATE TABLE agent_messages (
+                message_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id TEXT NOT NULL UNIQUE,
+                run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE RESTRICT,
+                agent_task_id TEXT NOT NULL,
+                sender TEXT NOT NULL,
+                recipient TEXT NOT NULL,
+                message_type TEXT NOT NULL CHECK (message_type IN (
+                    'task_assigned', 'status_update', 'result_submitted',
+                    'needs_input', 'failure_reported', 'terminated'
+                )),
+                causation_id TEXT REFERENCES agent_messages(message_id) ON DELETE RESTRICT,
+                correlation_id TEXT NOT NULL,
+                payload_ref TEXT NOT NULL REFERENCES artifacts(artifact_id) ON DELETE RESTRICT,
+                idempotency_key TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL,
+                schema_version TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE INDEX agent_messages_recipient_idx
+            ON agent_messages(run_id, recipient, message_sequence)
+            """,
+        ),
+    ),
 )

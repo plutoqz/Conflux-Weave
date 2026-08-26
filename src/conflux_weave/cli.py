@@ -179,6 +179,9 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument(
         "--artifact-root", type=Path, default=Path("var") / "artifacts" / "sha256"
     )
+    serve.add_argument(
+        "--workspace-root", type=Path, default=Path("var") / "workspace"
+    )
     subparsers.add_parser(
         "offline-smoke",
         help="run the deterministic no-network package and Workbench smoke path",
@@ -206,6 +209,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             build_local_app(
                 database=args.database,
                 artifact_root=args.artifact_root,
+                workspace_root=args.workspace_root,
                 dotenv_path=args.dotenv,
             ),
             host=args.host,

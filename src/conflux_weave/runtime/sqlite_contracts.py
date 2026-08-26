@@ -7,6 +7,7 @@ from enum import StrEnum
 from typing import Any
 
 from conflux_weave.core import ErrorRecord, RunRecord
+from conflux_weave.harness.contracts import MessageEnvelope
 
 
 class PersistenceError(RuntimeError):
@@ -148,6 +149,12 @@ class StepPolicy:
 class SubmissionResult:
     task_id: str
     run_id: str
+    created: bool
+
+
+@dataclass(frozen=True, slots=True)
+class AgentMessageAppendResult:
+    message: MessageEnvelope
     created: bool
 
 

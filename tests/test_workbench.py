@@ -20,6 +20,9 @@ NOW = "2026-08-25T12:00:00Z"
 
 
 class PassiveRuntime:
+    executor_id = "passive-paper@v1"
+    task_kinds = ("paper_discovery",)
+
     def work_once(self, *, now: str | None = None) -> None:
         return None
 
@@ -148,16 +151,20 @@ def test_workbench_is_packaged_same_origin_without_external_assets(tmp_path) -> 
     assert index_response.media_type == "text/html"
     assert 'id="run-list"' in index
     assert 'id="task-dialog"' in index
+    assert 'class="mode-switch"' in index
     assert 'id="retry-run"' in index
     assert 'id="fail-run"' in index
     assert "@media (max-width: 760px)" in styles
     assert "EventSource" in script
     assert "/api/v1/tasks/research" in script
+    assert "/api/v1/tasks/research-fixture" in script
+    assert "updateTaskMode" in script
     assert "retry_unknown_external" in script
     assert "fail_unknown_external" in script
     assert "eventCursor" in script
     assert "events?after=${state.eventCursor}" in script
     assert "state.eventReconnectTimer" in script
+    assert "if (run.is_terminal) return" not in script
     assert "overflow-wrap: anywhere" in styles
     assert "grid-template-columns: 1fr" in styles
     assert "http://" not in index + styles + script

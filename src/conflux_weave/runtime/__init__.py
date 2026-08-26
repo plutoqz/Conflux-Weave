@@ -16,6 +16,7 @@ from conflux_weave.runtime.outcome_workflow import (
     OutcomeScenario,
 )
 from conflux_weave.runtime.sqlite import (
+    AgentMessageAppendResult,
     AttemptEffectRecord,
     AttemptRecord,
     ArtifactMetadataConflict,
@@ -52,6 +53,7 @@ from conflux_weave.runtime.telemetry import (
 )
 from conflux_weave.runtime.worker import SQLiteStepWorker
 __all__ = [
+    "AgentMessageAppendResult",
     "ArtifactIntegrityError",
     "AttemptEffectRecord",
     "AttemptRecord",

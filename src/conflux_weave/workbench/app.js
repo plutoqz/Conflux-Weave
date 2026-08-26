@@ -24,7 +24,10 @@ const stateLabels = {
   expired: "已过期",
 };
 
-const familyLabels = { paper_discovery: "论文发现" };
+const familyLabels = {
+  paper_discovery: "论文发现",
+  research_fixture: "离线研究验证",
+};
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -256,9 +259,8 @@ function connectEvents(run) {
   $("#event-list").replaceChildren();
   $("#event-count").textContent = "0";
   $("#event-empty").hidden = false;
-  if (run.is_terminal) return;
   const open = () => {
-    if (state.eventRunId !== run.run_id || state.selected?.is_terminal) return;
+    if (state.eventRunId !== run.run_id) return;
     const source = new EventSource(`/api/v1/runs/${encodeURIComponent(run.run_id)}/events?after=${state.eventCursor}`);
     state.eventSource = source;
     source.onerror = () => {
@@ -292,7 +294,6 @@ function connectEvents(run) {
       renderRun(current);
       await loadDelivery(current);
       if (current.is_terminal) {
-        closeEvents();
         await loadRuns();
       }
     } catch (error) { showToast(error.message); }
@@ -328,6 +329,7 @@ async function mutateRun(decision = null) {
 
 async function submitTask() {
   const query = $("#query").value.trim();
+  const mode = document.querySelector('input[name="task_mode"]:checked')?.value || "research";
   const topics = $("#topics").value.split(/[，,]/).map((item) => item.trim()).filter(Boolean);
   const errorNode = $("#task-error");
   if (!query) {
@@ -339,13 +341,17 @@ async function submitTask() {
   button.disabled = true;
   button.textContent = "正在创建...";
   try {
-    const accepted = await api("/api/v1/tasks/research", {
+    const fixture = mode === "fixture";
+    const accepted = await api(fixture ? "/api/v1/tasks/research-fixture" : "/api/v1/tasks/research", {
       method: "POST",
-      body: JSON.stringify({ query, topics, max_results: Number($("#max-results").value) }),
+      body: JSON.stringify(fixture
+        ? { objective: query }
+        : { query, topics, max_results: Number($("#max-results").value) }),
     });
     $("#task-dialog").close();
     $("#task-form").reset();
     $("#max-results").value = "15";
+    updateTaskMode();
     errorNode.hidden = true;
     await loadRuns();
     await selectRun(accepted.run_id);
@@ -380,14 +386,24 @@ async function checkHealth() {
 
 function openTaskDialog() {
   $("#task-error").hidden = true;
+  updateTaskMode();
   $("#task-dialog").showModal();
   $("#query").focus();
+}
+
+function updateTaskMode() {
+  const fixture = document.querySelector('input[name="task_mode"]:checked')?.value === "fixture";
+  $("#query-label").textContent = fixture ? "验证目标" : "研究问题";
+  $("#research-options").hidden = fixture;
 }
 
 $("#new-task").addEventListener("click", openTaskDialog);
 $("[data-open-task]").addEventListener("click", openTaskDialog);
 $("#load-more").addEventListener("click", () => loadRuns({ append: true }));
 $("#submit-task").addEventListener("click", submitTask);
+document.querySelectorAll('input[name="task_mode"]').forEach((input) => {
+  input.addEventListener("change", updateTaskMode);
+});
 $("#cancel-run").addEventListener("click", () => mutateRun("cancel"));
 $("#retry-run").addEventListener("click", () => mutateRun("retry_unknown_external"));
 $("#fail-run").addEventListener("click", () => mutateRun("fail_unknown_external"));

@@ -8,7 +8,7 @@ import mimetypes
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict
 from conflux_weave.api_contracts import (
     ApiErrorResponse,
     ArtifactContentResponse,
+    FixtureResearchTaskRequest,
     ResearchTaskAcceptedResponse,
     ResearchTaskRequest,
     RunDetailResponse,
@@ -26,6 +27,15 @@ from conflux_weave.api_contracts import (
     WorkbenchQueryService,
     map_exception,
 )
+from conflux_weave.harness.contracts import TaskSubmission
+from conflux_weave.harness.fixture_runtime import ResearchFixtureRuntime
+from conflux_weave.harness.orchestration import (
+    CompositeOrchestrator,
+    LegacyPaperRuntimeAdapter,
+    OrchestratorPort,
+    UnavailableTaskRuntime,
+)
+from conflux_weave.harness.workspace import LocalWorkspaceAdapter
 from conflux_weave.paper_discovery import ArxivSearchAdapter
 from conflux_weave.provider import OpenAICompatibleChatAdapter, ProviderConfig
 from conflux_weave.runtime import (
@@ -36,23 +46,15 @@ from conflux_weave.runtime import (
 )
 
 
-class RuntimePort(Protocol):
-    def submit(self, query: str, *, search_query: str, max_results: int = 15) -> Any: ...
-
-    def work_once(self, *, now: str | None = None) -> Any: ...
-
-    def request_cancel(self, run_id: str, *, now: str | None = None) -> Any: ...
-
-    def resume(self, run_id: str, decision: RecoveryDecision | None = None, *, now: str | None = None) -> Any: ...
-
-
 class WorkerLoop:
     """Run exactly one injected Runtime worker loop for an ASGI lifespan."""
 
-    def __init__(self, runtime: RuntimePort, *, interval_seconds: float = 0.25) -> None:
+    def __init__(
+        self, orchestrator: OrchestratorPort, *, interval_seconds: float = 0.25
+    ) -> None:
         if interval_seconds <= 0:
             raise ValueError("worker interval must be positive")
-        self.runtime = runtime
+        self.orchestrator = orchestrator
         self.interval_seconds = interval_seconds
         self._task: asyncio.Task[None] | None = None
         self.iterations = 0
@@ -71,7 +73,7 @@ class WorkerLoop:
     async def _run(self) -> None:
         while True:
             try:
-                await asyncio.to_thread(self.runtime.work_once)
+                await asyncio.to_thread(self.orchestrator.work_once)
                 self.iterations += 1
             except asyncio.CancelledError:
                 raise
@@ -93,7 +95,7 @@ mimetypes.add_type("text/javascript", ".js")
 
 def create_app(
     repository: SQLiteRuntimeRepository,
-    runtime: RuntimePort,
+    orchestrator: OrchestratorPort,
     *,
     provider_configured: bool = False,
     worker: WorkerLoop | None = None,
@@ -102,7 +104,9 @@ def create_app(
     """Build the one ASGI application around injected authoritative components."""
 
     query_service = WorkbenchQueryService(repository)
-    worker_loop = worker or WorkerLoop(runtime, interval_seconds=poll_interval_seconds)
+    worker_loop = worker or WorkerLoop(
+        orchestrator, interval_seconds=poll_interval_seconds
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -114,7 +118,7 @@ def create_app(
 
     app = FastAPI(title="Conflux-Weave", version="0.0.1", lifespan=lifespan)
     app.state.repository = repository
-    app.state.runtime = runtime
+    app.state.orchestrator = orchestrator
     app.state.worker = worker_loop
 
     def error_response(exc: Exception) -> JSONResponse:
@@ -124,11 +128,39 @@ def create_app(
     @app.post("/api/v1/tasks/research", response_model=ResearchTaskAcceptedResponse)
     async def submit_task(request: ResearchTaskRequest):
         try:
-            search_query = " ".join(request.topics) if request.topics else request.query
-            result = runtime.submit(
-                request.query,
-                search_query=search_query,
-                max_results=request.max_results,
+            result = orchestrator.submit(
+                TaskSubmission(
+                    task_kind="paper_discovery",
+                    input={
+                        "query": request.query,
+                        "topics": request.topics,
+                        "max_results": request.max_results,
+                    },
+                )
+            )
+            state = query_service.get_run(result.run_id).state
+            return ResearchTaskAcceptedResponse(
+                task_id=result.task_id,
+                run_id=result.run_id,
+                created=result.created,
+                state=state,
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post(
+        "/api/v1/tasks/research-fixture",
+        response_model=ResearchTaskAcceptedResponse,
+    )
+    async def submit_fixture_task(request: FixtureResearchTaskRequest):
+        try:
+            result = orchestrator.submit(
+                TaskSubmission(
+                    task_kind="research_fixture",
+                    input={"objective": request.objective},
+                    requested_agent="research_fixture@v1",
+                    idempotency_key=request.idempotency_key,
+                )
             )
             state = query_service.get_run(result.run_id).state
             return ResearchTaskAcceptedResponse(
@@ -157,7 +189,7 @@ def create_app(
     @app.post("/api/v1/runs/{run_id}/cancel", response_model=RunDetailResponse)
     async def cancel_run(run_id: str):
         try:
-            runtime.request_cancel(run_id)
+            orchestrator.request_cancel(run_id)
             return query_service.get_run(run_id)
         except Exception as exc:
             return error_response(exc)
@@ -165,7 +197,7 @@ def create_app(
     @app.post("/api/v1/runs/{run_id}/resume", response_model=RunDetailResponse)
     async def resume_run(run_id: str, request: RecoveryRequest | None = None):
         try:
-            runtime.resume(run_id, request.decision if request else None)
+            orchestrator.resume(run_id, request.decision if request else None)
             return query_service.get_run(run_id)
         except Exception as exc:
             return error_response(exc)
@@ -257,36 +289,47 @@ def build_local_app(
     *,
     database: Path = Path("var") / "db" / "conflux-weave.sqlite3",
     artifact_root: Path = Path("var") / "artifacts" / "sha256",
+    workspace_root: Path = Path("var") / "workspace",
     dotenv_path: Path | None = Path(".env"),
 ) -> FastAPI:
     """Construct the production-shaped local app; no external call occurs here."""
     store = LocalArtifactStore(artifact_root)
     repository = SQLiteRuntimeRepository(database, store)
+    workspace = LocalWorkspaceAdapter(
+        workspace_root,
+        Path(__file__).with_name("system"),
+        store,
+    )
+    fixture_runtime = ResearchFixtureRuntime(repository, store, workspace)
     try:
         config = ProviderConfig.from_environment(dotenv_path)
     except Exception:
-        return create_app(repository, _UnavailableRuntime(), provider_configured=False)
-    runtime = DurablePaperDiscoveryRuntime(
+        paper_runtime = UnavailableTaskRuntime(
+            repository,
+            executor_id="legacy_paper_runtime@v1",
+            task_kinds=("paper_discovery",),
+            message="Provider configuration is incomplete",
+        )
+        provider_configured = False
+    else:
+        paper_runtime = LegacyPaperRuntimeAdapter(
+            DurablePaperDiscoveryRuntime(
+                repository,
+                store,
+                ArxivSearchAdapter(store),
+                OpenAICompatibleChatAdapter(store, config),
+            )
+        )
+        provider_configured = True
+    orchestrator = CompositeOrchestrator(
         repository,
-        store,
-        ArxivSearchAdapter(store),
-        OpenAICompatibleChatAdapter(store, config),
+        (fixture_runtime, paper_runtime),
     )
-    return create_app(repository, runtime, provider_configured=True)
-
-
-class _UnavailableRuntime:
-    def submit(self, *args: Any, **kwargs: Any) -> Any:
-        raise ValueError("Provider configuration is incomplete")
-
-    def work_once(self, *, now: str | None = None) -> None:
-        return None
-
-    def request_cancel(self, run_id: str, *, now: str | None = None) -> Any:
-        raise ValueError("Runtime is unavailable")
-
-    def resume(self, run_id: str, decision: RecoveryDecision | None = None, *, now: str | None = None) -> Any:
-        raise ValueError("Runtime is unavailable")
+    return create_app(
+        repository,
+        orchestrator,
+        provider_configured=provider_configured,
+    )
 
 
 __all__ = ["WorkerLoop", "build_local_app", "create_app"]

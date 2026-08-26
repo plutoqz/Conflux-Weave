@@ -123,6 +123,81 @@ class BudgetErrorRepositoryMixin:
                 )
         return tuple(records)
 
+    def record_local_attempt_usage(
+        self,
+        claim: LeaseClaim,
+        actual_usage: BudgetAmount,
+        *,
+        now: str | None = None,
+    ) -> None:
+        """Record deterministic local Tool usage without external-call semantics."""
+        recorded_at = _normalize_timestamp(now or self.clock())
+        _validate_budget_amount(actual_usage)
+        with self._connect() as connection:
+            with _transaction(connection):
+                self._require_active_attempt(connection, claim, recorded_at)
+                effect = connection.execute(
+                    "SELECT side_effect FROM attempt_effects WHERE attempt_id = ?",
+                    (claim.attempt_id,),
+                ).fetchone()
+                if effect is None or effect["side_effect"] not in {
+                    SideEffectClass.NONE.value,
+                    SideEffectClass.IDEMPOTENT_LOCAL_WRITE.value,
+                }:
+                    raise PersistenceInvariantError(
+                        "Step policy does not permit local Tool usage"
+                    )
+                existing = connection.execute(
+                    "SELECT 1 FROM budget_reservations WHERE attempt_id = ?",
+                    (claim.attempt_id,),
+                ).fetchone()
+                if existing is not None:
+                    raise PersistenceInvariantError("Attempt usage was already recorded")
+                limit = connection.execute(
+                    "SELECT * FROM budget_limits WHERE run_id = ?",
+                    (claim.run_id,),
+                ).fetchone()
+                if limit is None:
+                    raise PersistenceInvariantError("Run has no BudgetLimit snapshot")
+                actual = self._budget_totals(connection, claim.run_id, "actual")
+                if any(
+                    actual[dimension] + getattr(actual_usage, dimension)
+                    > int(limit[dimension])
+                    for dimension in _BUDGET_DIMENSIONS
+                ):
+                    raise PersistenceInvariantError("local Tool usage exceeds Run budget")
+                reservation_id = f"budget-local:{claim.attempt_id}"
+                connection.execute(
+                    """
+                    INSERT INTO budget_reservations(
+                        reservation_id, run_id, step_id, attempt_id,
+                        input_tokens, output_tokens, tool_calls, retrieval_rounds,
+                        status, created_at, closed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'settled', ?, ?)
+                    """,
+                    (
+                        reservation_id,
+                        claim.run_id,
+                        claim.step_id,
+                        claim.attempt_id,
+                        actual_usage.input_tokens,
+                        actual_usage.output_tokens,
+                        actual_usage.tool_calls,
+                        actual_usage.retrieval_rounds,
+                        recorded_at,
+                        recorded_at,
+                    ),
+                )
+                self._insert_budget_entry(
+                    connection,
+                    claim,
+                    reservation_id,
+                    "actual",
+                    actual_usage,
+                    "deterministic_local_tool",
+                    recorded_at,
+                )
+
     def record_error(
         self,
         claim: LeaseClaim,

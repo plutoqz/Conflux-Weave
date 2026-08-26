@@ -269,6 +269,13 @@ dialog::backdrop { background: rgba(25, 31, 28, .45); }
 .task-dialog form, .evidence-dialog article { padding: 24px; }
 .dialog-header { align-items: flex-start; margin-bottom: 24px; }
 .field-label { display: block; margin-bottom: 8px; color: #4f5954; font-size: 12px; font-weight: 700; }
+.mode-fieldset { margin: 0 0 18px; padding: 0; border: 0; }
+.mode-switch { display: grid; grid-template-columns: 1fr 1fr; width: min(320px, 100%); padding: 3px; border: 1px solid #bac4bf; border-radius: 6px; background: var(--soft); }
+.mode-switch label { position: relative; min-width: 0; }
+.mode-switch input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.mode-switch span { min-height: 34px; display: grid; place-items: center; padding: 6px 10px; border-radius: 4px; color: var(--muted); font-size: 12px; font-weight: 700; }
+.mode-switch input:checked + span { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(25, 36, 31, .14); }
+.mode-switch input:focus-visible + span { outline: 3px solid color-mix(in srgb, var(--focus) 28%, transparent); outline-offset: 2px; }
 textarea, input { width: 100%; border: 1px solid #bac4bf; border-radius: 5px; background: white; color: var(--ink); }
 textarea { min-height: 150px; padding: 12px; resize: vertical; line-height: 1.55; }
 input { height: 40px; padding: 0 10px; }

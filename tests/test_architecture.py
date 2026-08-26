@@ -5,7 +5,11 @@ from pathlib import Path
 
 
 PACKAGE_ROOT = Path(__file__).parents[1] / "src" / "conflux_weave"
-DOMAIN_ROOTS = (PACKAGE_ROOT / "core", PACKAGE_ROOT / "evidence")
+DOMAIN_ROOTS = (
+    PACKAGE_ROOT / "core",
+    PACKAGE_ROOT / "evidence",
+    PACKAGE_ROOT / "harness" / "contracts.py",
+)
 FORBIDDEN_FRAMEWORKS = {
     "chromadb",
     "deepeval",
@@ -48,7 +52,8 @@ def test_package_does_not_import_legacy_conflux() -> None:
 def test_domain_contracts_are_framework_independent() -> None:
     violations: list[str] = []
     for root in DOMAIN_ROOTS:
-        for path in root.rglob("*.py"):
+        paths = [root] if root.is_file() else root.rglob("*.py")
+        for path in paths:
             for module in imported_modules(path):
                 if module.split(".", 1)[0] in FORBIDDEN_FRAMEWORKS:
                     violations.append(f"{path.relative_to(PACKAGE_ROOT)} -> {module}")

@@ -1,9 +1,11 @@
 """Compatibility shell assembling the bounded W3 SQLite Repository."""
 
 from conflux_weave.runtime.sqlite_base import _SQLiteRepositoryBase
+from conflux_weave.runtime.sqlite_agent_messages import AgentMessageRepositoryMixin
 from conflux_weave.runtime.sqlite_budget import BudgetErrorRepositoryMixin
 from conflux_weave.runtime.sqlite_contracts import (
     ArtifactMetadataConflict,
+    AgentMessageAppendResult,
     AttemptEffectRecord,
     AttemptRecord,
     BudgetAmount,
@@ -40,6 +42,7 @@ class SQLiteRuntimeRepository(
     LeaseRepositoryMixin,
     BudgetErrorRepositoryMixin,
     DeliveryArtifactRepositoryMixin,
+    AgentMessageRepositoryMixin,
     TelemetryRepositoryMixin,
     _SQLiteRepositoryBase,
 ):
@@ -48,6 +51,7 @@ class SQLiteRuntimeRepository(
 
 __all__ = [
     "ArtifactMetadataConflict",
+    "AgentMessageAppendResult",
     "AttemptEffectRecord",
     "AttemptRecord",
     "BudgetAmount",

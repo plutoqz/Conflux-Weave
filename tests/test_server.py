@@ -3,8 +3,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from conflux_weave.api_contracts import ResearchTaskRequest
+from conflux_weave.api_contracts import FixtureResearchTaskRequest, ResearchTaskRequest
 from conflux_weave.core import BudgetLedger, RunRecord, RunStatus, StepRecord, StepStatus, TaskSpec
+from conflux_weave.harness import TaskSubmission
 from conflux_weave.runtime import LocalArtifactStore, SQLiteRuntimeRepository
 from conflux_weave.server import WorkerLoop, build_local_app, create_app
 
@@ -13,14 +14,21 @@ NOW = "2026-08-25T12:00:00Z"
 
 
 class FixtureRuntime:
+    executor_id = "server-fixture@v1"
+    task_kinds = ("paper_discovery",)
+
     def __init__(self, repository: SQLiteRuntimeRepository) -> None:
         self.repository = repository
         self.calls = 0
         self.submissions = 0
 
-    def submit(self, query: str, *, search_query: str, max_results: int = 15):
+    def submit(self, submission: TaskSubmission):
         self.submissions += 1
         suffix = str(self.submissions)
+        query = str(submission.input["query"])
+        topics = submission.input.get("topics", ())
+        search_query = " ".join(str(item) for item in topics) or query
+        max_results = int(submission.input.get("max_results", 15))
         task = TaskSpec(
             task_id=f"task-fixture-{suffix}",
             kind="paper_discovery",
@@ -148,6 +156,7 @@ async def _test_missing_provider_build_is_local_not_ready_and_does_not_start_cal
     app = build_local_app(
         database=tmp_path / "db" / "runtime.sqlite3",
         artifact_root=tmp_path / "artifacts",
+        workspace_root=tmp_path / "workspace",
         dotenv_path=tmp_path / "missing.env",
     )
     ready = route(app, "/api/v1/health/ready")
@@ -155,7 +164,18 @@ async def _test_missing_provider_build_is_local_not_ready_and_does_not_start_cal
 
     assert response.status == "not_ready"
     assert all(check.name != "provider" or check.status == "not_ready" for check in response.checks)
-    assert not hasattr(app.state.runtime, "chat_adapter")
+    assert not hasattr(app.state.orchestrator, "chat_adapter")
+
+    submit_fixture = route(app, "/api/v1/tasks/research-fixture")
+    get_run = route(app, "/api/v1/runs/{run_id}")
+    accepted = await submit_fixture(
+        FixtureResearchTaskRequest(objective="验证无 Provider 的 Harness 闭环")
+    )
+    assert app.state.orchestrator.work_once(now=NOW) == "partial"
+    detail = await get_run(accepted.run_id)
+    assert detail.task_family == "research_fixture"
+    assert detail.state.value == "partial"
+    assert detail.budget.tool_calls_used == 1
 
 
 def test_app_exposes_only_one_local_worker_and_no_workbench_assets(tmp_path) -> None:

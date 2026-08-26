@@ -66,6 +66,18 @@ class ResearchTaskRequest(_ApiModel):
         return normalized
 
 
+class FixtureResearchTaskRequest(_ApiModel):
+    objective: str = Field(min_length=1, max_length=4_000)
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=200)
+
+    @field_validator("objective")
+    @classmethod
+    def require_nonblank_objective(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("objective must not be blank")
+        return value.strip()
+
+
 class ResearchTaskAcceptedResponse(_ApiModel):
     task_id: str
     run_id: str
@@ -214,6 +226,13 @@ _STATE_MESSAGES = {
     UserRunState.EXPIRED: "任务已过期，请创建新的任务。",
 }
 
+_FIXTURE_STATE_MESSAGES = {
+    UserRunState.PENDING: "离线验证已保存，正在等待处理。",
+    UserRunState.WORKING: "正在执行离线 Harness 验证。",
+    UserRunState.PARTIAL: "离线 Harness 闭环已完成，真实研究能力尚未验证。",
+    UserRunState.FAILED: "离线 Harness 验证失败，请查看恢复建议。",
+}
+
 _EVENT_MESSAGES: dict[str, tuple[RunEventKind, str]] = {
     "step_claimed": (RunEventKind.PROGRESS, "已开始处理下一阶段。"),
     "step_succeeded": (RunEventKind.PROGRESS, "已完成一个处理阶段。"),
@@ -222,6 +241,12 @@ _EVENT_MESSAGES: dict[str, tuple[RunEventKind, str]] = {
     "cancel_requested": (RunEventKind.STATUS, "已收到取消请求。"),
     "attempt_cancelled": (RunEventKind.STATUS, "当前执行已取消。"),
     "recovery_decision": (RunEventKind.RECOVERY, "已记录你的恢复决定。"),
+    "agent_task_assigned": (RunEventKind.PROGRESS, "研究任务已分配给 Agent。"),
+    "agent_status_update": (RunEventKind.PROGRESS, "Agent 已提交新的状态或工具结果。"),
+    "agent_result_submitted": (RunEventKind.PROGRESS, "Agent 已提交结构化结果。"),
+    "agent_needs_input": (RunEventKind.STATUS, "Agent 需要补充输入。"),
+    "agent_failure_reported": (RunEventKind.STATUS, "Agent 已报告执行失败。"),
+    "agent_terminated": (RunEventKind.STATUS, "Agent 已终止。"),
 }
 
 
@@ -506,13 +531,18 @@ class WorkbenchQueryService:
 def _summary(record: RunOverviewRecord) -> RunSummaryResponse:
     state = map_run_state(record.run.status)
     query = record.task_input.get("query")
+    status_messages = (
+        _FIXTURE_STATE_MESSAGES
+        if record.task_kind == "research_fixture"
+        else _STATE_MESSAGES
+    )
     return RunSummaryResponse(
         run_id=record.run.run_id,
         task_id=record.run.task_id,
         task_family=record.task_kind,
         query=query if isinstance(query, str) else "",
         state=state,
-        status_message=_STATE_MESSAGES[state],
+        status_message=status_messages.get(state, _STATE_MESSAGES[state]),
         is_terminal=record.run.status.is_terminal,
         created_at=record.run.created_at,
         updated_at=record.run.updated_at,
@@ -565,6 +595,7 @@ __all__ = [
     "BudgetResponse",
     "DeliveryResponse",
     "EvidenceResponse",
+    "FixtureResearchTaskRequest",
     "ProgressResponse",
     "ReadinessCheckResponse",
     "ReadinessResponse",

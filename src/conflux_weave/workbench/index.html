@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light">
     <title>Conflux Weave</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=w5.3">
-    <script type="module" src="/assets/app.js?v=w5.3"></script>
+    <link rel="stylesheet" href="/assets/styles.css?v=v0.3-s0">
+    <script type="module" src="/assets/app.js?v=v0.3-s0"></script>
   </head>
   <body>
     <header class="topbar">
@@ -136,9 +136,22 @@
           </div>
           <button class="icon-button" value="cancel" formmethod="dialog" type="submit" aria-label="关闭" title="关闭">&times;</button>
         </header>
-        <label class="field-label" for="query">研究问题</label>
+        <fieldset class="mode-fieldset">
+          <legend class="field-label">任务类型</legend>
+          <div class="mode-switch">
+            <label>
+              <input type="radio" name="task_mode" value="research" checked>
+              <span>论文研究</span>
+            </label>
+            <label>
+              <input type="radio" name="task_mode" value="fixture">
+              <span>离线验证</span>
+            </label>
+          </div>
+        </fieldset>
+        <label id="query-label" class="field-label" for="query">研究问题</label>
         <textarea id="query" name="query" rows="6" maxlength="4000" required></textarea>
-        <div class="field-grid">
+        <div id="research-options" class="field-grid">
           <label>
             <span class="field-label">主题</span>
             <input id="topics" name="topics" type="text" maxlength="600">
