@@ -18,6 +18,8 @@ from conflux_weave.runtime.artifacts import LocalArtifactStore
 
 
 PROVIDER_SCHEMA_VERSION = "conflux-weave.openai-chat-completion.v1"
+EMBEDDING_SCHEMA_VERSION = "conflux-weave.embedding.v1"
+RERANK_SCHEMA_VERSION = "conflux-weave.rerank.v1"
 DEFAULT_TIMEOUT_SECONDS = 60.0
 
 
@@ -27,6 +29,8 @@ class ProviderConfig:
     api_key: str
     model: str
     provider_name: str = "openai-compatible"
+    embedding_model: str | None = None
+    reranker_model: str | None = None
 
     @classmethod
     def from_environment(cls, dotenv_path: Path | None = None) -> ProviderConfig:
@@ -41,6 +45,8 @@ class ProviderConfig:
         base_url = read_setting("CONFLUX_WEAVE_PROVIDER_BASE_URL")
         api_key = read_setting("CONFLUX_WEAVE_PROVIDER_API_KEY")
         model = read_setting("CONFLUX_WEAVE_PROVIDER_MODEL")
+        embedding_model = read_setting("CONFLUX_WEAVE_PROVIDER_EMBEDDING_MODEL") or None
+        reranker_model = read_setting("CONFLUX_WEAVE_PROVIDER_RERANKER_MODEL") or None
         missing = [
             name
             for name, value in (
@@ -59,7 +65,8 @@ class ProviderConfig:
             raise ProviderConfigurationError(
                 "CONFLUX_WEAVE_PROVIDER_BASE_URL must be an HTTPS URL"
             )
-        return cls(base_url=base_url.rstrip("/"), api_key=api_key, model=model)
+        return cls(base_url=base_url.rstrip("/"), api_key=api_key, model=model,
+                   embedding_model=embedding_model, reranker_model=reranker_model)
 
 
 @dataclass(frozen=True, slots=True)
@@ -285,6 +292,82 @@ class OpenAICompatibleChatAdapter:
             request_artifact=request_artifact,
             response_artifact=response_artifact,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class EmbeddingResult:
+    model: str
+    vectors: tuple[tuple[float, ...], ...]
+    input_tokens: int | None
+    request_artifact: ArtifactRef
+    response_artifact: ArtifactRef
+
+
+class OpenAICompatibleEmbeddingAdapter:
+    """OpenAI-compatible embeddings adapter with raw request/response evidence."""
+
+    def __init__(self, artifact_store: LocalArtifactStore, config: ProviderConfig, *, transport: ProviderHttpTransport | None = None, timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS, model: str | None = None) -> None:
+        self.artifact_store, self.config = artifact_store, config
+        self.transport = transport or UrllibProviderTransport()
+        self.timeout_seconds = timeout_seconds
+        self.model = model or config.embedding_model or "text-embedding-v4"
+
+    def embed(self, texts: list[str] | tuple[str, ...], *, producer_step_id: str = "step-provider-embedding") -> EmbeddingResult:
+        if not texts or any(not text.strip() for text in texts):
+            raise ValueError("texts must contain non-empty values")
+        payload = {"model": self.model, "input": list(texts)}
+        request = self.artifact_store.put_json({"schema_version": EMBEDDING_SCHEMA_VERSION, "endpoint": "/embeddings", "request": payload, "secret_recorded": False}, producer_step_id=producer_step_id, schema_version=EMBEDDING_SCHEMA_VERSION)
+        response = self.transport.post(self.config.base_url + "/embeddings", headers={"Authorization": f"Bearer {self.config.api_key}", "Content-Type": "application/json", "Accept": "application/json"}, body=json.dumps(payload, ensure_ascii=False).encode(), timeout_seconds=self.timeout_seconds)
+        response_artifact = self.artifact_store.put_bytes(response.body, media_type="application/json", producer_step_id=producer_step_id, schema_version=EMBEDDING_SCHEMA_VERSION + ".response")
+        if response.status_code != 200:
+            raise ProviderPortError(code="provider_http_failed", message=f"Provider returned HTTP {response.status_code}", retryable=response.status_code >= 500 or response.status_code == 429, status_code=response.status_code, request_artifact_ref=request.artifact_id, response_artifact_ref=response_artifact.artifact_id, recovery_action="检查 Embedding Provider 原始响应。")
+        try:
+            parsed = json.loads(response.body)
+            data = parsed["data"]
+            vectors = tuple(tuple(float(value) for value in item["embedding"]) for item in sorted(data, key=lambda item: item.get("index", 0)))
+            if len(vectors) != len(texts) or not vectors or len({len(vector) for vector in vectors}) != 1:
+                raise ValueError("embedding count or dimensions invalid")
+            usage = parsed.get("usage", {})
+            tokens = usage.get("prompt_tokens") if isinstance(usage, dict) else None
+            tokens = int(tokens) if isinstance(tokens, int) else None
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ProviderPortError(code="provider_response_invalid", message=f"Embedding response contract invalid: {exc}", retryable=False, request_artifact_ref=request.artifact_id, response_artifact_ref=response_artifact.artifact_id, recovery_action="保留原始响应并检查 Embedding 合同。") from exc
+        return EmbeddingResult(self.model, vectors, tokens, request, response_artifact)
+
+
+@dataclass(frozen=True, slots=True)
+class RerankResult:
+    model: str
+    scores: tuple[float, ...]
+    ranked_indices: tuple[int, ...]
+    request_artifact: ArtifactRef
+    response_artifact: ArtifactRef
+
+
+class OpenAICompatibleRerankerAdapter:
+    def __init__(self, artifact_store: LocalArtifactStore, config: ProviderConfig, *, transport: ProviderHttpTransport | None = None, timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS, model: str | None = None) -> None:
+        self.artifact_store, self.config = artifact_store, config
+        self.transport = transport or UrllibProviderTransport()
+        self.timeout_seconds = timeout_seconds
+        self.model = model or config.reranker_model or "qwen3-rerank"
+
+    def rerank(self, query: str, documents: list[str] | tuple[str, ...], *, top_n: int | None = None, producer_step_id: str = "step-provider-rerank") -> RerankResult:
+        if not query.strip() or not documents or any(not item.strip() for item in documents):
+            raise ValueError("query and documents must not be empty")
+        payload = {"model": self.model, "query": query, "documents": list(documents)}
+        if top_n is not None: payload["top_n"] = top_n
+        request = self.artifact_store.put_json({"schema_version": RERANK_SCHEMA_VERSION, "endpoint": "/rerank", "request": payload, "secret_recorded": False}, producer_step_id=producer_step_id, schema_version=RERANK_SCHEMA_VERSION)
+        response = self.transport.post(self.config.base_url + "/rerank", headers={"Authorization": f"Bearer {self.config.api_key}", "Content-Type": "application/json", "Accept": "application/json"}, body=json.dumps(payload, ensure_ascii=False).encode(), timeout_seconds=self.timeout_seconds)
+        response_artifact = self.artifact_store.put_bytes(response.body, media_type="application/json", producer_step_id=producer_step_id, schema_version=RERANK_SCHEMA_VERSION + ".response")
+        if response.status_code != 200:
+            raise ProviderPortError(code="provider_http_failed", message=f"Provider returned HTTP {response.status_code}", retryable=response.status_code >= 500 or response.status_code == 429, status_code=response.status_code, request_artifact_ref=request.artifact_id, response_artifact_ref=response_artifact.artifact_id, recovery_action="检查 Reranker Provider 原始响应。")
+        try:
+            data = json.loads(response.body)["results"]
+            pairs = [(int(item["index"]), float(item["relevance_score"])) for item in data]
+            pairs.sort(key=lambda item: (-item[1], item[0]))
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ProviderPortError(code="provider_response_invalid", message=f"Rerank response contract invalid: {exc}", retryable=False, request_artifact_ref=request.artifact_id, response_artifact_ref=response_artifact.artifact_id, recovery_action="保留原始响应并检查 Rerank 合同。") from exc
+        return RerankResult(self.model, tuple(score for _, score in pairs), tuple(index for index, _ in pairs), request, response_artifact)
 
 
 def _decode_object(

@@ -6,6 +6,8 @@ from conflux_weave.retrieval import (
     RetrievalDocument,
     RetrievalStrategy,
     evaluate_retrieval,
+    DenseRetriever,
+    reciprocal_rank_fusion,
 )
 
 
@@ -96,3 +98,13 @@ def test_search_does_not_return_zero_score_documents() -> None:
     result = BM25Retriever(DOCUMENTS).search("unmatched-token")
 
     assert result.hits == ()
+
+
+def test_dense_and_rrf_are_deterministic() -> None:
+    dense = DenseRetriever(DOCUMENTS, ((1.0, 0.0), (0.0, 1.0), (0.5, 0.5)))
+    result = dense.search_vector((1.0, 0.0), top_k=2)
+    assert result.hits[0].document_id == "agent-context"
+    lexical = BM25Retriever(DOCUMENTS).search("messaging", top_k=2)
+    fused = reciprocal_rank_fusion(result, lexical, top_k=3)
+    assert fused.strategy is RetrievalStrategy.HYBRID
+    assert fused.hits[0].rank == 1

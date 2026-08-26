@@ -19,6 +19,8 @@ _TOKEN_RE = re.compile(r"[a-z0-9_]+|[\u4e00-\u9fff]+", re.IGNORECASE)
 
 class RetrievalStrategy(StrEnum):
     BM25 = "bm25"
+    DENSE = "dense"
+    HYBRID = "hybrid"
 
 
 class TokenizationMode(StrEnum):
@@ -54,6 +56,44 @@ class RetrievalQueryResult:
     query: str
     strategy: RetrievalStrategy
     hits: tuple[RetrievalHit, ...]
+
+
+def cosine_similarity(left: tuple[float, ...], right: tuple[float, ...]) -> float:
+    if len(left) != len(right) or not left:
+        raise ValueError("vectors must have equal non-zero dimensions")
+    denominator = math.sqrt(sum(value * value for value in left)) * math.sqrt(sum(value * value for value in right))
+    return 0.0 if denominator == 0 else sum(a * b for a, b in zip(left, right)) / denominator
+
+
+class DenseRetriever:
+    strategy = RetrievalStrategy.DENSE
+
+    def __init__(self, documents: Iterable[RetrievalDocument], vectors: Iterable[tuple[float, ...]]) -> None:
+        self.documents = tuple(documents)
+        self.vectors = tuple(tuple(vector) for vector in vectors)
+        if not self.documents or len(self.documents) != len(self.vectors):
+            raise ValueError("documents and vectors must be non-empty and aligned")
+        if len({len(vector) for vector in self.vectors}) != 1 or not self.vectors[0]:
+            raise ValueError("vectors must have consistent non-zero dimensions")
+
+    def search_vector(self, query_vector: tuple[float, ...], *, top_k: int = 5) -> RetrievalQueryResult:
+        if top_k <= 0:
+            raise ValueError("top_k must be positive")
+        ranked = sorted(enumerate(self.vectors), key=lambda item: (-cosine_similarity(query_vector, item[1]), self.documents[item[0]].document_id))[:top_k]
+        return RetrievalQueryResult("<embedding>", self.strategy, tuple(RetrievalHit(self.documents[i].document_id, cosine_similarity(query_vector, vector), rank, self.documents[i].source_snapshot_id, self.documents[i].locator) for rank, (i, vector) in enumerate(ranked, 1)))
+
+
+def reciprocal_rank_fusion(*results: RetrievalQueryResult, top_k: int = 10, k: int = 60) -> RetrievalQueryResult:
+    if not results or top_k <= 0 or k <= 0:
+        raise ValueError("results, top_k and k must be positive")
+    scores: dict[str, float] = {}
+    metadata: dict[str, RetrievalHit] = {}
+    for result in results:
+        for hit in result.hits:
+            scores[hit.document_id] = scores.get(hit.document_id, 0.0) + 1 / (k + hit.rank)
+            metadata.setdefault(hit.document_id, hit)
+    ordered = sorted(scores, key=lambda doc_id: (-scores[doc_id], doc_id))[:top_k]
+    return RetrievalQueryResult(results[0].query, RetrievalStrategy.HYBRID, tuple(RetrievalHit(doc_id, scores[doc_id], rank, metadata[doc_id].source_snapshot_id, metadata[doc_id].locator) for rank, doc_id in enumerate(ordered, 1)))
 
 
 @dataclass(frozen=True, slots=True)

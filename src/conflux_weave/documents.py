@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -290,3 +291,21 @@ def _format_locator(locator: dict[str, int | str]) -> str:
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def build_pdf_manifest(root: Path, *, output: Path | None = None) -> dict[str, object]:
+    """Create a deterministic read-only inventory for a local PDF corpus."""
+    if not root.is_dir():
+        raise FileNotFoundError(f"corpus directory not found: {root}")
+    entries = []
+    for path in sorted(root.rglob("*.pdf"), key=lambda item: str(item).casefold()):
+        try:
+            raw = path.read_bytes()
+            entries.append({"path": str(path), "relative_path": str(path.relative_to(root)), "size_bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest(), "status": "importable" if raw.startswith(b"%PDF") else "parse_failed"})
+        except OSError as exc:
+            entries.append({"path": str(path), "relative_path": str(path.relative_to(root)), "size_bytes": None, "sha256": None, "status": "read_failed", "failure": str(exc)})
+    manifest = {"schema_version": "conflux-weave.corpus-manifest.v1", "root": str(root.resolve()), "generated_at": _utc_now(), "file_count": len(entries), "files": entries}
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return manifest
