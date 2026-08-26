@@ -18,7 +18,7 @@ from conflux_weave.runtime import OutcomeScenario
 _LIVE_RESEARCH_COMMANDS = frozenset(
     {"discover-papers", "research-repository", "review-document"}
 )
-_SOURCE_INGESTION_COMMANDS = frozenset({"search-github", "import-document", "manifest-corpus"})
+_SOURCE_INGESTION_COMMANDS = frozenset({"search-github", "import-document", "manifest-corpus", "import-corpus"})
 _LOCAL_VALIDATION_COMMANDS = frozenset({"validate-outcome", "validate-workflow"})
 
 
@@ -64,6 +64,10 @@ def build_parser() -> argparse.ArgumentParser:
     manifest = subparsers.add_parser("manifest-corpus", help="create a read-only PDF corpus manifest")
     manifest.add_argument("path", type=Path)
     manifest.add_argument("--output", type=Path, default=Path("var") / "acceptance" / "v0.3-s1" / "corpus-manifest.json")
+    corpus = subparsers.add_parser("import-corpus", help="import a PDF corpus with hash deduplication")
+    corpus.add_argument("path", type=Path)
+    corpus.add_argument("--artifact-root", type=Path, default=Path("var") / "artifacts" / "sha256")
+    corpus.add_argument("--output", type=Path, default=Path("var") / "acceptance" / "v0.3-s1" / "corpus-import-manifest.json")
     github = subparsers.add_parser(
         "search-github",
         help="discover GitHub repository candidates and optionally register one source",

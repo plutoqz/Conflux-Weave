@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from conflux_weave.documents import LocalDocumentImporter, UnsupportedDocumentError, build_pdf_manifest
+from conflux_weave.documents import LocalDocumentImporter, UnsupportedDocumentError, build_pdf_manifest, import_pdf_corpus
 from conflux_weave.runtime import LocalArtifactStore
 from conflux_weave.search import GitHubRepositorySearchAdapter, SearchPortError
 
@@ -15,6 +15,14 @@ def run(args, print_json) -> int:
             print_json({"status": "failed", "reason": "corpus_invalid", "message": str(exc)})
             return 1
         print_json({"status": "succeeded", "manifest_artifact": str(args.output), "file_count": manifest["file_count"], "statuses": {status: sum(1 for item in manifest["files"] if item["status"] == status) for status in sorted({item["status"] for item in manifest["files"]})}, "network_called": False, "provider_called": False})
+        return 0
+    if args.command == "import-corpus":
+        try:
+            result = import_pdf_corpus(args.path, LocalDocumentImporter(LocalArtifactStore(args.artifact_root)), output=args.output)
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            print_json({"status": "failed", "reason": "corpus_invalid", "message": str(exc)})
+            return 1
+        print_json({"status": "succeeded", "manifest_artifact": str(args.output), "file_count": result["file_count"], "status_counts": result["status_counts"], "network_called": False, "provider_called": False})
         return 0
     if args.command == "search-github":
         return _search_github(args, print_json)

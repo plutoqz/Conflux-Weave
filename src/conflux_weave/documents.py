@@ -314,3 +314,45 @@ def build_pdf_manifest(root: Path, *, output: Path | None = None) -> dict[str, o
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return manifest
+
+
+def import_pdf_corpus(
+    root: Path,
+    importer: LocalDocumentImporter,
+    *,
+    output: Path | None = None,
+    producer_step_id: str = "step-corpus-import",
+) -> dict[str, object]:
+    """Import a PDF directory with content-hash deduplication and failure retention."""
+    manifest = build_pdf_manifest(root)
+    seen: dict[str, str] = {}
+    rows: list[dict[str, object]] = []
+    for item in manifest["files"]:
+        path = Path(str(item["path"]))
+        row = dict(item)
+        content_hash = str(item["sha256"])
+        if content_hash in seen:
+            row.update(status="duplicate", duplicate_of=seen[content_hash])
+        else:
+            try:
+                imported = importer.import_path(path, producer_step_id=producer_step_id)
+                seen[content_hash] = str(item["relative_path"])
+                row.update(status="imported", document_id=imported.document_id,
+                           source_snapshot_id=imported.source_snapshot.source_id,
+                           source_artifact_id=imported.source_artifact.artifact_id,
+                           segments_artifact_id=imported.segments_artifact.artifact_id,
+                           segment_count=len(imported.segments))
+            except Exception as exc:
+                row.update(status="parse_failed", error_type=type(exc).__name__, error=str(exc)[:500])
+        rows.append(row)
+    result = {
+        "schema_version": "conflux-weave.corpus-import-manifest.v1",
+        "root": str(root.resolve()),
+        "file_count": len(rows),
+        "status_counts": {status: sum(1 for row in rows if row["status"] == status) for status in sorted({str(row["status"]) for row in rows})},
+        "files": rows,
+    }
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return result
