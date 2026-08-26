@@ -106,6 +106,20 @@ def test_submission_is_idempotent_and_executes_no_provider_call(tmp_path):
     ]
 
 
+def test_managed_submission_reserves_plan_and_coverage_audit_calls(tmp_path):
+    runtime, repository, _, _ = build_runtime(tmp_path)
+
+    submission = runtime.submit(
+        "Compare methods and evaluation",
+        task_kind="managed_verified_research",
+        max_subquestions=2,
+    )
+
+    budget = repository.get_budget_status(submission.run_id)
+    assert budget.limit.tool_calls == 14
+    assert budget.limit.retrieval_rounds == 2
+
+
 def test_cancel_before_worker_execution_makes_zero_executor_calls(tmp_path):
     runtime, repository, _, executor = build_runtime(tmp_path)
     submission = runtime.submit("Cancel this research")

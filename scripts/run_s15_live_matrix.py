@@ -176,7 +176,10 @@ def _execute_case(case, runtime, repository, *, protocol_hash, corpus_manifest, 
 
 def _discovery_record(store, artifact_id, case):
     payload = _read_artifact(store, artifact_id)
-    if payload.get("schema_version") != "conflux-weave.arxiv-paper-discovery-live.v1":
+    if payload.get("schema_version") not in {
+        "conflux-weave.arxiv-paper-discovery-live.v1",
+        "conflux-weave.arxiv-paper-discovery-live.v2",
+    }:
         raise ValueError("discovery manifest schema mismatch")
     required = {"2608.24188v1", "2608.24876v1"}
     if not required.issubset(set(payload.get("selected_arxiv_ids", []))):

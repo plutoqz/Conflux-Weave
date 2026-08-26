@@ -90,21 +90,22 @@ class FakeTimer:
 
 class ProviderTransport:
     def __init__(self, content):
-        self.content = content
+        self.contents = list(content) if isinstance(content, list) else [content]
         self.calls = 0
         self.requests = []
 
     def post(self, url, *, headers, body, timeout_seconds):
         self.calls += 1
         self.requests.append(json.loads(body))
+        content = self.contents[self.calls - 1]
         response = {
-            "id": "chatcmpl-paper-fixture",
+            "id": f"chatcmpl-paper-fixture-{self.calls}",
             "model": "fixture-model",
             "choices": [
                 {
                     "message": {
                         "role": "assistant",
-                        "content": json.dumps(self.content, ensure_ascii=False),
+                        "content": json.dumps(content, ensure_ascii=False),
                     },
                     "finish_reason": "stop",
                 }
@@ -130,13 +131,27 @@ def stable_id(prefix):
     return f"{prefix}-fixed"
 
 
-def build_workflow(tmp_path, content):
+def build_workflow(tmp_path, content, verification=None):
     store = LocalArtifactStore(tmp_path / "artifacts")
     arxiv_transport = ArxivTransport()
     search = ArxivSearchAdapter(
         store, transport=arxiv_transport, acquired_at=fixed_clock()
     )
-    provider_transport = ProviderTransport(content)
+    if verification is None:
+        raw_claims = content.get("claims", []) if isinstance(content, dict) else []
+        verification = {
+            "assessments": [
+                {
+                    "claim_id": f"paper-claim-{index:04d}",
+                    "evidence_ids": item.get("evidence_ids", []),
+                    "relation": "supports",
+                    "verdict": "accepted",
+                    "rationale": "The title and abstract directly support this bounded relevance Claim.",
+                }
+                for index, item in enumerate(raw_claims, 1)
+            ]
+        }
+    provider_transport = ProviderTransport([content, verification])
     provider = OpenAICompatibleChatAdapter(
         store,
         ProviderConfig(
@@ -193,8 +208,9 @@ def test_paper_workflow_reranks_and_compiles_readable_closed_delivery(tmp_path):
 
     assert result.final_run.status is RunStatus.PARTIAL
     assert result.delivery.disposition is DeliveryDisposition.PARTIAL
+    assert result.final_run.budget.tool_calls == 3
     assert [paper.arxiv_id for paper in result.selected_papers] == ["2608.00002v1"]
-    assert provider_transport.calls == 1
+    assert provider_transport.calls == 2
     user_prompt = provider_transport.requests[0]["messages"][1]["content"]
     assert "Evidence 边界和其他限制由工作流确定性生成" in user_prompt
     assert "不要输出 limitations" in user_prompt
@@ -208,7 +224,155 @@ def test_paper_workflow_reranks_and_compiles_readable_closed_delivery(tmp_path):
     assert "## Evidence 汇总" in report
     manifest = store.read_bytes(result.manifest_artifact)
     assert b"fixture-secret" not in manifest
-    assert json.loads(manifest)["usage"]["total_tokens"] == 160
+    manifest_payload = json.loads(manifest)
+    assert manifest_payload["usage"]["total_tokens"] == 320
+    assert manifest_payload["candidate_claim_count"] == 1
+    assert manifest_payload["rejected_claim_count"] == 0
+
+
+def test_paper_workflow_filters_overstated_claim_after_independent_review(tmp_path):
+    candidate = {
+        "claims": [
+            {
+                "text": "Context Management studies long-running LLM agent context.",
+                "evidence_ids": ["arxiv-paper-01"],
+            },
+            {
+                "text": "Context Management proves lower production failure rates.",
+                "evidence_ids": ["arxiv-paper-01"],
+            },
+        ]
+    }
+    verification = {
+        "assessments": [
+            {
+                "claim_id": "paper-claim-0001",
+                "evidence_ids": ["arxiv-paper-01"],
+                "relation": "supports",
+                "verdict": "accepted",
+                "rationale": "The abstract directly describes context management for agents.",
+            },
+            {
+                "claim_id": "paper-claim-0002",
+                "evidence_ids": ["arxiv-paper-01"],
+                "relation": "insufficient",
+                "verdict": "rejected",
+                "rationale": "The abstract contains no production failure-rate result.",
+            },
+        ]
+    }
+    workflow, store, _, provider_transport = build_workflow(
+        tmp_path, candidate, verification
+    )
+
+    result = workflow.execute(
+        "查找 Agent 上下文管理论文",
+        search_query="agent context management",
+        max_results=2,
+    )
+
+    assert provider_transport.calls == 2
+    assert [item.text for item in result.claims] == [candidate["claims"][0]["text"]]
+    assert len(result.citations) == len(result.evidence) == 1
+    report = store.read_bytes(result.report_artifact).decode()
+    assert "lower production failure rates" not in report
+    assert "移除了 1 条" in report
+    manifest = json.loads(store.read_bytes(result.manifest_artifact))
+    assert manifest["candidate_claim_count"] == 2
+    assert manifest["claim_count"] == 1
+    assert manifest["rejected_claim_count"] == 1
+    assert manifest["claim_assessment_artifact_ref"]
+
+
+def test_paper_workflow_delivers_zero_claims_when_all_candidates_are_rejected(tmp_path):
+    candidate = {
+        "claims": [
+            {
+                "text": "Context Management proves lower production failure rates.",
+                "evidence_ids": ["arxiv-paper-01"],
+            }
+        ]
+    }
+    verification = {
+        "assessments": [
+            {
+                "claim_id": "paper-claim-0001",
+                "evidence_ids": ["arxiv-paper-01"],
+                "relation": "insufficient",
+                "verdict": "rejected",
+                "rationale": "The abstract contains no production result.",
+            }
+        ]
+    }
+    workflow, store, _, _ = build_workflow(tmp_path, candidate, verification)
+
+    result = workflow.execute(
+        "查找 Agent 上下文管理论文",
+        search_query="agent context management",
+        max_results=2,
+    )
+
+    assert result.claims == result.citations == result.evidence == ()
+    assert result.delivery.evidence_refs == ()
+    report = store.read_bytes(result.report_artifact).decode()
+    assert "没有模型生成的相关性 Claim 通过" in report
+    assert "lower production failure rates" not in report
+
+
+def test_paper_workflow_fails_closed_when_verifier_omits_a_claim(tmp_path):
+    candidate = {
+        "claims": [
+            {
+                "text": "Context Management studies agent context.",
+                "evidence_ids": ["arxiv-paper-01"],
+            }
+        ]
+    }
+    workflow, store, _, provider_transport = build_workflow(
+        tmp_path, candidate, {"assessments": []}
+    )
+
+    with pytest.raises(LiveResearchValidationError) as captured:
+        workflow.execute("papers", search_query="agent context", max_results=2)
+
+    assert captured.value.code == "paper_claim_verification_invalid"
+    assert provider_transport.calls == 2
+    assert captured.value.request_artifact_ref
+    assert captured.value.response_artifact_ref
+    failure = json.loads(
+        store.path_for_digest(
+            captured.value.artifact_ref.removeprefix("artifact-sha256-")
+        ).read_bytes()
+    )
+    assert failure["verification_response_artifact_ref"] == (
+        captured.value.response_artifact_ref
+    )
+
+
+def test_paper_workflow_rejects_assessment_evidence_rebinding(tmp_path):
+    candidate = {
+        "claims": [
+            {
+                "text": "Context Management studies agent context.",
+                "evidence_ids": ["arxiv-paper-01"],
+            }
+        ]
+    }
+    verification = {
+        "assessments": [
+            {
+                "claim_id": "paper-claim-0001",
+                "evidence_ids": ["arxiv-paper-02"],
+                "relation": "supports",
+                "verdict": "accepted",
+                "rationale": "Attempted evidence rebinding.",
+            }
+        ]
+    }
+    workflow, _, _, _ = build_workflow(tmp_path, candidate, verification)
+
+    with pytest.raises(LiveResearchValidationError, match="original Evidence binding"):
+        workflow.execute("papers", search_query="agent context", max_results=2)
 
 
 def test_paper_workflow_rejects_unknown_evidence_and_keeps_provider_response(tmp_path):

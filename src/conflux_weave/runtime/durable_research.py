@@ -259,7 +259,7 @@ class DurableResearchRuntime:
         ):
             raise ValueError("follow_up_question must not be blank")
 
-        provider_call_limit = 6 if task_kind == VERIFIED_RESEARCH_TASK else 1 + 6 * max_subquestions
+        provider_call_limit = 6 if task_kind == VERIFIED_RESEARCH_TASK else 2 + 6 * max_subquestions
         retrieval_round_limit = 1 if task_kind == VERIFIED_RESEARCH_TASK else max_subquestions
         frozen_budget = budget or BudgetLedger(
             900,

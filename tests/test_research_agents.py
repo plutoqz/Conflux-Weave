@@ -2,6 +2,7 @@ import json
 import pytest
 
 from conflux_weave.core import DeliveryDisposition
+from conflux_weave.evidence import Citation, Claim, EvidenceRef
 from conflux_weave.hybrid_retrieval import HybridRetrievalPipeline
 from conflux_weave.indexing import LanceDBDenseIndex
 from conflux_weave.managed_research import ManagedVerifiedResearchWorkflow
@@ -177,13 +178,36 @@ def test_manager_plans_and_aggregates_verified_subruns(tmp_path):
         chat_response({"assessments": [{"claim_id": "claim-0001", "evidence_ids": ["evidence-0001"], "relation": "supports", "verdict": "accepted", "rationale": "Direct."}]}, "verify-b"),
     ]))
     manager_chat = OpenAICompatibleChatAdapter(store, config, transport=SequenceTransport([
-        chat_response({"subquestions": ["What method reduces context?", "How is success evaluated?"], "stop_condition": "Both dimensions verified."}, "manager")
+        chat_response({
+            "coverage_requirements": [
+                {"coverage_id": "coverage-methods", "objective_quote": "methods"},
+                {"coverage_id": "coverage-evaluation", "objective_quote": "evaluation"},
+            ],
+            "subquestions": [
+                {"question": "What method reduces context?", "coverage_ids": ["coverage-methods"]},
+                {"question": "How is success evaluated?", "coverage_ids": ["coverage-evaluation"]},
+            ],
+        }, "manager"),
+        chat_response({"assessments": [
+            {"coverage_id": "coverage-methods", "status": "covered", "claim_ids": ["sq1-claim-0001"], "rationale": "The method Claim addresses this requirement."},
+            {"coverage_id": "coverage-evaluation", "status": "covered", "claim_ids": ["sq2-claim-0001"], "rationale": "The evaluation Claim addresses this requirement."},
+        ]}, "coverage"),
     ]))
     result = ManagedVerifiedResearchWorkflow(store, VerifiedResearchWorkflow(store, retrieval, worker_chat), manager_chat).execute("Compare methods and evaluation", max_subquestions=2)
     assert len(result.subruns) == 2
     assert result.claim_count == 2
+    assert result.disposition is DeliveryDisposition.COMPLETE
+    assert all(item.status == "covered" for item in result.coverage_assessments)
     report = store.path_for_digest(result.report_artifact_id.removeprefix("artifact-sha256-")).read_text(encoding="utf-8")
     assert "Subquestion 1" in report and "Subquestion 2" in report
+    manifest = json.loads(
+        store.path_for_digest(
+            result.manifest_artifact_id.removeprefix("artifact-sha256-")
+        ).read_text(encoding="utf-8")
+    )
+    assert manifest["coverage_assessment_artifact"]
+    assert manifest["coverage_request_artifact"]
+    assert manifest["stop_reason"] == "all_subquestions_verified"
 
 
 def test_manager_rejects_unauthorized_time_scope():
@@ -192,6 +216,79 @@ def test_manager_rejects_unauthorized_time_scope():
             "Compare recent methods.",
             ("What methods were published in 2024?", "How were they evaluated?"),
         )
+
+
+def test_manager_plan_requires_grounded_and_fully_assigned_coverage():
+    content = json.dumps({
+        "coverage_requirements": [
+            {"coverage_id": "coverage-1", "objective_quote": "invented constraint"},
+        ],
+        "subquestions": [
+            {"question": "Check A", "coverage_ids": ["coverage-1"]},
+            {"question": "Check B", "coverage_ids": ["coverage-1"]},
+        ],
+    })
+
+    with pytest.raises(ValueError, match="quote the original objective"):
+        ManagedVerifiedResearchWorkflow._parse_plan(
+            "Compare A and B", content, max_subquestions=2
+        )
+
+
+def test_manager_marks_missing_objective_coverage_partial(tmp_path):
+    store = LocalArtifactStore(tmp_path / "artifacts")
+    config = ProviderConfig("https://provider.example/v1", "secret", "chat")
+    worker_report = store.put_bytes(
+        b"# Supported result\n",
+        media_type="text/markdown",
+        producer_step_id="fixture-worker",
+        schema_version="fixture-report.v1",
+    )
+    worker_manifest = store.put_json(
+        {"disposition": "complete"},
+        producer_step_id="fixture-worker",
+        schema_version="fixture-manifest.v1",
+    )
+    supported = ResearchExecution(
+        worker_report.artifact_id,
+        worker_manifest.artifact_id,
+        (Claim("claim-0001", "Method A reduces context.", "finding", "primary", "fixture"),),
+        (EvidenceRef("evidence-0001", "source-1", {"page": 1}, "Method A reduces context.", "fixture"),),
+        (Citation("citation-0001", "claim-0001", "evidence-0001", 1),),
+        (),
+        CoverageReport(1, 1, 1, 0, 0, "verified_delivery"),
+    )
+    worker = type("SupportedWorker", (), {"execute": lambda self, question: supported})()
+    manager_chat = OpenAICompatibleChatAdapter(
+        store,
+        config,
+        transport=SequenceTransport([
+            chat_response({
+                "coverage_requirements": [
+                    {"coverage_id": "coverage-methods", "objective_quote": "methods"},
+                    {"coverage_id": "coverage-evaluation", "objective_quote": "evaluation"},
+                ],
+                "subquestions": [
+                    {"question": "Compare the methods.", "coverage_ids": ["coverage-methods"]},
+                    {"question": "Compare their evaluation.", "coverage_ids": ["coverage-evaluation"]},
+                ],
+            }, "manager-partial"),
+            chat_response({"assessments": [
+                {"coverage_id": "coverage-methods", "status": "covered", "claim_ids": ["sq1-claim-0001"], "rationale": "Methods are addressed."},
+                {"coverage_id": "coverage-evaluation", "status": "missing", "claim_ids": [], "rationale": "No evaluation outcome is reported."},
+            ]}, "coverage-partial"),
+        ]),
+    )
+
+    result = ManagedVerifiedResearchWorkflow(store, worker, manager_chat).execute(
+        "Compare methods and evaluation", max_subquestions=2
+    )
+
+    assert result.disposition is DeliveryDisposition.PARTIAL
+    assert result.unmet_criteria == (
+        "Objective coverage was not demonstrated for: evaluation",
+    )
+    assert result.coverage_assessments[1].status == "missing"
 
 
 def test_manager_aggregates_empty_subruns_as_no_answer(tmp_path):
@@ -226,7 +323,15 @@ def test_manager_aggregates_empty_subruns_as_no_answer(tmp_path):
         transport=SequenceTransport(
             [
                 chat_response(
-                    {"subquestions": ["Check method A.", "Check method B."]},
+                    {
+                        "coverage_requirements": [
+                            {"coverage_id": "coverage-compare", "objective_quote": "Compare method A and method B"},
+                        ],
+                        "subquestions": [
+                            {"question": "Check method A.", "coverage_ids": ["coverage-compare"]},
+                            {"question": "Check method B.", "coverage_ids": ["coverage-compare"]},
+                        ],
+                    },
                     "manager-empty",
                 )
             ]

@@ -11,7 +11,7 @@ import xml.etree.ElementTree as ET
 from base64 import b64decode, b64encode
 from collections.abc import Callable
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -35,10 +35,13 @@ from conflux_weave.core import (
 )
 from conflux_weave.evidence import (
     AnswerBlock,
+    AssessmentVerdict,
     ArtifactRef,
     Citation,
     Claim,
+    ClaimAssessment,
     EvidenceRef,
+    EvidenceRelation,
     EvidenceSupportStatus,
     SourceSnapshot,
     SourceTrustLevel,
@@ -54,9 +57,9 @@ from conflux_weave.runtime.artifacts import LocalArtifactStore
 ARXIV_API = "https://export.arxiv.org/api/query"
 ATOM = "{http://www.w3.org/2005/Atom}"
 ARXIV = "{http://arxiv.org/schemas/atom}"
-WORKFLOW_VERSION = "fixed-arxiv-paper-discovery-live-v1"
-SCHEMA_VERSION = "conflux-weave.arxiv-paper-discovery-live.v1"
-PROMPT_VERSION = "arxiv-relevance-claims-zh-v3"
+WORKFLOW_VERSION = "fixed-arxiv-paper-discovery-live-v2"
+SCHEMA_VERSION = "conflux-weave.arxiv-paper-discovery-live.v2"
+PROMPT_VERSION = "arxiv-relevance-claims-zh-v4-verified"
 MAX_OUTPUT_TOKENS = 2_048
 MAX_SUMMARY_CHARS = 1_600
 MAX_SELECTED = 8
@@ -623,7 +626,7 @@ class FixedPaperDiscoveryWorkflow:
             self.id_factory("step"),
         )
         created_at = self.clock()
-        budget = BudgetLedger(180, 20_000, MAX_OUTPUT_TOKENS, "provider-price-not-frozen", 2, 1, 1)
+        budget = BudgetLedger(240, 40_000, MAX_OUTPUT_TOKENS * 2, "provider-price-not-frozen", 3, 1, 1)
         config_artifact = self.artifact_store.put_json(
             {
                 "schema_version": SCHEMA_VERSION,
@@ -636,7 +639,12 @@ class FixedPaperDiscoveryWorkflow:
                 "selected_limit": MAX_SELECTED,
                 "provider": self.chat_adapter.config.provider_name,
                 "model": self.chat_adapter.config.model,
-                "parameters": {"temperature": 0.0, "max_output_tokens": MAX_OUTPUT_TOKENS, "enable_thinking": False},
+                "parameters": {
+                    "temperature": 0.0,
+                    "draft_max_output_tokens": MAX_OUTPUT_TOKENS,
+                    "verification_max_output_tokens": MAX_OUTPUT_TOKENS,
+                    "enable_thinking": False,
+                },
                 "automatic_retry": False,
                 "automatic_retry_scope": "read_only_source_get_only",
                 "provider_automatic_retry": False,
@@ -698,7 +706,7 @@ class FixedPaperDiscoveryWorkflow:
                 response_artifact_ref=completion.response_artifact.artifact_id,
             )
         try:
-            claims, citations, model_limitations = _parse_claims(completion.content, evidence, step_id)
+            candidate_claims, candidate_citations, model_limitations = _parse_claims(completion.content, evidence, step_id)
         except LiveResearchValidationError as exc:
             exc.request_artifact_ref = completion.request_artifact.artifact_id
             exc.response_artifact_ref = completion.response_artifact.artifact_id
@@ -735,15 +743,115 @@ class FixedPaperDiscoveryWorkflow:
             )
             exc.artifact_ref = failure_manifest.artifact_id
             raise
+        verification = self.chat_adapter.complete(
+            system_prompt=(
+                "Act as an independent arXiv metadata Claim verifier. Return JSON with assessments only. "
+                "Assess every supplied claim against only the quoted title and abstract Evidence. "
+                "Use relation supports|contradicts|context|insufficient and verdict accepted|rejected|uncertain. "
+                "Accept only direct support; reject stronger production, causal, evaluation, publication-status, "
+                "or source-quality statements not established by the Evidence."
+            ),
+            user_prompt=json.dumps(
+                {
+                    "claims": [asdict(item) for item in candidate_claims],
+                    "evidence": [asdict(item) for item in evidence],
+                },
+                ensure_ascii=False,
+            ),
+            max_output_tokens=MAX_OUTPUT_TOKENS,
+            temperature=0.0,
+            json_object=True,
+            enable_thinking=False,
+            producer_step_id=step_id,
+        )
+        if verification.output_tokens > MAX_OUTPUT_TOKENS:
+            raise LiveResearchValidationError(
+                f"Verifier output usage exceeded budget: {verification.output_tokens}/{MAX_OUTPUT_TOKENS}",
+                code="budget_exhausted",
+                request_artifact_ref=verification.request_artifact.artifact_id,
+                response_artifact_ref=verification.response_artifact.artifact_id,
+            )
+        try:
+            assessments, assessment_artifact = _parse_claim_assessments(
+                verification.content,
+                candidate_claims,
+                candidate_citations,
+                evidence,
+                verification.response_artifact.artifact_id,
+                self.artifact_store,
+                step_id,
+            )
+        except LiveResearchValidationError as exc:
+            exc.request_artifact_ref = verification.request_artifact.artifact_id
+            exc.response_artifact_ref = verification.response_artifact.artifact_id
+            failure_manifest = self.artifact_store.put_json(
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "run_id": run_id,
+                    "status": RunStatus.FAILED.value,
+                    "error_code": exc.code,
+                    "message": str(exc),
+                    "config_artifact_ref": config_artifact.artifact_id,
+                    "search_response_artifact_ref": search.response_artifact.artifact_id,
+                    "provider_request_artifact_ref": completion.request_artifact.artifact_id,
+                    "provider_response_artifact_ref": completion.response_artifact.artifact_id,
+                    "verification_request_artifact_ref": verification.request_artifact.artifact_id,
+                    "verification_response_artifact_ref": verification.response_artifact.artifact_id,
+                    "provider_automatic_retry": False,
+                    "fallback": False,
+                    "secret_recorded": False,
+                },
+                producer_step_id=step_id,
+                schema_version=SCHEMA_VERSION,
+            )
+            exc.artifact_ref = failure_manifest.artifact_id
+            raise
+        accepted_ids = {
+            item.claim_id
+            for item in assessments
+            if item.relation is EvidenceRelation.SUPPORTS
+            and item.verdict is AssessmentVerdict.ACCEPTED
+        }
+        claims = tuple(item for item in candidate_claims if item.claim_id in accepted_ids)
+        citations = tuple(item for item in candidate_citations if item.claim_id in accepted_ids)
+        accepted_evidence_ids = {item.evidence_id for item in citations}
+        accepted_evidence = tuple(
+            item for item in evidence if item.evidence_id in accepted_evidence_ids
+        )
+        rejected_claim_count = len(candidate_claims) - len(claims)
+        if claims:
+            answer_blocks = (
+                AnswerBlock(
+                    "候选论文及相关性",
+                    "\n".join(f"- {claim.text}" for claim in claims),
+                    EvidenceSupportStatus.PARTIAL_SUPPORT,
+                    tuple(claim.claim_id for claim in claims),
+                ),
+            )
+        else:
+            answer_blocks = (
+                AnswerBlock(
+                    "候选论文及相关性",
+                    "候选论文已找到，但没有模型生成的相关性 Claim 通过独立 Evidence 复核。",
+                    EvidenceSupportStatus.UNSUPPORTED_CLAIM,
+                ),
+            )
+        support_limitations = (
+            (
+                f"独立 Evidence 复核移除了 {rejected_claim_count} 条不受直接支持的候选 Claim。",
+            )
+            if rejected_claim_count
+            else ()
+        )
         report = render_evidence_report(
             title="arXiv 论文发现",
             intro_lines=(f"> 研究问题：{normalized}", f"> arXiv 检索式：`{search_query}`"),
-            blocks=(AnswerBlock("候选论文及相关性", "\n".join(f"- {claim.text}" for claim in claims), EvidenceSupportStatus.PARTIAL_SUPPORT, tuple(claim.claim_id for claim in claims)),),
+            blocks=answer_blocks,
             claims=claims,
-            evidence=evidence,
+            evidence=accepted_evidence,
             citations=citations,
-            evidence_trust={item.evidence_id: SourceTrustLevel.GENERAL_SOURCE for item in evidence},
-            limitations=model_limitations + ("仅检索 arXiv 元数据和摘要；未核验正式发表版本、全文实验或跨数据库召回。",),
+            evidence_trust={item.evidence_id: SourceTrustLevel.GENERAL_SOURCE for item in accepted_evidence},
+            limitations=model_limitations + support_limitations + ("仅检索 arXiv 元数据和摘要；未核验正式发表版本、全文实验或跨数据库召回。",),
         )
         report_artifact = self.artifact_store.put_bytes(
             report.encode(),
@@ -751,7 +859,7 @@ class FixedPaperDiscoveryWorkflow:
             producer_step_id=step_id,
             schema_version="conflux-weave.paper-discovery-report.v1",
         )
-        limitations = model_limitations + ("仅检索 arXiv 元数据和摘要；未核验正式发表版本、全文实验或跨数据库召回。",)
+        limitations = model_limitations + support_limitations + ("仅检索 arXiv 元数据和摘要；未核验正式发表版本、全文实验或跨数据库召回。",)
         unmet = ("尚未覆盖出版社、Crossref、会议页面和全文实验核验。",)
         manifest_artifact = self.artifact_store.put_json(
             {
@@ -770,10 +878,20 @@ class FixedPaperDiscoveryWorkflow:
                 "provider_model_requested": self.chat_adapter.config.model,
                 "provider_model_returned": completion.model,
                 "provider_response_id": completion.response_id,
-                "usage": {"input_tokens": completion.input_tokens, "output_tokens": completion.output_tokens, "total_tokens": completion.total_tokens},
+                "verification_request_artifact_ref": verification.request_artifact.artifact_id,
+                "verification_response_artifact_ref": verification.response_artifact.artifact_id,
+                "verification_response_id": verification.response_id,
+                "claim_assessment_artifact_ref": assessment_artifact.artifact_id,
+                "usage": {
+                    "input_tokens": completion.input_tokens + verification.input_tokens,
+                    "output_tokens": completion.output_tokens + verification.output_tokens,
+                    "total_tokens": completion.total_tokens + verification.total_tokens,
+                },
                 "report_artifact_ref": report_artifact.artifact_id,
+                "candidate_claim_count": len(candidate_claims),
                 "claim_count": len(claims),
-                "evidence_count": len(evidence),
+                "rejected_claim_count": rejected_claim_count,
+                "evidence_count": len(accepted_evidence),
                 "citation_count": len(citations),
                 "limitations": list(limitations),
                 "unmet_criteria": list(unmet),
@@ -795,7 +913,7 @@ class FixedPaperDiscoveryWorkflow:
             run_id,
             DeliveryDisposition.PARTIAL,
             (report_artifact.artifact_id, manifest_artifact.artifact_id),
-            tuple(item.evidence_id for item in evidence),
+            tuple(item.evidence_id for item in accepted_evidence),
             limitations,
             unmet,
             ("如需完整综述，授权出版社/Crossref 检索和全文核验后创建新 Run。",),
@@ -808,13 +926,13 @@ class FixedPaperDiscoveryWorkflow:
             report_artifact,
             manifest_artifact,
             claims,
-            evidence,
+            accepted_evidence,
             citations,
             selected,
             completion.model,
             completion.response_id,
-            completion.input_tokens,
-            completion.output_tokens,
+            completion.input_tokens + verification.input_tokens,
+            completion.output_tokens + verification.output_tokens,
             search.cache_hit,
             search.attempt_count,
             search.retry_delays,
@@ -902,6 +1020,97 @@ def _parse_claims(content: str, evidence: tuple[EvidenceRef, ...], step_id: str)
     closed_claims, closed_citations = tuple(claims), tuple(citations)
     require_closed_citations(closed_claims, evidence, closed_citations)
     return closed_claims, closed_citations, ()
+
+
+def _parse_claim_assessments(
+    content: str,
+    claims: tuple[Claim, ...],
+    citations: tuple[Citation, ...],
+    evidence: tuple[EvidenceRef, ...],
+    assessment_source_ref: str,
+    artifact_store: LocalArtifactStore,
+    step_id: str,
+) -> tuple[tuple[ClaimAssessment, ...], ArtifactRef]:
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise LiveResearchValidationError(
+            f"verification content is not valid JSON: {exc}",
+            code="paper_claim_verification_invalid",
+        ) from exc
+    if not isinstance(payload, dict) or set(payload) != {"assessments"}:
+        raise LiveResearchValidationError(
+            "verification output must contain only assessments",
+            code="paper_claim_verification_invalid",
+        )
+    raw = payload["assessments"]
+    if not isinstance(raw, list):
+        raise LiveResearchValidationError(
+            "verification assessments must be a list",
+            code="paper_claim_verification_invalid",
+        )
+    known_claims = {item.claim_id for item in claims}
+    known_evidence = {item.evidence_id for item in evidence}
+    evidence_by_claim = {item.claim_id: item.evidence_id for item in citations}
+    assessments = []
+    for item in raw:
+        if not isinstance(item, dict) or set(item) != {
+            "claim_id",
+            "evidence_ids",
+            "relation",
+            "verdict",
+            "rationale",
+        }:
+            raise LiveResearchValidationError(
+                "claim assessment has an invalid schema",
+                code="paper_claim_verification_invalid",
+            )
+        claim_id = str(item["claim_id"])
+        evidence_ids = item["evidence_ids"]
+        rationale = str(item["rationale"]).strip()
+        if (
+            claim_id not in known_claims
+            or not isinstance(evidence_ids, list)
+            or evidence_ids != [evidence_by_claim.get(claim_id)]
+            or any(value not in known_evidence for value in evidence_ids)
+            or not rationale
+        ):
+            raise LiveResearchValidationError(
+                "claim assessment must use the Claim's original Evidence binding",
+                code="paper_claim_verification_invalid",
+            )
+        try:
+            relation = EvidenceRelation(str(item["relation"]))
+            verdict = AssessmentVerdict(str(item["verdict"]))
+        except ValueError as exc:
+            raise LiveResearchValidationError(
+                "claim assessment has an unknown relation or verdict",
+                code="paper_claim_verification_invalid",
+            ) from exc
+        assessments.append(
+            ClaimAssessment(
+                claim_id,
+                tuple(str(value) for value in evidence_ids),
+                relation,
+                verdict,
+                rationale,
+                assessment_source_ref,
+            )
+        )
+    if (
+        {item.claim_id for item in assessments} != known_claims
+        or len(assessments) != len(known_claims)
+    ):
+        raise LiveResearchValidationError(
+            "verification must assess every candidate Claim exactly once",
+            code="paper_claim_verification_invalid",
+        )
+    assessment_artifact = artifact_store.put_json(
+        {"assessments": [asdict(item) for item in assessments]},
+        producer_step_id=step_id,
+        schema_version="conflux-weave.paper-claim-assessments.v1",
+    )
+    return tuple(assessments), assessment_artifact
 
 
 def _required_text(element: ET.Element, path: str) -> str:

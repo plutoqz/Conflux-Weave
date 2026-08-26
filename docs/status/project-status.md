@@ -123,3 +123,29 @@ workflow/runtime/API coverage passed (`39 passed`), and the full regression pass
 replayed, no fresh live acceptance has occurred, and the prior `reject` remains authoritative.
 The next acceptance point is S1.6-B: structured Manager objective-coverage obligations and
 a discovery Claim-support gate, followed by frozen failure replay before any new live Run.
+
+S1.6-B is `implemented_and_validated_offline`. Manager planning now emits a versioned
+coverage contract: every requirement contains an exact quote from the original objective,
+every subquestion maps to known coverage IDs, and all requirements must be assigned before
+worker execution. Workers receive the original objective and their assigned obligations.
+After Claim/Evidence verification, a separate coverage auditor may reference only existing
+accepted Claim IDs; missing requirements produce a `PARTIAL` Delivery with explicit unmet
+criteria even when every subrun returned at least one supported Claim. Manager plan plus
+coverage auditing reserves two orchestration calls, so durable budgets now record
+`2 + 6 * max_subquestions` as the bounded call limit.
+
+The fixed arXiv discovery workflow is now schema v2 and independently assesses every
+generated relevance Claim against title/abstract Evidence. Only `supports + accepted`
+Claims and their cited Evidence enter the report; rejected or uncertain candidates remain
+in draft and assessment Artifacts. An invalid or incomplete assessment fails closed, while
+an all-rejected set produces a readable partial report with zero Claims rather than an
+unsupported conclusion. The additional verification call is reflected in the frozen
+workflow budget and aggregate usage.
+
+S1.5-C failure-shaped fixtures passed for omitted Manager evaluation coverage and an
+overstated discovery Claim. Focused workflow/runtime/discovery coverage passed (`61 passed`),
+and the full regression passed (`323 passed in 80.13s`). These are replay/offline mechanism
+results. The LLM-assisted coverage/support gates do not replace manual semantic review, no
+fresh Provider run has occurred, no Manager quality gain is claimed, and S1.5-C remains
+`reject`. The next acceptance point is S1.6-C: freeze the post-remediation live protocol and
+preflight, then create new immutable Runs rather than modifying the first matrix.
