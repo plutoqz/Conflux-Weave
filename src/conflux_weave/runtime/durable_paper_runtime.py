@@ -22,7 +22,7 @@ from conflux_weave.paper_discovery import (
     PROMPT_VERSION,
     SCHEMA_VERSION,
     WORKFLOW_VERSION,
-    ArxivSearchAdapter,
+    PaperSearchPort,
 )
 from conflux_weave.provider import OpenAICompatibleChatAdapter
 from conflux_weave.runtime.artifacts import LocalArtifactStore
@@ -52,7 +52,7 @@ class DurablePaperDiscoveryRuntime(DurablePaperStepMixin, DurablePaperTraceMixin
         self,
         repository: SQLiteRuntimeRepository,
         artifact_store: LocalArtifactStore,
-        search_adapter: ArxivSearchAdapter,
+        search_adapter: PaperSearchPort,
         chat_adapter: OpenAICompatibleChatAdapter,
         *,
         worker_id: str = "paper-discovery-worker",
@@ -228,7 +228,10 @@ class DurablePaperDiscoveryRuntime(DurablePaperStepMixin, DurablePaperTraceMixin
                     "step_kind": step.kind,
                     "exception_type": type(exc).__name__,
                     "message": str(exc),
-                    "automatic_retry": False,
+                    "automatic_retry": bool(getattr(exc, "retry_delays", ())),
+                    "automatic_retry_scope": "read_only_source_get_only",
+                    "source_retry_delays": list(getattr(exc, "retry_delays", ())),
+                    "provider_automatic_retry": False,
                     "fallback": False,
                 },
                 producer_step_id=claim.step_id,
@@ -254,7 +257,7 @@ class DurablePaperDiscoveryRuntime(DurablePaperStepMixin, DurablePaperTraceMixin
                 user_message=(
                     "Provider outcome is unknown; no automatic replay was started."
                     if unknown_provider
-                    else "The workflow Step failed; no automatic retry or fallback was started."
+                    else "The workflow Step failed; no fallback or automatic Provider replay was started."
                 ),
                 technical_detail_ref=detail.artifact_id,
                 affected_artifact_refs=(

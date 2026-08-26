@@ -3,7 +3,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).parents[1]
-SCOPE_PATH = ROOT / "docs" / "plans" / "archive" / "W2-scope-freeze.json"
+SCOPE_PATH = (
+    ROOT / "docs" / "plans" / "deprecated" / "v0.2" / "W2-scope-freeze.json"
+)
 
 
 def load_scope() -> dict:

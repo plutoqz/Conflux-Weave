@@ -4,10 +4,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import threading
+import time
 import xml.etree.ElementTree as ET
+from base64 import b64decode, b64encode
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
+from pathlib import Path
+import tempfile
 from typing import Mapping, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -52,6 +60,11 @@ PROMPT_VERSION = "arxiv-relevance-claims-zh-v3"
 MAX_OUTPUT_TOKENS = 2_048
 MAX_SUMMARY_CHARS = 1_600
 MAX_SELECTED = 8
+DEFAULT_SOURCE_INTERVAL_SECONDS = 3.0
+DEFAULT_SOURCE_MAX_ATTEMPTS = 3
+DEFAULT_SOURCE_RETRY_BASE_SECONDS = 3.0
+DEFAULT_SOURCE_MAX_RETRY_WAIT_SECONDS = 60.0
+DEFAULT_SOURCE_CACHE_TTL_SECONDS = 24 * 60 * 60
 UNVERIFIED_PUBLICATION_STATUS_TERMS = (
     "同行评审",
     "期刊出版",
@@ -115,13 +128,145 @@ class PaperSearchError(RuntimeError):
         status_code: int | None = None,
         artifact_ref: str | None = None,
         recovery_action: str = "",
+        attempt_artifact_refs: tuple[str, ...] = (),
+        retry_delays: tuple[float, ...] = (),
     ) -> None:
         self.code = code
         self.retryable = retryable
         self.status_code = status_code
         self.artifact_ref = artifact_ref
         self.recovery_action = recovery_action
+        self.attempt_artifact_refs = attempt_artifact_refs
+        self.retry_delays = retry_delays
         super().__init__(message)
+
+
+@dataclass(frozen=True, slots=True)
+class SourceAccessPolicy:
+    min_interval_seconds: float = DEFAULT_SOURCE_INTERVAL_SECONDS
+    max_attempts: int = DEFAULT_SOURCE_MAX_ATTEMPTS
+    retry_base_seconds: float = DEFAULT_SOURCE_RETRY_BASE_SECONDS
+    max_retry_wait_seconds: float = DEFAULT_SOURCE_MAX_RETRY_WAIT_SECONDS
+    cache_ttl_seconds: float = DEFAULT_SOURCE_CACHE_TTL_SECONDS
+
+    def __post_init__(self) -> None:
+        if self.min_interval_seconds < 0 or self.retry_base_seconds < 0:
+            raise ValueError("source timing values must be non-negative")
+        if not 1 <= self.max_attempts <= 5:
+            raise ValueError("source max_attempts must be between 1 and 5")
+        if self.max_retry_wait_seconds < 0 or self.cache_ttl_seconds < 0:
+            raise ValueError("source wait and cache TTL must be non-negative")
+
+
+class SourceRequestGovernor:
+    """Serialize one source across Runs and enforce a minimum request interval."""
+
+    _instances: dict[str, SourceRequestGovernor] = {}
+    _instances_lock = threading.Lock()
+
+    def __init__(
+        self,
+        min_interval_seconds: float,
+        *,
+        monotonic: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self.min_interval_seconds = min_interval_seconds
+        self.monotonic = monotonic
+        self.sleep = sleep
+        self._lock = threading.Lock()
+        self._last_request_at: float | None = None
+
+    @classmethod
+    def shared(cls, key: str, min_interval_seconds: float) -> SourceRequestGovernor:
+        with cls._instances_lock:
+            governor = cls._instances.get(key)
+            if governor is None:
+                governor = cls(min_interval_seconds)
+                cls._instances[key] = governor
+            else:
+                governor.min_interval_seconds = max(
+                    governor.min_interval_seconds, min_interval_seconds
+                )
+            return governor
+
+    @contextmanager
+    def request_session(self):
+        with self._lock:
+            yield self
+
+    def wait_for_turn(self) -> float:
+        delay = 0.0
+        if self._last_request_at is not None:
+            delay = max(
+                0.0,
+                self.min_interval_seconds - (self.monotonic() - self._last_request_at),
+            )
+        if delay:
+            self.sleep(delay)
+        self._last_request_at = self.monotonic()
+        return delay
+
+
+class ArxivResponseCache:
+    """Small persistent cache for successful immutable arXiv Atom responses."""
+
+    def __init__(
+        self,
+        root: Path,
+        *,
+        ttl_seconds: float,
+        wall_time: Callable[[], float] = time.time,
+    ) -> None:
+        self.root = root
+        self.ttl_seconds = ttl_seconds
+        self.wall_time = wall_time
+
+    def get(self, key: str) -> tuple[bytes, dict[str, str], str] | None:
+        if self.ttl_seconds <= 0:
+            return None
+        path = self.root / f"{key}.json"
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if self.wall_time() - float(payload["stored_at"]) > self.ttl_seconds:
+                return None
+            body = b64decode(payload["body_base64"], validate=True)
+            headers = {str(k): str(v) for k, v in payload["headers"].items()}
+            acquired_at = str(payload["acquired_at"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        return body, headers, acquired_at
+
+    def put(
+        self,
+        key: str,
+        body: bytes,
+        headers: Mapping[str, str],
+        acquired_at: str,
+    ) -> None:
+        if self.ttl_seconds <= 0:
+            return
+        self.root.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema_version": "conflux-weave.arxiv-response-cache.v1",
+            "stored_at": self.wall_time(),
+            "acquired_at": acquired_at,
+            "headers": dict(headers),
+            "body_base64": b64encode(body).decode("ascii"),
+        }
+        descriptor, temporary_name = tempfile.mkstemp(
+            dir=self.root, prefix=f".{key}.", suffix=".tmp"
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+                json.dump(payload, handle, ensure_ascii=False, sort_keys=True)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self.root / f"{key}.json")
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +291,20 @@ class ArxivSearchResult:
     snapshot: SourceSnapshot
     snapshot_artifact: ArtifactRef
     manifest_artifact: ArtifactRef
+    cache_hit: bool = False
+    attempt_count: int = 1
+    retry_delays: tuple[float, ...] = ()
+
+
+class PaperSearchPort(Protocol):
+    def search(
+        self,
+        search_query: str,
+        *,
+        max_results: int = 15,
+        producer_step_id: str = "step-paper-search",
+        retry_allowed: Callable[[], bool] | None = None,
+    ) -> ArxivSearchResult: ...
 
 
 class ArxivSearchAdapter:
@@ -156,11 +315,37 @@ class ArxivSearchAdapter:
         transport: ArxivTransport | None = None,
         acquired_at: str | None = None,
         timeout_seconds: float = 30.0,
+        policy: SourceAccessPolicy | None = None,
+        governor: SourceRequestGovernor | None = None,
+        cache: ArxivResponseCache | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+        wall_clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.artifact_store = artifact_store
+        live_transport = transport is None
         self.transport = transport or UrllibArxivTransport()
         self.acquired_at = acquired_at or _utc_now()
         self.timeout_seconds = timeout_seconds
+        self.policy = policy or (
+            SourceAccessPolicy()
+            if live_transport
+            else SourceAccessPolicy(
+                min_interval_seconds=0,
+                max_attempts=1,
+                retry_base_seconds=0,
+                max_retry_wait_seconds=0,
+                cache_ttl_seconds=0,
+            )
+        )
+        cache_root = artifact_store.root.parent / "source-cache" / "arxiv"
+        self.governor = governor or SourceRequestGovernor.shared(
+            str(cache_root.resolve()), self.policy.min_interval_seconds
+        )
+        self.cache = cache or ArxivResponseCache(
+            cache_root, ttl_seconds=self.policy.cache_ttl_seconds
+        )
+        self.sleep = sleep
+        self.wall_clock = wall_clock or (lambda: datetime.now(UTC))
 
     def search(
         self,
@@ -168,6 +353,7 @@ class ArxivSearchAdapter:
         *,
         max_results: int = 15,
         producer_step_id: str = "step-arxiv-search",
+        retry_allowed: Callable[[], bool] | None = None,
     ) -> ArxivSearchResult:
         normalized = search_query.strip()
         if not normalized:
@@ -183,27 +369,28 @@ class ArxivSearchAdapter:
                 "sortOrder": "descending",
             }
         )
-        try:
-            response = self.transport.get(
-                url,
-                headers={"Accept": "application/atom+xml", "User-Agent": "Conflux-Weave/0.0.1"},
-                timeout_seconds=self.timeout_seconds,
-            )
-        except PaperSearchError as exc:
-            failure = self.artifact_store.put_json(
-                {
-                    "schema_version": SCHEMA_VERSION,
-                    "search_query": normalized,
-                    "acquired_at": self.acquired_at,
-                    "code": exc.code,
-                    "message": str(exc),
-                    "retryable": exc.retryable,
-                },
-                producer_step_id=producer_step_id,
-                schema_version=SCHEMA_VERSION,
-            )
-            exc.artifact_ref = failure.artifact_id
-            raise
+        cache_key = hashlib.sha256(url.encode("utf-8")).hexdigest()
+        cached = self.cache.get(cache_key)
+        cache_hit = cached is not None
+        attempt_artifacts: list[ArtifactRef] = []
+        retry_delays: list[float] = []
+        acquired_at = self.acquired_at
+        if cached is not None:
+            body, headers, acquired_at = cached
+            response = ArxivHttpResponse(200, body, headers)
+        else:
+            try:
+                response, attempt_artifacts, retry_delays = self._request_with_policy(
+                    url,
+                    producer_step_id=producer_step_id,
+                    retry_allowed=retry_allowed,
+                )
+            except PaperSearchError as exc:
+                failure = self._failure_artifact(
+                    normalized, exc, producer_step_id=producer_step_id
+                )
+                exc.artifact_ref = failure.artifact_id
+                raise
         response_artifact = self.artifact_store.put_bytes(
             response.body,
             media_type=_header(response.headers, "Content-Type") or "application/atom+xml",
@@ -211,20 +398,30 @@ class ArxivSearchAdapter:
             schema_version="arxiv.atom-response.v1",
         )
         if response.status_code != 200:
-            raise PaperSearchError(
+            error = PaperSearchError(
                 code="arxiv_http_failed",
                 message=f"arXiv returned HTTP {response.status_code}",
                 retryable=response.status_code >= 500 or response.status_code == 429,
                 status_code=response.status_code,
-                artifact_ref=response_artifact.artifact_id,
                 recovery_action="检查 arXiv 服务状态后显式创建新 Run。",
+                attempt_artifact_refs=tuple(
+                    item.artifact_id for item in attempt_artifacts
+                ),
+                retry_delays=tuple(retry_delays),
             )
+            failure = self._failure_artifact(
+                normalized, error, producer_step_id=producer_step_id
+            )
+            error.artifact_ref = failure.artifact_id
+            raise error
         papers = _parse_atom(response.body, response_artifact)
+        if not cache_hit:
+            self.cache.put(cache_key, response.body, response.headers, acquired_at)
         snapshot = SourceSnapshot(
             source_id="arxiv-feed-" + response_artifact.content_hash.removeprefix("sha256:")[:16],
             source_type="arxiv_atom_search",
             canonical_uri=url,
-            acquired_at=self.acquired_at,
+            acquired_at=acquired_at,
             content_hash=response_artifact.content_hash,
             artifact_ref=response_artifact.artifact_id,
         )
@@ -245,11 +442,19 @@ class ArxivSearchAdapter:
             {
                 "schema_version": "conflux-weave.arxiv-search.v1",
                 "search_query": normalized,
-                "acquired_at": self.acquired_at,
+                "acquired_at": acquired_at,
                 "request_url": url,
                 "response_artifact_ref": response_artifact.artifact_id,
                 "snapshot_artifact_ref": snapshot_artifact.artifact_id,
                 "paper_count": len(papers),
+                "cache_hit": cache_hit,
+                "attempt_count": 0 if cache_hit else len(attempt_artifacts),
+                "attempt_artifact_refs": [
+                    item.artifact_id for item in attempt_artifacts
+                ],
+                "retry_delays": retry_delays,
+                "automatic_retry": bool(retry_delays),
+                "retry_scope": "read_only_source_get",
                 "selection_boundary": "arXiv search candidates are discovery results, not proof of relevance, peer review or experimental quality.",
             },
             producer_step_id=producer_step_id,
@@ -257,12 +462,109 @@ class ArxivSearchAdapter:
         )
         return ArxivSearchResult(
             normalized,
-            self.acquired_at,
+            acquired_at,
             papers,
             response_artifact,
             snapshot,
             snapshot_artifact,
             manifest_artifact,
+            cache_hit,
+            0 if cache_hit else len(attempt_artifacts),
+            tuple(retry_delays),
+        )
+
+    def _request_with_policy(
+        self,
+        url: str,
+        *,
+        producer_step_id: str,
+        retry_allowed: Callable[[], bool] | None,
+    ) -> tuple[ArxivHttpResponse, list[ArtifactRef], list[float]]:
+        attempts: list[ArtifactRef] = []
+        delays: list[float] = []
+        total_retry_wait = 0.0
+        with self.governor.request_session():
+            for attempt in range(1, self.policy.max_attempts + 1):
+                self.governor.wait_for_turn()
+                try:
+                    response = self.transport.get(
+                        url,
+                        headers={
+                            "Accept": "application/atom+xml",
+                            "User-Agent": "Conflux-Weave/0.0.1 (research-workbench)",
+                        },
+                        timeout_seconds=self.timeout_seconds,
+                    )
+                except PaperSearchError as exc:
+                    exc.attempt_artifact_refs = tuple(
+                        item.artifact_id for item in attempts
+                    )
+                    exc.retry_delays = tuple(delays)
+                    raise
+                attempts.append(
+                    self.artifact_store.put_bytes(
+                        response.body,
+                        media_type=_header(response.headers, "Content-Type")
+                        or "application/octet-stream",
+                        producer_step_id=producer_step_id,
+                        schema_version="arxiv.http-attempt.v1",
+                    )
+                )
+                retryable = response.status_code == 429 or response.status_code >= 500
+                if response.status_code == 200 or not retryable:
+                    return response, attempts, delays
+                if attempt >= self.policy.max_attempts:
+                    return response, attempts, delays
+                if retry_allowed is not None and not retry_allowed():
+                    return response, attempts, delays
+                delay = self._retry_delay(response, attempt)
+                if total_retry_wait + delay > self.policy.max_retry_wait_seconds:
+                    return response, attempts, delays
+                delays.append(delay)
+                total_retry_wait += delay
+                if delay:
+                    self.sleep(delay)
+                if retry_allowed is not None and not retry_allowed():
+                    return response, attempts, delays
+        raise AssertionError("source request policy loop did not return")
+
+    def _retry_delay(self, response: ArxivHttpResponse, attempt: int) -> float:
+        retry_after = _header(response.headers, "Retry-After")
+        if retry_after:
+            try:
+                return max(0.0, float(retry_after.strip()))
+            except ValueError:
+                try:
+                    parsed = parsedate_to_datetime(retry_after)
+                    if parsed.tzinfo is None:
+                        parsed = parsed.replace(tzinfo=UTC)
+                    return max(0.0, (parsed - self.wall_clock()).total_seconds())
+                except (TypeError, ValueError, OverflowError):
+                    pass
+        return self.policy.retry_base_seconds * (2 ** (attempt - 1))
+
+    def _failure_artifact(
+        self,
+        search_query: str,
+        error: PaperSearchError,
+        *,
+        producer_step_id: str,
+    ) -> ArtifactRef:
+        return self.artifact_store.put_json(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "search_query": search_query,
+                "acquired_at": self.acquired_at,
+                "code": error.code,
+                "message": str(error),
+                "retryable": error.retryable,
+                "attempt_artifact_refs": list(error.attempt_artifact_refs),
+                "retry_delays": list(error.retry_delays),
+                "automatic_retry": bool(error.retry_delays),
+                "retry_scope": "read_only_source_get",
+            },
+            producer_step_id=producer_step_id,
+            schema_version=SCHEMA_VERSION,
         )
 
 
@@ -282,6 +584,9 @@ class PaperDiscoveryExecution:
     provider_response_id: str
     input_tokens: int
     output_tokens: int
+    source_cache_hit: bool
+    source_attempt_count: int
+    source_retry_delays: tuple[float, ...]
 
     @property
     def final_run(self) -> RunRecord:
@@ -292,7 +597,7 @@ class FixedPaperDiscoveryWorkflow:
     def __init__(
         self,
         artifact_store: LocalArtifactStore,
-        search_adapter: ArxivSearchAdapter,
+        search_adapter: PaperSearchPort,
         chat_adapter: OpenAICompatibleChatAdapter,
         *,
         clock: Callable[[], str] | None = None,
@@ -333,6 +638,8 @@ class FixedPaperDiscoveryWorkflow:
                 "model": self.chat_adapter.config.model,
                 "parameters": {"temperature": 0.0, "max_output_tokens": MAX_OUTPUT_TOKENS, "enable_thinking": False},
                 "automatic_retry": False,
+                "automatic_retry_scope": "read_only_source_get_only",
+                "provider_automatic_retry": False,
                 "fallback": False,
                 "secret_recorded": False,
             },
@@ -414,7 +721,12 @@ class FixedPaperDiscoveryWorkflow:
                         "output_tokens": completion.output_tokens,
                         "total_tokens": completion.total_tokens,
                     },
-                    "automatic_retry": False,
+                    "automatic_retry": bool(search.retry_delays),
+                    "automatic_retry_scope": "read_only_source_get_only",
+                    "source_cache_hit": search.cache_hit,
+                    "source_http_attempt_count": search.attempt_count,
+                    "source_retry_delays": list(search.retry_delays),
+                    "provider_automatic_retry": False,
                     "fallback": False,
                     "secret_recorded": False,
                 },
@@ -465,7 +777,12 @@ class FixedPaperDiscoveryWorkflow:
                 "citation_count": len(citations),
                 "limitations": list(limitations),
                 "unmet_criteria": list(unmet),
-                "automatic_retry": False,
+                "automatic_retry": bool(search.retry_delays),
+                "automatic_retry_scope": "read_only_source_get_only",
+                "source_cache_hit": search.cache_hit,
+                "source_http_attempt_count": search.attempt_count,
+                "source_retry_delays": list(search.retry_delays),
+                "provider_automatic_retry": False,
                 "fallback": False,
                 "secret_recorded": False,
             },
@@ -483,7 +800,25 @@ class FixedPaperDiscoveryWorkflow:
             unmet,
             ("如需完整综述，授权出版社/Crossref 检索和全文核验后创建新 Run。",),
         )
-        return PaperDiscoveryExecution(task, tuple(runs), tuple(steps), delivery, report_artifact, manifest_artifact, claims, evidence, citations, selected, completion.model, completion.response_id, completion.input_tokens, completion.output_tokens)
+        return PaperDiscoveryExecution(
+            task,
+            tuple(runs),
+            tuple(steps),
+            delivery,
+            report_artifact,
+            manifest_artifact,
+            claims,
+            evidence,
+            citations,
+            selected,
+            completion.model,
+            completion.response_id,
+            completion.input_tokens,
+            completion.output_tokens,
+            search.cache_hit,
+            search.attempt_count,
+            search.retry_delays,
+        )
 
     def _transition(self, runs: list[RunRecord], target: RunStatus) -> None:
         current = runs[-1]

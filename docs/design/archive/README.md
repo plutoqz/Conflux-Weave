@@ -1,5 +1,7 @@
-# Archived designs
+# Legacy archive location
 
-Move superseded design documents here with their original version and status
-intact. Add a short pointer in the replacing design; do not rewrite the archived
-document as if it had governed later implementation.
+Superseded designs now live under versioned `docs/design/deprecated/`
+directories. The v0.2 design is in `../deprecated/v0.2/`.
+
+This directory remains only to avoid silently reusing the old unversioned archive
+convention. Do not place new documents here.

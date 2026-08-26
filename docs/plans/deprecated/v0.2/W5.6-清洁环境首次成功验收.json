@@ -1,0 +1,98 @@
+{
+  "stage": "W5.6",
+  "title": "清洁环境首次成功验收",
+  "status": "validated_live_bounded",
+  "date": "2026-08-25",
+  "authorization": {
+    "provider_calls": true,
+    "public_research_source": true,
+    "paid_services": false,
+    "provider_config_secret_recorded": false
+  },
+  "frozen_commit": "60cffbf7cd83ec814474a189827aafdabfe36c3c",
+  "clean_root": "var/tmp/w5_6_clean_20260825_1",
+  "environment": {
+    "python": "3.12.9",
+    "uv": "0.6.9",
+    "install": "uv sync --frozen",
+    "installed_packages": 22,
+    "install_seconds": 16.8,
+    "database_root": "var/tmp/w5_6_clean_20260825_1/evidence/db/runtime.sqlite3",
+    "artifact_root": "var/tmp/w5_6_clean_20260825_1/evidence/artifacts",
+    "service": "single Uvicorn process, one Worker, 127.0.0.1:8020",
+    "provider_config": {
+      "base_url": "HTTPS host present; value omitted",
+      "api_key": "present; value and length omitted",
+      "model": "qwen3.7-flash"
+    }
+  },
+  "first_success_run": {
+    "run_id": "run-8cf2fb10-a8a1-4411-829b-dcc5acc55037",
+    "task_id": "task-00fbf245-973f-409c-8d24-9040c6c810df",
+    "query": "How does durable workflow recovery preserve evidence after an interrupted research run?",
+    "submit_seconds": 0.85,
+    "terminal_seconds_after_submit": 3.5,
+    "state": "partial",
+    "delivery_disposition": "partial",
+    "artifact_count": 2,
+    "evidence_count": 5,
+    "event_count": 12,
+    "budget": {
+      "input_tokens_used": 2563,
+      "output_tokens_used": 91,
+      "tool_calls_used": 2,
+      "retrieval_rounds_used": 1
+    },
+    "limitations_preserved": true,
+    "answer_and_citation_observed": true
+  },
+  "restart_recovery": {
+    "same_database_and_artifact_root": true,
+    "run_after_restart": "partial",
+    "history_contains_run": true,
+    "delivery_artifacts_recovered": 2,
+    "evidence_quote_and_source_snapshot_recovered": true
+  },
+  "privacy_audit": {
+    "secret_values_in_report": false,
+    "secret_values_in_git": false,
+    "secret_values_in_sqlite_or_artifact_paths": false,
+    "scan_note": "Pattern scan only matched documentation words such as API key/Secret; no credential value was emitted."
+  },
+  "browser_evidence": {
+    "status": "validated_bounded",
+    "runtime": "Microsoft Edge headless via temporary uv Playwright environment; project dependencies unchanged",
+    "screenshots": [
+      "var/tmp/w5_6_clean_20260825_1/evidence/browser/desktop-1440x900-pw.png",
+      "var/tmp/w5_6_clean_20260825_1/evidence/browser/mobile-390x844-pw.png",
+      "var/tmp/w5_6_clean_20260825_1/evidence/browser/mobile-320x844-pw.png",
+      "var/tmp/w5_6_clean_20260825_1/evidence/browser/zoom-200-720x450-pw.png"
+    ],
+    "viewport_checks": {
+      "desktop_1440": {"inner_width": 1440, "scroll_width": 1440, "evidence_count": 5},
+      "mobile_390": {"inner_width": 390, "scroll_width": 390, "evidence_count": 5},
+      "mobile_320": {"inner_width": 320, "scroll_width": 320, "evidence_count": 5},
+      "zoom_200": {"inner_width": 720, "scroll_width": 720, "evidence_count": 5}
+    },
+    "keyboard": {
+      "tab_focus": "brand link",
+      "enter_opens_task_dialog": true,
+      "escape_closes_task_dialog": true
+    }
+  },
+  "acceptance": {
+    "passed": [
+      "独立 Git 清洁副本安装并启动成功",
+      "首次真实 Provider/研究来源 Run 形成带 Evidence 的 partial 交付",
+      "回答保留限制、未满足条件和后续恢复动作",
+      "服务重启后 SQLite Run、Delivery、Artifact 和 Evidence 可恢复",
+      "未记录或泄露 Provider Secret"
+      ,"Edge 浏览器桌面、320px、390px 和 200% 视口无横向溢出"
+      ,"Edge 浏览器 Tab/Enter/Escape 基础路径通过"
+    ],
+    "pending": [
+      "浏览器端首次成功计时与截图尚未覆盖从页面点击到提交的完整人工路径"
+    ]
+  },
+  "evidence_boundary": "本记录证明一次独立清洁安装、一次真实 Provider/研究来源的带 Evidence partial Run、服务重启后的持久化恢复，以及 Edge 视口/基础键盘验收；不证明第二个真实任务、W5.7 个人持续使用或发布准备度。"
+}

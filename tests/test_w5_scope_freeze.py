@@ -3,9 +3,16 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).parents[1]
-SCOPE_PATH = ROOT / "docs" / "plans" / "current" / "W5-scope-freeze.json"
+SCOPE_PATH = (
+    ROOT / "docs" / "plans" / "deprecated" / "v0.2" / "W5-scope-freeze.json"
+)
 ACCEPTANCE_PATH = (
-    ROOT / "docs" / "plans" / "current" / "W5.0-转段与范围冻结.json"
+    ROOT
+    / "docs"
+    / "plans"
+    / "deprecated"
+    / "v0.2"
+    / "W5.0-转段与范围冻结.json"
 )
 
 

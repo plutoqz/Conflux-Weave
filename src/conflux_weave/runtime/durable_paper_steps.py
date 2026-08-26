@@ -69,6 +69,9 @@ class DurablePaperStepMixin:
             str(task.input["search_query"]),
             max_results=int(task.input["max_results"]),
             producer_step_id=claim.step_id,
+            retry_allowed=lambda: not self.repository.is_cancel_requested(
+                claim.run_id
+            ),
         )
         checkpoint = self.artifact_store.put_json(
             {
@@ -78,6 +81,9 @@ class DurablePaperStepMixin:
                 "response_artifact_ref": result.response_artifact.artifact_id,
                 "snapshot_artifact_ref": result.snapshot_artifact.artifact_id,
                 "manifest_artifact_ref": result.manifest_artifact.artifact_id,
+                "source_cache_hit": result.cache_hit,
+                "source_http_attempt_count": result.attempt_count,
+                "source_retry_delays": list(result.retry_delays),
             },
             producer_step_id=claim.step_id,
             schema_version=SEARCH_CHECKPOINT,

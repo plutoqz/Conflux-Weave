@@ -84,7 +84,9 @@ def _discover_papers(args, print_json) -> int:
                 ),
                 "network_called": True,
                 "provider_called": provider_called,
-                "automatic_retry": False,
+                "automatic_retry": bool(getattr(exc, "retry_delays", ())),
+                "automatic_retry_scope": "read_only_source_get_only",
+                "provider_automatic_retry": False,
                 "fallback": False,
             }
         )
@@ -113,7 +115,12 @@ def _discover_papers(args, print_json) -> int:
             "unmet_criteria": list(execution.delivery.unmet_criteria),
             "network_called": True,
             "provider_called": True,
-            "automatic_retry": False,
+            "automatic_retry": bool(execution.source_retry_delays),
+            "automatic_retry_scope": "read_only_source_get_only",
+            "source_cache_hit": execution.source_cache_hit,
+            "source_http_attempt_count": execution.source_attempt_count,
+            "source_retry_delays": list(execution.source_retry_delays),
+            "provider_automatic_retry": False,
             "fallback": False,
         }
     )

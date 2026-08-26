@@ -1,0 +1,101 @@
+{
+  "stage": "W5.7-R1",
+  "title": "arXiv 来源可靠性整改验收",
+  "status": "validated_bounded_reaudit_pending",
+  "date": "2026-08-25",
+  "base_commit": "60cffbf7cd83ec814474a189827aafdabfe36c3c",
+  "trigger": {
+    "w5_7_failures": 3,
+    "arxiv_http_429_failures": 2,
+    "release_decision_remains": "reject"
+  },
+  "implementation": {
+    "source_policy": {
+      "global_scope": "single service process and artifact/cache root",
+      "single_concurrency": true,
+      "minimum_interval_seconds": 3.0,
+      "maximum_attempts": 3,
+      "retryable_statuses": "HTTP 429 and 5xx only",
+      "retry_after_honored": true,
+      "exponential_backoff": true,
+      "maximum_retry_wait_seconds": 60.0,
+      "retry_scope": "read_only_source_get",
+      "provider_automatic_retry": false,
+      "cancel_starts_later_retry": false
+    },
+    "cache": {
+      "persistent": true,
+      "ttl_seconds": 86400,
+      "key": "SHA-256 of normalized full arXiv request URL",
+      "writes_only_after_valid_atom_parse": true,
+      "source_snapshot_hash_preserved": true,
+      "corrupt_or_expired_entry": "cache miss"
+    },
+    "evidence": {
+      "each_http_attempt_content_addressed": true,
+      "attempt_refs_and_delays_in_manifest": true,
+      "failure_manifest_retained_after_exhaustion": true,
+      "source_http_attempts_separate_from_workflow_tool_action": true
+    },
+    "source_abstraction": {
+      "contract": "PaperSearchPort",
+      "current_product_adapter": "ArxivSearchAdapter",
+      "openalex_or_crossref_product_integration": "not_implemented",
+      "reason": "Cross-source candidate and Evidence semantics require a separately frozen migration; no third-party response was relabeled as arXiv."
+    }
+  },
+  "verification": {
+    "focused": {
+      "command": "uv run --frozen pytest -q -p no:cacheprovider tests/test_paper_discovery.py tests/test_durable_paper_discovery.py tests/test_bounded_paper_strategy.py tests/test_bounded_paper_fault_matrix.py",
+      "result": "47 passed"
+    },
+    "full_regression": {
+      "command": "uv run --frozen pytest -q -p no:cacheprovider",
+      "result": "269 passed in 69.04s",
+      "exit_code": 0,
+      "note": "Windows pytest emitted a known atexit PermissionError while cleaning its temporary numbered directory after the successful test exit."
+    },
+    "fault_matrix": [
+      "Retry-After 429 then 5xx then success",
+      "429 retry exhaustion with all attempt Artifacts retained",
+      "distinct-query minimum spacing",
+      "successful persistent cache reuse",
+      "invalid Atom XML is not cached",
+      "cancellation prevents a later retry"
+    ],
+    "source_only_live": {
+      "evidence_root": "var/tmp/w5_7_r1_source_live_20260825_1",
+      "query": "all:durable workflow recovery",
+      "provider_calls": 0,
+      "first_request": {
+        "status": "ok",
+        "seconds": 1.64,
+        "paper_count": 3,
+        "http_attempts": 1,
+        "cache_hit": false
+      },
+      "second_identical_request": {
+        "status": "ok",
+        "seconds": 0.05,
+        "paper_count": 3,
+        "http_attempts": 0,
+        "cache_hit": true
+      },
+      "429_observed_live": false
+    }
+  },
+  "acceptance": {
+    "mechanism": "passed",
+    "normal_live_and_cache_path": "passed",
+    "live_429_recovery": "not_observed; validated by fixture fault matrix only",
+    "w5_7_release_gate": "still rejected",
+    "new_five_task_reaudit": "required and not authorized by this acceptance"
+  },
+  "remaining_risks": [
+    "The governor is not a cross-process or distributed lock; the product remains one process/one Worker.",
+    "Hard HTTP 403 responses are not retried because repetition may worsen source blocking.",
+    "No OpenAlex, Crossref or other secondary source is connected to the durable Workbench path.",
+    "A fresh five-task audit is required; prior failed and partial W5.7 tasks cannot be recounted."
+  ],
+  "evidence_boundary": "W5.7-R1 proves bounded arXiv request governance, persistent cache behavior, retained retry evidence and one source-only live normal/cache path. It does not prove that every future 429 will recover, cross-process coordination, cross-source retrieval, sustained personal-use success or release readiness."
+}

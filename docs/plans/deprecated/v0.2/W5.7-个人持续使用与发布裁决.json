@@ -1,0 +1,117 @@
+{
+  "stage": "W5.7",
+  "title": "个人持续使用与发布裁决",
+  "status": "release_rejected",
+  "date": "2026-08-25",
+  "frozen_commit": "60cffbf7cd83ec814474a189827aafdabfe36c3c",
+  "evidence_root": "var/tmp/w5_7_personal_20260825_1",
+  "provider": {
+    "model": "qwen3.7-flash",
+    "automatic_retry": false,
+    "fallback": false,
+    "monetary_cost": "unavailable"
+  },
+  "task_matrix": [
+    {
+      "task_id": "w57-01",
+      "family": "paper_discovery",
+      "path": "Workbench",
+      "run_id": "run-5e01f3dc-7ee9-4023-9b3c-b4929759b3db",
+      "state": "partial",
+      "seconds": 7.4,
+      "artifact_count": 2,
+      "evidence_count": 5,
+      "failure": null,
+      "boundary": "arXiv metadata and abstracts only"
+    },
+    {
+      "task_id": "w57-02",
+      "family": "paper_discovery",
+      "path": "Workbench",
+      "run_id": "run-708c7abd-00a8-4413-aeb0-8eb034638e95",
+      "state": "failed",
+      "seconds": 27.2,
+      "artifact_count": 0,
+      "evidence_count": 0,
+      "failure": "arXiv HTTP 429 at search_arxiv",
+      "automatic_retry": false
+    },
+    {
+      "task_id": "w57-03",
+      "family": "paper_discovery",
+      "path": "Workbench",
+      "run_id": "run-087188c8-1a31-497a-9f22-a2e5930fb1e6",
+      "state": "failed",
+      "seconds": 2.3,
+      "artifact_count": 0,
+      "evidence_count": 0,
+      "failure": "arXiv HTTP 429 at search_arxiv",
+      "automatic_retry": false
+    },
+    {
+      "task_id": "w57-04",
+      "family": "repository_evidence",
+      "path": "CLI research-repository",
+      "run_id": "run-569c6ce3b52e4998bb9c5a1673f1715f",
+      "state": "partial",
+      "artifact_count": 2,
+      "evidence_count": 2,
+      "citation_count": 7,
+      "selected_repository": "lokyGit/ionosphere-signals-prediction",
+      "failure": null,
+      "boundary": "The selected repository was unrelated to Conflux-Weave; the delivery explicitly retained this mismatch and cannot support the requested project claim."
+    },
+    {
+      "task_id": "w57-05",
+      "family": "repository_evidence",
+      "path": "CLI research-repository",
+      "state": "failed",
+      "artifact_count": 1,
+      "evidence_count": 0,
+      "failure": "GitHub search returned no valid candidates",
+      "automatic_retry": false
+    }
+  ],
+  "browser_audit": {
+    "runtime": "temporary Playwright driving installed Microsoft Edge",
+    "history_runs": 3,
+    "history_runs_after_refresh": 3,
+    "successful_delivery_opened": true,
+    "evidence_items_opened": 5,
+    "failed_runs_preserved": 2,
+    "screenshots": [
+      "var/tmp/w5_7_personal_20260825_1/evidence/browser/run-1.png",
+      "var/tmp/w5_7_personal_20260825_1/evidence/browser/run-2.png",
+      "var/tmp/w5_7_personal_20260825_1/evidence/browser/run-3.png"
+    ]
+  },
+  "mechanical_gate": {
+    "real_task_units": {"required": 5, "actual": 5, "passed": true},
+    "task_families": {"required": 2, "actual": 2, "passed": true},
+    "successful_workbench_golden_paths": {"required": 2, "actual": 1, "passed": false},
+    "useful_deliveries": {"actual": 2, "note": "Both were partial; repository delivery was irrelevant to the requested project."},
+    "explicit_user_use_confirmations": {"required": 1, "actual": 0, "passed": false},
+    "failed_tasks": {"actual": 3},
+    "all_failures_preserved": true
+  },
+  "release_decision": {
+    "decision": "reject",
+    "reasons": [
+      "Only one of the required two successful Workbench golden paths completed.",
+      "Three of five frozen tasks failed, including two arXiv HTTP 429 failures.",
+      "Repository discovery selected an unrelated repository for one task and no candidate for the other.",
+      "No delivery has an explicit user confirmation of use in notes, review, experiment or project decision."
+    ],
+    "required_before_re_admission": [
+      "Define a source-rate policy that respects arXiv limits without automatic retrying an unknown external effect.",
+      "Freeze repository queries with identity constraints and validate candidate relevance before Provider generation.",
+      "Repeat a new five-task audit without counting these failed or partial tasks again.",
+      "Obtain explicit user confirmation that at least one delivery was used for real work."
+    ]
+  },
+  "privacy": {
+    "secret_value_hits_in_evidence_root": 0,
+    "runtime_outputs_git_ignored": true
+  },
+  "evidence_boundary": "W5.7 proves a bounded five-task personal-use attempt and a negative release decision. It does not prove sustained reliability, general repository research, production readiness or publication readiness. Failed and irrelevant results are retained and are not counted as success."
+}

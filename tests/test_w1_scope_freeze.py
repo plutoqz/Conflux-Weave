@@ -5,7 +5,9 @@ from typing import Any
 
 
 ROOT = Path(__file__).parents[1]
-SCOPE_PATH = ROOT / "docs" / "plans" / "archive" / "W1-scope-freeze.json"
+SCOPE_PATH = (
+    ROOT / "docs" / "plans" / "deprecated" / "v0.2" / "W1-scope-freeze.json"
+)
 
 
 def load_json(path: Path) -> dict[str, Any]:

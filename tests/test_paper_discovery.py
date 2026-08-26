@@ -5,10 +5,13 @@ import pytest
 from conflux_weave.core import DeliveryDisposition, RunStatus
 from conflux_weave.live_research import LiveResearchValidationError
 from conflux_weave.paper_discovery import (
+    ArxivResponseCache,
     ArxivHttpResponse,
     ArxivSearchAdapter,
     FixedPaperDiscoveryWorkflow,
     PaperSearchError,
+    SourceAccessPolicy,
+    SourceRequestGovernor,
 )
 from conflux_weave.provider import (
     OpenAICompatibleChatAdapter,
@@ -59,6 +62,30 @@ class ArxivTransport:
         if self.error:
             raise self.error
         return self.response
+
+
+class SequenceArxivTransport:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = 0
+
+    def get(self, url, *, headers, timeout_seconds):
+        response = self.responses[self.calls]
+        self.calls += 1
+        return response
+
+
+class FakeTimer:
+    def __init__(self):
+        self.now = 0.0
+        self.sleeps = []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.now += seconds
 
 
 class ProviderTransport:
@@ -276,3 +303,207 @@ def test_arxiv_http_and_xml_failures_retain_raw_artifact(tmp_path):
     with pytest.raises(PaperSearchError) as xml_failure:
         xml_adapter.search("agent")
     assert xml_failure.value.artifact_ref
+
+
+def test_arxiv_read_only_retry_honors_retry_after_and_retains_attempts(tmp_path):
+    store = LocalArtifactStore(tmp_path / "artifacts")
+    timer = FakeTimer()
+    transport = SequenceArxivTransport(
+        [
+            ArxivHttpResponse(429, b"limited", {"Retry-After": "4"}),
+            ArxivHttpResponse(503, b"unavailable", {}),
+            ArxivHttpResponse(200, ATOM_FIXTURE, {"Content-Type": "application/atom+xml"}),
+        ]
+    )
+    policy = SourceAccessPolicy(
+        min_interval_seconds=3,
+        max_attempts=3,
+        retry_base_seconds=2,
+        max_retry_wait_seconds=20,
+        cache_ttl_seconds=0,
+    )
+    adapter = ArxivSearchAdapter(
+        store,
+        transport=transport,
+        acquired_at=fixed_clock(),
+        policy=policy,
+        governor=SourceRequestGovernor(
+            policy.min_interval_seconds,
+            monotonic=timer.monotonic,
+            sleep=timer.sleep,
+        ),
+        sleep=timer.sleep,
+    )
+
+    result = adapter.search("agent recovery", max_results=2)
+
+    assert transport.calls == 3
+    assert timer.sleeps == [4.0, 4]
+    assert result.attempt_count == 3
+    assert result.retry_delays == (4.0, 4)
+    manifest = json.loads(store.read_bytes(result.manifest_artifact))
+    assert manifest["automatic_retry"] is True
+    assert manifest["retry_scope"] == "read_only_source_get"
+    assert len(manifest["attempt_artifact_refs"]) == 3
+
+
+def test_arxiv_retry_exhaustion_retains_failure_manifest(tmp_path):
+    store = LocalArtifactStore(tmp_path / "artifacts")
+    timer = FakeTimer()
+    transport = SequenceArxivTransport(
+        [ArxivHttpResponse(429, f"limited-{index}".encode(), {}) for index in range(3)]
+    )
+    policy = SourceAccessPolicy(
+        min_interval_seconds=0,
+        max_attempts=3,
+        retry_base_seconds=1,
+        max_retry_wait_seconds=10,
+        cache_ttl_seconds=0,
+    )
+    adapter = ArxivSearchAdapter(
+        store,
+        transport=transport,
+        policy=policy,
+        governor=SourceRequestGovernor(0, monotonic=timer.monotonic, sleep=timer.sleep),
+        sleep=timer.sleep,
+    )
+
+    with pytest.raises(PaperSearchError) as captured:
+        adapter.search("rate limited")
+
+    error = captured.value
+    assert transport.calls == 3
+    assert error.status_code == 429
+    assert error.retry_delays == (1, 2)
+    assert len(error.attempt_artifact_refs) == 3
+    digest = error.artifact_ref.removeprefix("artifact-sha256-")
+    failure = json.loads(store.path_for_digest(digest).read_bytes())
+    assert failure["automatic_retry"] is True
+    assert failure["retry_scope"] == "read_only_source_get"
+    assert len(failure["attempt_artifact_refs"]) == 3
+
+
+def test_arxiv_success_cache_reuses_snapshot_without_network(tmp_path):
+    store = LocalArtifactStore(tmp_path / "artifacts")
+    transport = ArxivTransport()
+    cache = ArxivResponseCache(
+        tmp_path / "source-cache", ttl_seconds=60, wall_time=lambda: 10
+    )
+    policy = SourceAccessPolicy(
+        min_interval_seconds=0,
+        max_attempts=1,
+        retry_base_seconds=0,
+        max_retry_wait_seconds=0,
+        cache_ttl_seconds=60,
+    )
+    adapter = ArxivSearchAdapter(
+        store,
+        transport=transport,
+        acquired_at=fixed_clock(),
+        policy=policy,
+        governor=SourceRequestGovernor(0),
+        cache=cache,
+    )
+
+    first = adapter.search("cached agent", max_results=2)
+    second = adapter.search("cached agent", max_results=2)
+
+    assert len(transport.urls) == 1
+    assert first.cache_hit is False
+    assert second.cache_hit is True
+    assert second.attempt_count == 0
+    assert first.snapshot.content_hash == second.snapshot.content_hash
+    assert first.snapshot.acquired_at == second.snapshot.acquired_at
+
+
+def test_arxiv_invalid_xml_does_not_poison_success_cache(tmp_path):
+    store = LocalArtifactStore(tmp_path / "artifacts")
+    transport = SequenceArxivTransport(
+        [
+            ArxivHttpResponse(200, b"<feed>", {"Content-Type": "application/xml"}),
+            ArxivHttpResponse(200, ATOM_FIXTURE, {"Content-Type": "application/xml"}),
+        ]
+    )
+    cache = ArxivResponseCache(tmp_path / "cache", ttl_seconds=60)
+    policy = SourceAccessPolicy(
+        min_interval_seconds=0,
+        max_attempts=1,
+        retry_base_seconds=0,
+        max_retry_wait_seconds=0,
+        cache_ttl_seconds=60,
+    )
+    adapter = ArxivSearchAdapter(
+        store,
+        transport=transport,
+        policy=policy,
+        governor=SourceRequestGovernor(0),
+        cache=cache,
+    )
+
+    with pytest.raises(PaperSearchError):
+        adapter.search("valid after malformed")
+    result = adapter.search("valid after malformed")
+
+    assert transport.calls == 2
+    assert result.cache_hit is False
+
+
+def test_arxiv_governor_spaces_distinct_queries(tmp_path):
+    store = LocalArtifactStore(tmp_path / "artifacts")
+    timer = FakeTimer()
+    policy = SourceAccessPolicy(
+        min_interval_seconds=3,
+        max_attempts=1,
+        retry_base_seconds=0,
+        max_retry_wait_seconds=0,
+        cache_ttl_seconds=0,
+    )
+    governor = SourceRequestGovernor(
+        3, monotonic=timer.monotonic, sleep=timer.sleep
+    )
+    adapter = ArxivSearchAdapter(
+        store,
+        transport=ArxivTransport(),
+        policy=policy,
+        governor=governor,
+        sleep=timer.sleep,
+    )
+
+    adapter.search("first", max_results=2)
+    adapter.search("second", max_results=2)
+
+    assert timer.sleeps == [3.0]
+
+
+def test_arxiv_does_not_start_retry_after_cancellation(tmp_path):
+    store = LocalArtifactStore(tmp_path / "artifacts")
+    retry_allowed = True
+
+    class CancellingTransport:
+        calls = 0
+
+        def get(self, url, *, headers, timeout_seconds):
+            nonlocal retry_allowed
+            self.calls += 1
+            retry_allowed = False
+            return ArxivHttpResponse(429, b"limited", {"Retry-After": "3"})
+
+    transport = CancellingTransport()
+    policy = SourceAccessPolicy(
+        min_interval_seconds=0,
+        max_attempts=3,
+        retry_base_seconds=1,
+        max_retry_wait_seconds=10,
+        cache_ttl_seconds=0,
+    )
+    adapter = ArxivSearchAdapter(
+        store,
+        transport=transport,
+        policy=policy,
+        governor=SourceRequestGovernor(0),
+    )
+
+    with pytest.raises(PaperSearchError):
+        adapter.search("cancelled", retry_allowed=lambda: retry_allowed)
+
+    assert transport.calls == 1
