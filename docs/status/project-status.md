@@ -169,3 +169,17 @@ passed (`325 passed in 118.74s`), and wheel/sdist builds succeeded. Pytest emitt
 existing Windows cache and temporary-directory cleanup permission warnings after its
 successful exit. These are offline protocol/mechanism results; the rejected S1.5-C matrix
 remains immutable and authoritative.
+
+The committed S1.6-C protocol revision `4ea3ba9` passed its lightweight live preflight
+(`validated_live`) with `source_dirty_at_start=false`. Chat used `qwen3.7-flash` (33 total
+tokens), Embedding used `text-embedding-v4` (1 vector, 1,024 dimensions), and Reranker used
+`qwen3-rerank` (2 documents). The arXiv source check returned two parsed papers from one
+fresh GET with `cache_hit=false`, `attempt_count=1` and no retry delay. Provider automatic
+retry was disabled. The machine-readable evidence is at
+`var/acceptance/v0.3-s1/s16c-preflight/preflight-summary.json`; request, response, source
+snapshot, attempt and manifest Artifact IDs are recorded there.
+
+This preflight proves current port connectivity and one bounded source parse only. It does
+not prove post-remediation research quality, Manager gain or S1 completion. The next
+acceptance point is to execute the frozen S1.6-C eight-case protocol once, creating new
+immutable Runs and preserving any Provider or acceptance failures without automatic retry.
