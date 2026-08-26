@@ -267,7 +267,7 @@ def _parse_pdf(raw: bytes, document_id: str) -> list[DocumentSegment]:
     reader = PdfReader(io.BytesIO(raw))
     segments: list[DocumentSegment] = []
     for page_number, page in enumerate(reader.pages, start=1):
-        text = (page.extract_text() or "").strip()
+        text = _clean_extracted_text(page.extract_text() or "")
         if not text:
             continue
         ordinal = len(segments) + 1
@@ -281,6 +281,11 @@ def _parse_pdf(raw: bytes, document_id: str) -> list[DocumentSegment]:
             )
         )
     return segments
+
+
+def _clean_extracted_text(text: str) -> str:
+    """Normalize malformed surrogate code points emitted by some PDF fonts."""
+    return text.encode("utf-8", errors="replace").decode("utf-8").strip()
 
 
 def _format_locator(locator: dict[str, int | str]) -> str:
