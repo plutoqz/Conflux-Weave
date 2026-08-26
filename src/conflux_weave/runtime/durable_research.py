@@ -40,6 +40,7 @@ MANAGED_RESEARCH_TASK = "managed_verified_research"
 RESEARCH_TASK_KINDS = (VERIFIED_RESEARCH_TASK, MANAGED_RESEARCH_TASK)
 STEP_KINDS = ("execute_research", "publish_delivery")
 EXECUTION_SCHEMA = "conflux-weave.durable-research-execution.v1"
+DURABLE_RESEARCH_EVIDENCE_SCHEMA = "conflux-weave.durable-research-evidence.v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +56,7 @@ class DurableResearchExecution:
     report_artifact_id: str
     manifest_artifact_id: str
     evidence_refs: tuple[str, ...]
+    evidence_records: tuple[dict[str, Any], ...]
     usage: BudgetAmount
     provider_call_count: int
 
@@ -90,6 +92,7 @@ class VerifiedWorkflowExecutorAdapter:
         if task_kind == VERIFIED_RESEARCH_TASK:
             result = self.verified_workflow.execute(objective)
             evidence_refs = tuple(item.evidence_id for item in result.evidence)
+            evidence_records = tuple(asdict(item) for item in result.evidence)
             retrieval_rounds = 1
         elif task_kind == MANAGED_RESEARCH_TASK:
             if self.managed_workflow is None:
@@ -99,6 +102,14 @@ class VerifiedWorkflowExecutorAdapter:
             )
             evidence_refs = tuple(
                 f"sq{sub_index}-{item.evidence_id}"
+                for sub_index, subrun in enumerate(result.subruns, 1)
+                for item in subrun.evidence
+            )
+            evidence_records = tuple(
+                {
+                    **asdict(item),
+                    "evidence_id": f"sq{sub_index}-{item.evidence_id}",
+                }
                 for sub_index, subrun in enumerate(result.subruns, 1)
                 for item in subrun.evidence
             )
@@ -114,6 +125,7 @@ class VerifiedWorkflowExecutorAdapter:
             result.report_artifact_id,
             result.manifest_artifact_id,
             evidence_refs,
+            evidence_records,
             BudgetAmount(
                 input_tokens,
                 output_tokens,
@@ -219,6 +231,7 @@ class DurableResearchRuntime:
         task_kind: str = VERIFIED_RESEARCH_TASK,
         max_subquestions: int = 4,
         budget: BudgetLedger | None = None,
+        idempotency_key: str | None = None,
     ) -> SubmissionResult:
         normalized = objective.strip()
         if not normalized:
@@ -276,7 +289,7 @@ class DurableResearchRuntime:
             task_kind,
             frozen_input,
             DURABLE_RESEARCH_WORKFLOW_VERSION,
-            self._idempotency_key(frozen_input),
+            idempotency_key or self._idempotency_key(frozen_input),
         )
         run = RunRecord(
             run_id,
@@ -460,6 +473,7 @@ class DurableResearchRuntime:
                 "report_artifact_id": execution.report_artifact_id,
                 "manifest_artifact_id": execution.manifest_artifact_id,
                 "evidence_refs": list(execution.evidence_refs),
+                "evidence": list(execution.evidence_records),
                 "usage": asdict(execution.usage),
                 "provider_call_count": execution.provider_call_count,
                 "usage_granularity": "aggregate_research_batch",
@@ -523,10 +537,18 @@ class DurableResearchRuntime:
             "application/json",
             "conflux-weave.durable-research-manifest.v1",
         )
+        evidence = self.artifact_store.put_json(
+            {
+                "schema_version": DURABLE_RESEARCH_EVIDENCE_SCHEMA,
+                "evidence": response["evidence"],
+            },
+            producer_step_id=claim.step_id,
+            schema_version=DURABLE_RESEARCH_EVIDENCE_SCHEMA,
+        )
         delivery = DeliveryRecord(
             claim.run_id,
             DeliveryDisposition.COMPLETE,
-            (report.artifact_id, manifest.artifact_id),
+            (report.artifact_id, manifest.artifact_id, evidence.artifact_id),
             tuple(response["evidence_refs"]),
             (
                 "Durability is enforced at an opaque paid research-batch boundary; individual Provider-call recovery is not implemented.",
@@ -536,7 +558,7 @@ class DurableResearchRuntime:
             claim.run_id,
             RunStatus.SUCCEEDED,
             delivery,
-            (report, manifest),
+            (report, manifest, evidence),
             claim=claim,
             published_at=now,
         )
@@ -564,6 +586,10 @@ class DurableResearchRuntime:
             raise ValueError("research execution must declare at least one Provider call")
         if execution.usage.tool_calls != execution.provider_call_count:
             raise ValueError("tool_calls must equal provider_call_count")
+        if tuple(item.get("evidence_id") for item in execution.evidence_records) != (
+            execution.evidence_refs
+        ):
+            raise ValueError("evidence records must match declared evidence refs")
         for artifact_id in (
             execution.report_artifact_id,
             execution.manifest_artifact_id,

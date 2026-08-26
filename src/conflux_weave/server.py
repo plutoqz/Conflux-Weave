@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -25,12 +26,14 @@ from conflux_weave.api_contracts import (
     RunEventPageResponse,
     RunPageResponse,
     WorkbenchQueryService,
+    VerifiedResearchTaskRequest,
     map_exception,
 )
 from conflux_weave.harness.contracts import TaskSubmission
 from conflux_weave.harness.fixture_runtime import ResearchFixtureRuntime
 from conflux_weave.harness.orchestration import (
     CompositeOrchestrator,
+    DurableResearchRuntimeAdapter,
     LegacyPaperRuntimeAdapter,
     OrchestratorPort,
     UnavailableTaskRuntime,
@@ -40,9 +43,11 @@ from conflux_weave.paper_discovery import ArxivSearchAdapter
 from conflux_weave.provider import OpenAICompatibleChatAdapter, ProviderConfig
 from conflux_weave.runtime import (
     DurablePaperDiscoveryRuntime,
+    DurableResearchRuntime,
     LocalArtifactStore,
     RecoveryDecision,
     SQLiteRuntimeRepository,
+    VerifiedWorkflowExecutorAdapter,
 )
 
 
@@ -172,6 +177,37 @@ def create_app(
         except Exception as exc:
             return error_response(exc)
 
+    @app.post(
+        "/api/v1/tasks/verified-research",
+        response_model=ResearchTaskAcceptedResponse,
+    )
+    async def submit_verified_research(request: VerifiedResearchTaskRequest):
+        try:
+            task_kind = (
+                "managed_verified_research"
+                if request.mode == "managed"
+                else "verified_paper_research"
+            )
+            result = orchestrator.submit(
+                TaskSubmission(
+                    task_kind=task_kind,
+                    input={
+                        "objective": request.objective,
+                        "max_subquestions": request.max_subquestions,
+                    },
+                    requested_agent="durable_verified_research@v1",
+                )
+            )
+            state = query_service.get_run(result.run_id).state
+            return ResearchTaskAcceptedResponse(
+                task_id=result.task_id,
+                run_id=result.run_id,
+                created=result.created,
+                state=state,
+            )
+        except Exception as exc:
+            return error_response(exc)
+
     @app.get("/api/v1/runs", response_model=RunPageResponse)
     async def list_runs(cursor: str | None = None, limit: int = Query(default=20, ge=1, le=100)):
         try:
@@ -199,6 +235,30 @@ def create_app(
         try:
             orchestrator.resume(run_id, request.decision if request else None)
             return query_service.get_run(run_id)
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post(
+        "/api/v1/runs/{run_id}/rerun",
+        response_model=ResearchTaskAcceptedResponse,
+    )
+    async def rerun(run_id: str):
+        try:
+            task = repository.get_task_for_run(run_id)
+            result = orchestrator.submit(
+                TaskSubmission(
+                    task_kind=task.kind,
+                    input=task.input,
+                    idempotency_key=f"rerun:{run_id}:{uuid4().hex}",
+                )
+            )
+            state = query_service.get_run(result.run_id).state
+            return ResearchTaskAcceptedResponse(
+                task_id=result.task_id,
+                run_id=result.run_id,
+                created=result.created,
+                state=state,
+            )
         except Exception as exc:
             return error_response(exc)
 
@@ -291,6 +351,8 @@ def build_local_app(
     artifact_root: Path = Path("var") / "artifacts" / "sha256",
     workspace_root: Path = Path("var") / "workspace",
     dotenv_path: Path | None = Path(".env"),
+    corpus_manifest: Path = Path("var") / "acceptance" / "v0.3-s1" / "corpus-import-manifest.json",
+    lancedb_root: Path = Path("var") / "acceptance" / "v0.3-s1" / "lancedb",
 ) -> FastAPI:
     """Construct the production-shaped local app; no external call occurs here."""
     store = LocalArtifactStore(artifact_root)
@@ -311,6 +373,12 @@ def build_local_app(
             message="Provider configuration is incomplete",
         )
         provider_configured = False
+        research_runtime = UnavailableTaskRuntime(
+            repository,
+            executor_id="durable_verified_research@v1",
+            task_kinds=("verified_paper_research", "managed_verified_research"),
+            message="Provider configuration is incomplete",
+        )
     else:
         paper_runtime = LegacyPaperRuntimeAdapter(
             DurablePaperDiscoveryRuntime(
@@ -321,9 +389,50 @@ def build_local_app(
             )
         )
         provider_configured = True
+        try:
+            from conflux_weave.hybrid_retrieval import HybridRetrievalPipeline
+            from conflux_weave.indexing import LanceDBDenseIndex, load_chunks
+            from conflux_weave.managed_research import ManagedVerifiedResearchWorkflow
+            from conflux_weave.provider import (
+                OpenAICompatibleEmbeddingAdapter,
+                OpenAICompatibleRerankerAdapter,
+            )
+            from conflux_weave.research_agents import VerifiedResearchWorkflow
+
+            documents = load_chunks(corpus_manifest, store)
+            retrieval = HybridRetrievalPipeline(
+                documents,
+                LanceDBDenseIndex(lancedb_root, table_name="paper_chunks"),
+                OpenAICompatibleEmbeddingAdapter(store, config),
+                OpenAICompatibleRerankerAdapter(store, config),
+            )
+            verified = VerifiedResearchWorkflow(
+                store,
+                retrieval,
+                OpenAICompatibleChatAdapter(store, config),
+            )
+            managed = ManagedVerifiedResearchWorkflow(
+                store,
+                verified,
+                OpenAICompatibleChatAdapter(store, config),
+            )
+            research_runtime = DurableResearchRuntimeAdapter(
+                DurableResearchRuntime(
+                    repository,
+                    store,
+                    VerifiedWorkflowExecutorAdapter(store, verified, managed),
+                )
+            )
+        except Exception as exc:
+            research_runtime = UnavailableTaskRuntime(
+                repository,
+                executor_id="durable_verified_research@v1",
+                task_kinds=("verified_paper_research", "managed_verified_research"),
+                message=f"Research corpus or LanceDB is unavailable: {exc}",
+            )
     orchestrator = CompositeOrchestrator(
         repository,
-        (fixture_runtime, paper_runtime),
+        (fixture_runtime, paper_runtime, research_runtime),
     )
     return create_app(
         repository,

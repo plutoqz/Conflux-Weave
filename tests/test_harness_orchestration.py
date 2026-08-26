@@ -6,6 +6,7 @@ from conflux_weave.harness import TaskSubmission
 from conflux_weave.harness.orchestration import (
     CompositeOrchestrator,
     DeterministicRouter,
+    DurableResearchRuntimeAdapter,
     LegacyPaperRuntimeAdapter,
 )
 
@@ -68,8 +69,8 @@ def test_composite_routes_submit_work_and_run_mutations() -> None:
 
 def test_legacy_adapter_contains_paper_specific_translation() -> None:
     class Legacy:
-        def submit(self, query, *, search_query, max_results):
-            return query, search_query, max_results
+        def submit(self, query, *, search_query, max_results, idempotency_key=None):
+            return query, search_query, max_results, idempotency_key
 
         def work_once(self, *, now=None):
             return None
@@ -87,4 +88,44 @@ def test_legacy_adapter_contains_paper_specific_translation() -> None:
             "paper_discovery",
             {"query": "question", "topics": ("rag", "agent"), "max_results": 8},
         )
-    ) == ("question", "rag agent", 8)
+    ) == ("question", "rag agent", 8, None)
+
+    assert adapter.submit(
+        TaskSubmission(
+            "paper_discovery",
+            {"query": "question", "search_query": "rag", "max_results": 8},
+            idempotency_key="rerun:paper:new",
+        )
+    ) == ("question", "rag", 8, "rerun:paper:new")
+
+
+def test_durable_research_adapter_preserves_mode_and_rerun_key() -> None:
+    class Durable:
+        def submit(self, objective, **kwargs):
+            return objective, kwargs
+
+        def work_once(self, *, now=None):
+            return None
+
+        def request_cancel(self, run_id, *, now=None):
+            return run_id
+
+        def resume(self, run_id, decision=None, *, now=None):
+            return run_id
+
+    adapter = DurableResearchRuntimeAdapter(Durable())
+
+    objective, options = adapter.submit(
+        TaskSubmission(
+            "managed_verified_research",
+            {"objective": "Compare methods", "max_subquestions": 3},
+            idempotency_key="rerun:run-1:new",
+        )
+    )
+
+    assert objective == "Compare methods"
+    assert options == {
+        "task_kind": "managed_verified_research",
+        "max_subquestions": 3,
+        "idempotency_key": "rerun:run-1:new",
+    }

@@ -161,6 +161,46 @@ class LegacyPaperRuntimeAdapter:
             query,
             search_query=search_query,
             max_results=max_results,
+            idempotency_key=submission.idempotency_key,
+        )
+
+    def work_once(self, *, now: str | None = None) -> Any:
+        return self.runtime.work_once(now=now)
+
+    def request_cancel(self, run_id: str, *, now: str | None = None) -> Any:
+        return self.runtime.request_cancel(run_id, now=now)
+
+    def resume(
+        self,
+        run_id: str,
+        decision: RecoveryDecision | None = None,
+        *,
+        now: str | None = None,
+    ) -> Any:
+        return self.runtime.resume(run_id, decision, now=now)
+
+
+class DurableResearchRuntimeAdapter:
+    executor_id = "durable_verified_research@v1"
+    task_kinds = ("verified_paper_research", "managed_verified_research")
+
+    def __init__(self, runtime: Any) -> None:
+        self.runtime = runtime
+
+    def submit(self, submission: TaskSubmission) -> Any:
+        if submission.task_kind not in self.task_kinds:
+            raise ValueError("Durable Research Runtime received an unsupported task kind")
+        objective = submission.input.get("objective")
+        max_subquestions = submission.input.get("max_subquestions", 4)
+        if not isinstance(objective, str):
+            raise ValueError("durable research requires objective")
+        if not isinstance(max_subquestions, int):
+            raise ValueError("max_subquestions must be an integer")
+        return self.runtime.submit(
+            objective,
+            task_kind=submission.task_kind,
+            max_subquestions=max_subquestions,
+            idempotency_key=submission.idempotency_key,
         )
 
     def work_once(self, *, now: str | None = None) -> Any:
@@ -216,6 +256,7 @@ __all__ = [
     "AgentExecutorPort",
     "CompositeOrchestrator",
     "DeterministicRouter",
+    "DurableResearchRuntimeAdapter",
     "LegacyPaperRuntimeAdapter",
     "OrchestratorPort",
     "TaskRuntimePort",

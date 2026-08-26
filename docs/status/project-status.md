@@ -55,3 +55,11 @@ an unknown paid research-batch outcome are mechanism-tested. The recovery bounda
 the complete research batch, not each internal Provider call; individual-call recovery,
 Workbench integration and the S1.5 eight-task live acceptance remain incomplete.
 Image-first multimodal RAG is scheduled for P2 and is not part of S1 capability.
+
+S1.5-A connects both durable research task kinds to the existing FastAPI boundary
+without replacing `/api/v1/tasks/research`. The new verified-research submission route
+supports single-Agent and Manager modes; persisted Runs can be cancelled, refreshed,
+reopened, or rerun as a new immutable Run. Verified Evidence is now published as a
+Delivery Artifact so Workbench evidence lookup resolves page/source lineage. The S1.5
+Workbench controls, responsive browser acceptance, follow-up interaction and eight-task
+live matrix are not yet complete.

@@ -15,6 +15,7 @@ from conflux_weave.core import RunStatus, StepStatus
 from conflux_weave.evidence import ArtifactRef
 from conflux_weave.runtime.artifacts import ArtifactIntegrityError
 from conflux_weave.runtime.durable_paper_shared import RANK_CHECKPOINT
+from conflux_weave.runtime.durable_research import DURABLE_RESEARCH_EVIDENCE_SCHEMA
 from conflux_weave.runtime.sqlite import SQLiteRuntimeRepository
 from conflux_weave.runtime.sqlite_contracts import (
     IdempotencyConflict,
@@ -69,6 +70,19 @@ class ResearchTaskRequest(_ApiModel):
 class FixtureResearchTaskRequest(_ApiModel):
     objective: str = Field(min_length=1, max_length=4_000)
     idempotency_key: str | None = Field(default=None, min_length=1, max_length=200)
+
+    @field_validator("objective")
+    @classmethod
+    def require_nonblank_objective(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("objective must not be blank")
+        return value.strip()
+
+
+class VerifiedResearchTaskRequest(_ApiModel):
+    objective: str = Field(min_length=1, max_length=4_000)
+    mode: Literal["single", "managed"] = "single"
+    max_subquestions: int = Field(default=4, ge=2, le=4)
 
     @field_validator("objective")
     @classmethod
@@ -231,6 +245,18 @@ _FIXTURE_STATE_MESSAGES = {
     UserRunState.WORKING: "正在执行离线 Harness 验证。",
     UserRunState.PARTIAL: "离线 Harness 闭环已完成，真实研究能力尚未验证。",
     UserRunState.FAILED: "离线 Harness 验证失败，请查看恢复建议。",
+}
+
+_VERIFIED_STATE_MESSAGES = {
+    UserRunState.PENDING: "研究任务已保存，正在等待处理。",
+    UserRunState.WORKING: "正在检索、核验并整理引用闭合的研究结果。",
+    UserRunState.NEEDS_ATTENTION: "付费研究批次结果未知，需要你的恢复决定。",
+    UserRunState.CANCELLING: "正在停止研究，不会启动新的模型调用。",
+    UserRunState.COMPLETE: "引用核验后的研究结果已完成。",
+    UserRunState.PARTIAL: "已返回经过核验的部分研究结果。",
+    UserRunState.FAILED: "研究任务未完成，请查看错误与恢复建议。",
+    UserRunState.CANCELLED: "研究任务已取消。",
+    UserRunState.EXPIRED: "研究任务已过期，请创建新的 Run。",
 }
 
 _EVENT_MESSAGES: dict[str, tuple[RunEventKind, str]] = {
@@ -442,10 +468,13 @@ class WorkbenchQueryService:
             raise RecordNotFound("Evidence not found")
         matches: list[EvidenceResponse] = []
         for step in self.repository.get_steps(run_id):
-            if step.kind not in {"rank_candidates", "merge_and_rank"}:
+            if step.kind not in {"rank_candidates", "merge_and_rank", "publish_delivery"}:
                 continue
             for artifact in self.repository.get_step_artifacts(step.step_id):
-                if artifact.schema_version != RANK_CHECKPOINT:
+                if artifact.schema_version not in {
+                    RANK_CHECKPOINT,
+                    DURABLE_RESEARCH_EVIDENCE_SCHEMA,
+                }:
                     continue
                 matches.extend(self._evidence_matches(artifact, evidence_id))
         if not matches:
@@ -506,11 +535,14 @@ class WorkbenchQueryService:
             )
             if not isinstance(payload, dict):
                 raise ValueError("rank checkpoint must be an object")
-            if payload.get("schema_version") != RANK_CHECKPOINT:
-                raise ValueError("rank checkpoint schema mismatch")
+            if payload.get("schema_version") not in {
+                RANK_CHECKPOINT,
+                DURABLE_RESEARCH_EVIDENCE_SCHEMA,
+            }:
+                raise ValueError("Evidence checkpoint schema mismatch")
             evidence = payload.get("evidence")
             if not isinstance(evidence, list):
-                raise ValueError("rank checkpoint evidence must be a list")
+                raise ValueError("Evidence checkpoint evidence must be a list")
             return [
                 EvidenceResponse.model_validate(item)
                 for item in evidence
@@ -530,12 +562,16 @@ class WorkbenchQueryService:
 
 def _summary(record: RunOverviewRecord) -> RunSummaryResponse:
     state = map_run_state(record.run.status)
-    query = record.task_input.get("query")
-    status_messages = (
-        _FIXTURE_STATE_MESSAGES
-        if record.task_kind == "research_fixture"
-        else _STATE_MESSAGES
-    )
+    query = record.task_input.get("query", record.task_input.get("objective"))
+    if record.task_kind == "research_fixture":
+        status_messages = _FIXTURE_STATE_MESSAGES
+    elif record.task_kind in {
+        "verified_paper_research",
+        "managed_verified_research",
+    }:
+        status_messages = _VERIFIED_STATE_MESSAGES
+    else:
+        status_messages = _STATE_MESSAGES
     return RunSummaryResponse(
         run_id=record.run.run_id,
         task_id=record.run.task_id,
@@ -609,6 +645,7 @@ __all__ = [
     "RunSummaryResponse",
     "UserRunState",
     "WorkbenchQueryService",
+    "VerifiedResearchTaskRequest",
     "decode_run_cursor",
     "encode_run_cursor",
     "map_exception",

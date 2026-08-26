@@ -3,7 +3,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from conflux_weave.api_contracts import FixtureResearchTaskRequest, ResearchTaskRequest
+from conflux_weave.api_contracts import (
+    FixtureResearchTaskRequest,
+    ResearchTaskRequest,
+    VerifiedResearchTaskRequest,
+)
 from conflux_weave.core import BudgetLedger, RunRecord, RunStatus, StepRecord, StepStatus, TaskSpec
 from conflux_weave.harness import TaskSubmission
 from conflux_weave.runtime import LocalArtifactStore, SQLiteRuntimeRepository
@@ -15,7 +19,11 @@ NOW = "2026-08-25T12:00:00Z"
 
 class FixtureRuntime:
     executor_id = "server-fixture@v1"
-    task_kinds = ("paper_discovery",)
+    task_kinds = (
+        "paper_discovery",
+        "verified_paper_research",
+        "managed_verified_research",
+    )
 
     def __init__(self, repository: SQLiteRuntimeRepository) -> None:
         self.repository = repository
@@ -25,16 +33,25 @@ class FixtureRuntime:
     def submit(self, submission: TaskSubmission):
         self.submissions += 1
         suffix = str(self.submissions)
-        query = str(submission.input["query"])
-        topics = submission.input.get("topics", ())
-        search_query = " ".join(str(item) for item in topics) or query
-        max_results = int(submission.input.get("max_results", 15))
+        if submission.task_kind == "paper_discovery":
+            query = str(submission.input["query"])
+            topics = submission.input.get("topics", ())
+            task_input = {
+                "query": query,
+                "search_query": " ".join(str(item) for item in topics) or query,
+                "max_results": int(submission.input.get("max_results", 15)),
+            }
+        else:
+            task_input = {
+                "objective": str(submission.input["objective"]),
+                "max_subquestions": int(submission.input.get("max_subquestions", 4)),
+            }
         task = TaskSpec(
             task_id=f"task-fixture-{suffix}",
-            kind="paper_discovery",
-            input={"query": query, "search_query": search_query, "max_results": max_results},
+            kind=submission.task_kind,
+            input=task_input,
             requested_policy="fixture-v1",
-            idempotency_key=f"fixture-key-{suffix}",
+            idempotency_key=submission.idempotency_key or f"fixture-key-{suffix}",
         )
         run = RunRecord(
             run_id=f"run-fixture-{suffix}",
@@ -139,6 +156,39 @@ async def _test_sse_projects_persisted_events_and_finishes_on_terminal_run(tmp_p
     assert "id:" in body
     assert "event: status" in body
     assert '"run_id": "run-fixture-1"' in body
+
+
+def test_verified_research_submit_and_rerun_preserve_task_scope(tmp_path) -> None:
+    asyncio.run(_test_verified_research_submit_and_rerun_preserve_task_scope(tmp_path))
+
+
+async def _test_verified_research_submit_and_rerun_preserve_task_scope(tmp_path) -> None:
+    repository, runtime = build_fixture(tmp_path)
+    app = create_app(repository, runtime, worker=WorkerLoop(runtime, interval_seconds=1))
+    submit = route(app, "/api/v1/tasks/verified-research")
+    rerun = route(app, "/api/v1/runs/{run_id}/rerun")
+
+    accepted = await submit(
+        VerifiedResearchTaskRequest(
+            objective="Compare context reduction methods and evaluations",
+            mode="managed",
+            max_subquestions=3,
+        )
+    )
+    original = repository.get_task_for_run(accepted.run_id)
+    detail = await route(app, "/api/v1/runs/{run_id}")(accepted.run_id)
+    repeated = await rerun(accepted.run_id)
+    cloned = repository.get_task_for_run(repeated.run_id)
+
+    assert original.kind == cloned.kind == "managed_verified_research"
+    assert detail.query == "Compare context reduction methods and evaluations"
+    assert "核验" in detail.status_message or "等待" in detail.status_message
+    assert cloned.input == original.input == {
+        "objective": "Compare context reduction methods and evaluations",
+        "max_subquestions": 3,
+    }
+    assert repeated.created is True
+    assert repeated.run_id != accepted.run_id
 
 
 def test_missing_provider_build_is_local_not_ready_and_does_not_start_calls(

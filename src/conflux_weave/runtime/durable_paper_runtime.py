@@ -87,6 +87,7 @@ class DurablePaperDiscoveryRuntime(DurablePaperStepMixin, DurablePaperTraceMixin
         search_query: str,
         max_results: int = 15,
         budget: BudgetLedger | None = None,
+        idempotency_key: str | None = None,
     ) -> SubmissionResult:
         normalized_query = query.strip()
         normalized_search = search_query.strip()
@@ -145,7 +146,7 @@ class DurablePaperDiscoveryRuntime(DurablePaperStepMixin, DurablePaperTraceMixin
             kind="paper_discovery",
             input=frozen_input,
             requested_policy=DURABLE_WORKFLOW_VERSION,
-            idempotency_key=_idempotency_key(frozen_input),
+            idempotency_key=idempotency_key or _idempotency_key(frozen_input),
         )
         run = RunRecord(
             run_id=run_id,

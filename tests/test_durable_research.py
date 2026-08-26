@@ -1,7 +1,9 @@
 import json
 from types import SimpleNamespace
 
+from conflux_weave.api_contracts import WorkbenchQueryService
 from conflux_weave.core import BudgetLedger, RunStatus, StepStatus
+from conflux_weave.evidence import EvidenceRef
 from conflux_weave.runtime import (
     BudgetAmount,
     DurableResearchExecution,
@@ -50,6 +52,15 @@ class FixtureExecutor:
             report.artifact_id,
             manifest.artifact_id,
             ("evidence-fixture-1",),
+            (
+                {
+                    "evidence_id": "evidence-fixture-1",
+                    "source_snapshot_id": "source-fixture-1",
+                    "locator": {"page": 1},
+                    "quote": "Fixture evidence.",
+                    "extraction_method": "fixture",
+                },
+            ),
             self.usage,
             self.usage.tool_calls,
         )
@@ -129,11 +140,19 @@ def test_successful_delivery_and_budget_survive_repository_reopen(tmp_path):
     assert reopened.get_run(submission.run_id).status is RunStatus.SUCCEEDED
     delivery = reopened.get_delivery(submission.run_id)
     assert delivery.evidence_refs == ("evidence-fixture-1",)
-    report, manifest = reopened.get_delivery_artifacts(submission.run_id)
+    report, manifest, evidence = reopened.get_delivery_artifacts(submission.run_id)
     assert store.read_bytes(report).startswith(b"# Result")
     assert json.loads(store.read_bytes(manifest))["objective"] == (
         "Durably research citation verification"
     )
+    assert json.loads(store.read_bytes(evidence))["evidence"][0]["evidence_id"] == (
+        "evidence-fixture-1"
+    )
+    projected = WorkbenchQueryService(reopened).get_evidence(
+        submission.run_id, "evidence-fixture-1"
+    )
+    assert projected.source_snapshot_id == "source-fixture-1"
+    assert projected.locator == {"page": 1}
 
 
 def test_unknown_paid_batch_outcome_is_not_automatically_replayed(tmp_path):
@@ -246,7 +265,15 @@ def test_verified_workflow_adapter_collects_traceable_provider_usage(tmp_path):
     result = SimpleNamespace(
         report_artifact_id=report.artifact_id,
         manifest_artifact_id=manifest.artifact_id,
-        evidence=(SimpleNamespace(evidence_id="evidence-1"),),
+        evidence=(
+            EvidenceRef(
+                "evidence-1",
+                "source-1",
+                {"page": 1},
+                "Fixture quote.",
+                "fixture",
+            ),
+        ),
     )
     workflow = SimpleNamespace(execute=lambda objective: result)
 
