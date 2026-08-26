@@ -192,3 +192,28 @@ and source response remain in the Artifact Store. Provider automatic retry was d
 The matrix runner is being minimally extended to admit this frozen failure Artifact as the
 discovery case and continue the seven independent research cases; no protocol question,
 acceptance criterion or previous Run is changed.
+
+The S1.6-C matrix is now sealed as `blocked_unknown_outcome`, not accepted. The runner
+revision is `4067355`, the protocol hash is
+`49bfe0c4a6dbff93c97f359e04f12178f976f15fbe93169dc664b0eef8d13f15`, and the source was
+clean at start. All eight cases have immutable records: five Runs succeeded, discovery
+failed, and both Manager Runs are `waiting_for_user`. Four answerable single-Agent reports
+delivered 19 Claims with mechanical citation closure 1.0; the no-answer case succeeded with
+an explicit `no_answer` Delivery, zero Claims and the mixed-corpus boundary. Manual support
+review of the 19 Claims remains pending, and hard monetary enforcement remains unavailable.
+
+Both Manager failures are confirmed workflow/schema contract failures. Their Provider
+responses were valid JSON but used `text`, `subquestion_id` and `mapped_coverage_ids`, while
+the parser requires `objective_quote`, `question` and `coverage_ids`; the live system prompt
+did not enumerate that exact schema. The Runs therefore froze with
+`research_batch_outcome_unknown`, no Delivery and zero durable-ledger usage, although the
+preserved responses show 390 and 436 actually consumed Provider tokens. Neither Run may be
+automatically resumed or replayed, and no Manager comparison or gain can be claimed.
+
+The persisted matrix, SQLite state and structured mechanical review are at
+`var/acceptance/v0.3-s1/s16c-matrix-summary.json`,
+`var/acceptance/v0.3-s1/s16c-matrix.sqlite3` and
+`var/acceptance/v0.3-s1/s16c-mechanical-review.json`; the review freezes their SHA-256 hashes
+and the relevant raw response Artifact IDs. The next acceptance point is a bounded manual
+Claim/Evidence audit of the five successful deliveries, followed by an offline Manager plan
+contract repair/replay decision. It must not modify or retry any sealed S1.6-C Run.
