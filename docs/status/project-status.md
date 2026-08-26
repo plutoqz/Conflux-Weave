@@ -9,7 +9,7 @@ Updated: 2026-08-26
 | Existing runtime | `legacy_v0.2_implemented` | SQLite, Artifact, Evidence, recovery, FastAPI and Workbench assets remain in source |
 | Existing live capability | `bounded_retrieval_evidence` | Historical qwen3.7flash arXiv/GitHub runs; not full RAG or multi-Agent proof |
 | v0.3 S0/P0 plan | `implemented_and_validated_offline` | S0.0-S0.5 implemented on the current uncommitted `codex/v0.3-s0-harness` working tree |
-| v0.3 S1 | `not_started` | Real paper retrieval, complete RAG, citation validation and qwen3.7flash remain future work |
+| v0.3 S1 | `implemented_partial` | S1.0-S1.2 real corpus ingest, Provider preflight, BM25 and Dense index evidence exist; Hybrid/Rerank evaluation, ResearchAgent delivery and Workbench live closure remain future work |
 
 The v0.2 W0-W5 plans are no longer active gates. Their implementation and
 validation evidence remains available at `docs/plans/deprecated/v0.2/`; the
@@ -40,3 +40,9 @@ Recovery evidence is bounded to persisted terminal replay, idempotent communicat
 and the existing Runtime recovery contract; arbitrary interruption-point replay is
 not claimed. The next product stage is S1, beginning with one real paper-research
 vertical slice on this Harness rather than more horizontal infrastructure.
+
+Current S1 evidence is recorded under `var/acceptance/v0.3-s1/` (Provider preflight,
+corpus manifest/import and BM25/Dense index manifests). Dense storage is transitioning
+to LanceDB under ADR 0003; the existing JSON vector matrix remains a migration and
+offline replay artifact until frozen-case parity is verified. Image-first multimodal
+RAG is explicitly scheduled for P2 and is not part of the current S1 capability claim.

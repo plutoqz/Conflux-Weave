@@ -423,7 +423,9 @@ source adapter
 -> citation verification
 ```
 
-第一版完整 RAG 使用 BM25 与 Dense Hybrid；RRF、Reranker、结构化索引和轻量链接导航作为可配置组件接入。GraphRAG 不作为默认前提，只有当项目关系、实体链路或跨文档推理确实需要时再增加图结构。
+第一版完整 RAG 使用 BM25 与 Dense Hybrid；RRF、Reranker、结构化索引和轻量链接导航作为可配置组件接入。Dense 默认使用 LanceDB 本地持久化表，向量写入、过滤、相似度检索和版本切换通过 `DenseIndexPort` 完成。SQLite 只保存 IndexManifest、表版本、配置哈希和发布状态；原始 PDF、解析文本、Embedding 批次、LanceDB 导出/重建输入和模型响应继续进入 Artifact Store。旧 JSON 向量矩阵作为迁移和离线回放 Adapter 保留，不能绕过 Chunk ID 到 SourceSnapshot/页码的 Evidence lineage。GraphRAG 不作为默认前提，只有当项目关系、实体链路或跨文档推理确实需要时再增加图结构。
+
+S1 不承诺完整多模态 RAG，但在 SourceSnapshot、StructuredChunk 和 Artifact lineage 中保留 page/asset/parent-child 字段。P2 再加入图片 Artifact、图像 embedding 和跨模态检索；文本-only 路径在多模态能力未通过回归前保持默认。
 
 ### 8.2 Agentic RAG
 
@@ -561,7 +563,8 @@ Trace 是质量支撑面，不拥有业务状态。至少记录：
 
 - Python 3.12、FastAPI、SQLite、SSE；
 - OTel/OpenInference 作为 Trace 适配层；
-- BM25 + 可替换 Dense Embedding + 可选 RRF/Reranker；
+- BM25 + LanceDB（可替换 DenseIndexPort）+ 可选 RRF/Reranker；
+- P2 图片优先多模态 RAG：可替换 ImageEmbeddingPort、LanceDB modality 字段和图文联合检索；
 - LangGraph 或等价编排器只位于 Orchestrator Adapter，不进入领域合同；
 - Markdown 为可编辑权威格式，HTML/PDF 为派生交付；
 - MCP 作为外部工具接入协议，Skill 作为版本化能力包。
@@ -576,9 +579,9 @@ Trace 是质量支撑面，不拥有业务状态。至少记录：
 
 交付自然语言论文获取、文档解析、BM25/Dense Hybrid、Citation 验证、深度研究基本闭环和 qwen3.7flash 成本记录。
 
-### P2：文档分析与可持续笔记
+### P2：文档分析、图片资产与多模态 RAG
 
-交付 PDF/Markdown/HTML/DOCX 输入、Markdown/HTML 笔记、版本、patch、局部修订和 Artifact 预览。
+交付 PDF/Markdown/HTML/DOCX 输入、Markdown/HTML 笔记、版本、patch、局部修订和 Artifact 预览；增加 PDF 页面图片资产抽取、页码/区域定位、图片哈希与父 Chunk lineage。随后以可替换图像 embedding 和 LanceDB modality/filter 字段支持文本->图片、图片->文本和图文混合检索。图片证据必须与 SourceSnapshot、页码/区域和 Artifact 绑定；OCR、复杂公式/表格和扫描 PDF 作为独立失败类别统计，不以自动生成描述替代原始图片证据。
 
 ### P3：项目工作台
 
