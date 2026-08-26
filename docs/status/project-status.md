@@ -149,3 +149,23 @@ results. The LLM-assisted coverage/support gates do not replace manual semantic 
 fresh Provider run has occurred, no Manager quality gain is claimed, and S1.5-C remains
 `reject`. The next acceptance point is S1.6-C: freeze the post-remediation live protocol and
 preflight, then create new immutable Runs rather than modifying the first matrix.
+
+S1.6-C protocol freeze is `implemented_pending_live_preflight`. The new
+`s16-post-remediation-live-v1` dataset keeps the same eight question shapes for direct
+comparison while changing every case ID to `s16c-*`. It pins the local, new and mixed corpus
+manifest hashes and freezes exact Manager coverage quotes, explicit no-answer Delivery
+requirements, manual Claim support review, and token/latency reporting without making
+Manager quality gain an acceptance requirement. The matrix runner now accepts a dataset,
+summary schema and idempotency namespace while preserving all S1.5-C defaults; the S1.6-C
+wrapper uses a new SQLite database, summary path, schema and `s16c:` idempotency keys.
+
+A separate S1.6-C preflight entry point requires `--execute-live` and records one Chat,
+Embedding, Reranker and fresh arXiv GET/Atom parse attempt with Artifact references, models,
+usage, elapsed time and source attempt/cache state. It does not retry Provider calls and it
+does not authorize or execute the formal eight-case matrix. The next acceptance point is to
+commit the protocol, then run this lightweight preflight against that clean committed
+revision. Protocol/workflow/discovery-focused tests passed (`36 passed`), the full regression
+passed (`325 passed in 118.74s`), and wheel/sdist builds succeeded. Pytest emitted only the
+existing Windows cache and temporary-directory cleanup permission warnings after its
+successful exit. These are offline protocol/mechanism results; the rejected S1.5-C matrix
+remains immutable and authoritative.

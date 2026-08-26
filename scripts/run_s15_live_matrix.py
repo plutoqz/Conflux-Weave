@@ -33,6 +33,11 @@ def main() -> None:
     parser.add_argument("--dotenv", type=Path, default=Path(".env"))
     parser.add_argument("--database", type=Path, default=Path("var/acceptance/v0.3-s1/s15c-matrix.sqlite3"))
     parser.add_argument("--output", type=Path, default=Path("var/acceptance/v0.3-s1/s15c-matrix-summary.json"))
+    parser.add_argument("--idempotency-namespace", default="s15c")
+    parser.add_argument(
+        "--summary-schema-version",
+        default="conflux-weave.s15c-live-matrix-summary.v1",
+    )
     parser.add_argument("--discovery-manifest-artifact", required=True)
     parser.add_argument("--execute-live", action="store_true")
     args = parser.parse_args()
@@ -49,24 +54,29 @@ def main() -> None:
     repository = SQLiteRuntimeRepository(args.database, store)
     revision = _revision()
     protocol_hash = _dataset_hash(args.dataset)
-    records = [_discovery_record(store, args.discovery_manifest_artifact, cases[0])]
+    records = [
+        _discovery_record(
+            store,
+            args.discovery_manifest_artifact,
+            cases[0],
+            dataset_manifest=dataset_manifest,
+        )
+    ]
 
-    scope_paths = {
-        "local": (
-            Path("var/acceptance/v0.3-s1/corpus-import-manifest.json"),
-            Path("var/acceptance/v0.3-s1/lancedb"),
-        ),
-        "new": (
-            Path("var/acceptance/v0.3-s1/s15c-new-import-manifest.json"),
-            Path("var/acceptance/v0.3-s1/s15c-corpora/new-lancedb"),
-        ),
-        "mixed": (
-            Path("var/acceptance/v0.3-s1/s15c-corpora/mixed-import-manifest.json"),
-            Path("var/acceptance/v0.3-s1/s15c-corpora/mixed-lancedb"),
-        ),
-    }
+    scope_paths = _scope_paths(dataset_manifest)
+    _verify_corpus_hashes(dataset_manifest, scope_paths)
     runtimes = {
-        scope: _runtime(repository, store, config, revision, manifest, lancedb, scope)
+        scope: _runtime(
+            repository,
+            store,
+            config,
+            revision,
+            manifest,
+            lancedb,
+            scope,
+            dataset_id=dataset_manifest["dataset_id"],
+            worker_id=f"{args.idempotency_namespace}-live-matrix-worker",
+        )
         for scope, (manifest, lancedb) in scope_paths.items()
     }
 
@@ -78,17 +88,46 @@ def main() -> None:
                 runtimes[scope],
                 repository,
                 protocol_hash=protocol_hash,
+                idempotency_namespace=args.idempotency_namespace,
                 corpus_manifest=scope_paths[scope][0],
                 lancedb_root=scope_paths[scope][1],
             )
         )
-        _write_summary(args.output, dataset_manifest, protocol_hash, revision, config, records)
+        _write_summary(
+            args.output,
+            dataset_manifest,
+            protocol_hash,
+            revision,
+            config,
+            records,
+            schema_version=args.summary_schema_version,
+        )
 
-    _write_summary(args.output, dataset_manifest, protocol_hash, revision, config, records)
+    _write_summary(
+        args.output,
+        dataset_manifest,
+        protocol_hash,
+        revision,
+        config,
+        records,
+        schema_version=args.summary_schema_version,
+    )
     print(args.output.read_text(encoding="utf-8"))
 
 
-def _runtime(repository, store, config, revision, manifest, lancedb, corpus_scope):
+def _runtime(
+    repository,
+    store,
+    config,
+    revision,
+    manifest,
+    lancedb,
+    corpus_scope,
+    *,
+    dataset_id,
+    worker_id,
+):
+    scope_label = "S1.5-C" if dataset_id == "s15-live-research-v1" else dataset_id
     documents = load_chunks(manifest, store)
     retrieval = HybridRetrievalPipeline(
         documents,
@@ -100,24 +139,33 @@ def _runtime(repository, store, config, revision, manifest, lancedb, corpus_scop
         store,
         retrieval,
         OpenAICompatibleChatAdapter(store, config),
-        corpus_scope=f"S1.5-C {corpus_scope} corpus ({manifest})",
+        corpus_scope=f"{scope_label} {corpus_scope} corpus ({manifest})",
     )
     managed = ManagedVerifiedResearchWorkflow(store, verified, OpenAICompatibleChatAdapter(store, config))
     return DurableResearchRuntime(
         repository,
         store,
         VerifiedWorkflowExecutorAdapter(store, verified, managed),
-        worker_id="s15c-live-matrix-worker",
+        worker_id=worker_id,
         code_revision=revision,
     )
 
 
-def _execute_case(case, runtime, repository, *, protocol_hash, corpus_manifest, lancedb_root):
+def _execute_case(
+    case,
+    runtime,
+    repository,
+    *,
+    protocol_hash,
+    idempotency_namespace,
+    corpus_manifest,
+    lancedb_root,
+):
     submission = runtime.submit(
         case["objective"],
         task_kind=case["task_kind"],
         max_subquestions=int(case.get("max_subquestions", 4)),
-        idempotency_key=f"s15c:{protocol_hash}:{case['case_id']}",
+        idempotency_key=f"{idempotency_namespace}:{protocol_hash}:{case['case_id']}",
     )
     observed_steps = []
     while not repository.get_run(submission.run_id).status.is_terminal:
@@ -132,7 +180,11 @@ def _execute_case(case, runtime, repository, *, protocol_hash, corpus_manifest, 
     delivery = None
     if run.status.value in {"succeeded", "partial"}:
         delivery = repository.get_delivery(run.run_id)
-    result_metrics = _delivery_metrics(runtime.artifact_store, delivery)
+    result_metrics = _delivery_metrics(
+        runtime.artifact_store,
+        delivery,
+        required_coverage_quotes=case.get("required_coverage_quotes", []),
+    )
     return {
         **case,
         "task_id": submission.task_id,
@@ -174,14 +226,16 @@ def _execute_case(case, runtime, repository, *, protocol_hash, corpus_manifest, 
     }
 
 
-def _discovery_record(store, artifact_id, case):
+def _discovery_record(store, artifact_id, case, *, dataset_manifest):
     payload = _read_artifact(store, artifact_id)
     if payload.get("schema_version") not in {
         "conflux-weave.arxiv-paper-discovery-live.v1",
         "conflux-weave.arxiv-paper-discovery-live.v2",
     }:
         raise ValueError("discovery manifest schema mismatch")
-    required = {"2608.24188v1", "2608.24876v1"}
+    required = set(dataset_manifest.get("required_discovery_arxiv_ids", []))
+    if dataset_manifest.get("dataset_id") == "s15-live-research-v1":
+        required.update({"2608.24188v1", "2608.24876v1"})
     if not required.issubset(set(payload.get("selected_arxiv_ids", []))):
         raise ValueError("discovery result does not contain the frozen new sources")
     claims = int(payload.get("claim_count", 0))
@@ -204,28 +258,79 @@ def _discovery_record(store, artifact_id, case):
     }
 
 
-def _delivery_metrics(store, delivery):
+def _delivery_metrics(store, delivery, *, required_coverage_quotes):
     if delivery is None:
         return None
     manifest = _read_artifact(store, delivery.artifact_refs[1])
     coverage = manifest.get("coverage") if isinstance(manifest.get("coverage"), dict) else {}
+    requirements = manifest.get("coverage_requirements", [])
+    assessments = manifest.get("coverage_assessments", [])
+    assessment_by_id = {
+        item.get("coverage_id"): item
+        for item in assessments
+        if isinstance(item, dict)
+    }
+    corpus_scopes = []
+    direct_scope = manifest.get("corpus_scope")
+    if isinstance(direct_scope, str):
+        corpus_scopes.append(direct_scope)
+    for artifact_id in manifest.get("subrun_manifest_artifacts", []):
+        subrun_manifest = _read_artifact(store, artifact_id)
+        scope = subrun_manifest.get("corpus_scope")
+        if isinstance(scope, str) and scope not in corpus_scopes:
+            corpus_scopes.append(scope)
+    quote_statuses = []
+    for quote in required_coverage_quotes:
+        matched = next(
+            (
+                item
+                for item in requirements
+                if isinstance(item, dict) and item.get("objective_quote") == quote
+            ),
+            None,
+        )
+        assessment = assessment_by_id.get(matched.get("coverage_id")) if matched else None
+        quote_statuses.append(
+            {
+                "objective_quote": quote,
+                "planned": matched is not None,
+                "status": assessment.get("status") if assessment else "missing",
+                "claim_ids": assessment.get("claim_ids", []) if assessment else [],
+            }
+        )
     return {
         "schema_version": manifest.get("schema_version"),
+        "disposition": manifest.get("disposition"),
+        "corpus_scopes": corpus_scopes,
         "claim_count": manifest.get("claim_count", coverage.get("accepted_claim_count")),
         "evidence_count": manifest.get("evidence_count", coverage.get("evidence_count")),
         "citation_count": manifest.get("citation_count"),
         "citation_closure": manifest.get("citation_closure"),
         "repair_rounds": manifest.get("repair_rounds", coverage.get("repair_rounds")),
         "stop_reason": manifest.get("stop_reason", coverage.get("stop_reason")),
+        "required_coverage": quote_statuses,
+        "required_coverage_complete": all(
+            item["planned"] and item["status"] == "covered"
+            for item in quote_statuses
+        ),
     }
 
 
-def _write_summary(path, dataset_manifest, protocol_hash, revision, config, records):
+def _write_summary(
+    path,
+    dataset_manifest,
+    protocol_hash,
+    revision,
+    config,
+    records,
+    *,
+    schema_version,
+):
     all_recorded = len(records) == dataset_manifest["case_count"]
     needs_attention = any(item.get("run_status") == "waiting_for_user" for item in records)
     complete = all_recorded and not needs_attention
     payload = {
-        "schema_version": "conflux-weave.s15c-live-matrix-summary.v1",
+        "schema_version": schema_version,
         "dataset_id": dataset_manifest["dataset_id"],
         "protocol_sha256": protocol_hash,
         "source_revision": revision,
@@ -249,6 +354,42 @@ def _write_summary(path, dataset_manifest, protocol_hash, revision, config, reco
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _scope_paths(dataset_manifest):
+    configured = dataset_manifest.get("corpora")
+    if isinstance(configured, dict):
+        return {
+            scope: (Path(value["manifest"]), Path(value["lancedb_root"]))
+            for scope, value in configured.items()
+        }
+    return {
+        "local": (
+            Path("var/acceptance/v0.3-s1/corpus-import-manifest.json"),
+            Path("var/acceptance/v0.3-s1/lancedb"),
+        ),
+        "new": (
+            Path("var/acceptance/v0.3-s1/s15c-new-import-manifest.json"),
+            Path("var/acceptance/v0.3-s1/s15c-corpora/new-lancedb"),
+        ),
+        "mixed": (
+            Path("var/acceptance/v0.3-s1/s15c-corpora/mixed-import-manifest.json"),
+            Path("var/acceptance/v0.3-s1/s15c-corpora/mixed-lancedb"),
+        ),
+    }
+
+
+def _verify_corpus_hashes(dataset_manifest, scope_paths):
+    configured = dataset_manifest.get("corpora")
+    if not isinstance(configured, dict):
+        return
+    for scope, (manifest, _) in scope_paths.items():
+        expected = configured[scope]["manifest_sha256"]
+        actual = _file_hash(manifest)
+        if actual != expected:
+            raise ValueError(
+                f"{scope} corpus manifest hash mismatch: expected {expected}, got {actual}"
+            )
 
 
 def _read_artifact(store, artifact_id):
