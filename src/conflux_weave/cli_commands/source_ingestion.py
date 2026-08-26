@@ -8,6 +8,8 @@ from conflux_weave.search import GitHubRepositorySearchAdapter, SearchPortError
 
 
 def run(args, print_json) -> int:
+    if args.command == "retrieve-corpus":
+        return _retrieve_corpus(args, print_json)
     if args.command == "manifest-corpus":
         try:
             manifest = build_pdf_manifest(args.path, output=args.output)
@@ -27,6 +29,27 @@ def run(args, print_json) -> int:
     if args.command == "search-github":
         return _search_github(args, print_json)
     return _import_document(args, print_json)
+
+
+def _retrieve_corpus(args, print_json) -> int:
+    import json
+    from conflux_weave.hybrid_retrieval import HybridRetrievalPipeline
+    from conflux_weave.indexing import LanceDBDenseIndex, load_chunks
+    from conflux_weave.provider import ProviderConfig, OpenAICompatibleEmbeddingAdapter, OpenAICompatibleRerankerAdapter, ProviderPortError
+    store = LocalArtifactStore(args.artifact_root)
+    try:
+        config = ProviderConfig.from_environment(args.dotenv)
+        documents = load_chunks(args.import_manifest, store)
+        run = HybridRetrievalPipeline(documents, LanceDBDenseIndex(args.lancedb, table_name=args.table), OpenAICompatibleEmbeddingAdapter(store, config), OpenAICompatibleRerankerAdapter(store, config)).search(args.query)
+    except (FileNotFoundError, ValueError, RuntimeError, ProviderPortError) as exc:
+        print_json({"status": "failed", "error_code": getattr(exc, "code", "retrieval_failed"), "message": str(exc)})
+        return 1
+    def serialize(result):
+        return [{"chunk_id": hit.document_id, "score": hit.score, "rank": hit.rank, "source_snapshot_id": hit.source_snapshot_id, "locator": hit.locator} for hit in result.hits]
+    payload = {"schema_version": "conflux-weave.retrieval-run.v1", "query": run.query, "rerank_status": run.rerank_status, "artifacts": {"embedding_request": run.embedding_request_artifact, "embedding_response": run.embedding_response_artifact, "rerank_request": run.rerank_request_artifact, "rerank_response": run.rerank_response_artifact}, "bm25": serialize(run.bm25), "dense": serialize(run.dense), "hybrid": serialize(run.hybrid), "final": serialize(run.final)}
+    args.output.parent.mkdir(parents=True, exist_ok=True); args.output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print_json({"status": "succeeded", "rerank_status": run.rerank_status, "output": str(args.output), "counts": {key: len(payload[key]) for key in ("bm25", "dense", "hybrid", "final")}})
+    return 0
 
 
 def _search_github(args, print_json) -> int:

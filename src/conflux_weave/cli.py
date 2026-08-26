@@ -18,7 +18,7 @@ from conflux_weave.runtime import OutcomeScenario
 _LIVE_RESEARCH_COMMANDS = frozenset(
     {"discover-papers", "research-repository", "review-document"}
 )
-_SOURCE_INGESTION_COMMANDS = frozenset({"search-github", "import-document", "manifest-corpus", "import-corpus"})
+_SOURCE_INGESTION_COMMANDS = frozenset({"search-github", "import-document", "manifest-corpus", "import-corpus", "retrieve-corpus"})
 _LOCAL_VALIDATION_COMMANDS = frozenset({"validate-outcome", "validate-workflow"})
 
 
@@ -68,6 +68,14 @@ def build_parser() -> argparse.ArgumentParser:
     corpus.add_argument("path", type=Path)
     corpus.add_argument("--artifact-root", type=Path, default=Path("var") / "artifacts" / "sha256")
     corpus.add_argument("--output", type=Path, default=Path("var") / "acceptance" / "v0.3-s1" / "corpus-import-manifest.json")
+    retrieve = subparsers.add_parser("retrieve-corpus", help="run live BM25, LanceDB, RRF and rerank retrieval")
+    retrieve.add_argument("--query", required=True)
+    retrieve.add_argument("--import-manifest", type=Path, default=Path("var") / "acceptance" / "v0.3-s1" / "corpus-import-manifest.json")
+    retrieve.add_argument("--lancedb", type=Path, default=Path("var") / "acceptance" / "v0.3-s1" / "lancedb")
+    retrieve.add_argument("--table", default="paper_chunks")
+    retrieve.add_argument("--dotenv", type=Path, default=Path(".env"))
+    retrieve.add_argument("--artifact-root", type=Path, default=Path("var") / "artifacts" / "sha256")
+    retrieve.add_argument("--output", type=Path, default=Path("var") / "acceptance" / "v0.3-s1" / "retrieval-run.json")
     github = subparsers.add_parser(
         "search-github",
         help="discover GitHub repository candidates and optionally register one source",
