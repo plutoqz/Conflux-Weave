@@ -5,7 +5,7 @@ import json
 import re
 from dataclasses import asdict, dataclass
 
-from conflux_weave.core import BudgetLedger
+from conflux_weave.core import BudgetLedger, DeliveryDisposition
 from conflux_weave.evidence import (
     AnswerBlock,
     Citation,
@@ -31,6 +31,9 @@ class ManagedResearchExecution:
     claim_count: int
     evidence_count: int
     citation_count: int
+    disposition: DeliveryDisposition = DeliveryDisposition.COMPLETE
+    limitations: tuple[str, ...] = ()
+    unmet_criteria: tuple[str, ...] = ()
 
 
 class ManagedVerifiedResearchWorkflow:
@@ -83,6 +86,26 @@ class ManagedVerifiedResearchWorkflow:
         subruns = tuple(self.worker.execute(question) for question in normalized)
         claims, evidence, citations, blocks = self._aggregate(normalized, subruns)
         require_closed_citations(claims, evidence, citations)
+        answered_subquestions = sum(bool(item.claims) for item in subruns)
+        if answered_subquestions == len(subruns):
+            disposition = DeliveryDisposition.COMPLETE
+            unmet_criteria = ()
+        elif answered_subquestions == 0:
+            disposition = DeliveryDisposition.NO_ANSWER
+            unmet_criteria = ()
+        else:
+            disposition = DeliveryDisposition.PARTIAL
+            unmet_criteria = (
+                f"{len(subruns) - answered_subquestions} of {len(subruns)} planned subquestions produced no evidence-supported Claim.",
+            )
+        limitations = (
+            "Each subquestion is independently retrieved and verified; aggregation adds no new factual claims.",
+            "This delivery does not itself establish a Manager quality benefit over the single-Agent baseline.",
+        )
+        if disposition is DeliveryDisposition.NO_ANSWER:
+            limitations += (
+                "No planned subquestion produced an evidence-supported Claim in the configured corpus.",
+            )
         report = render_evidence_report(
             title="Managed verified paper research",
             intro_lines=(f"> Objective: {objective}", f"> Manager Plan: `{plan_ref.artifact_id}`"),
@@ -91,15 +114,13 @@ class ManagedVerifiedResearchWorkflow:
             evidence=evidence,
             citations=citations,
             evidence_trust={item.evidence_id: SourceTrustLevel.GENERAL_SOURCE for item in evidence},
-            limitations=(
-                "Each subquestion is independently retrieved and verified; aggregation adds no new factual claims.",
-                "Manager planning quality and multi-Agent benefit have not yet been compared against a single-Agent baseline.",
-            ),
+            limitations=limitations,
         )
         report_ref = self.store.put_bytes(report.encode("utf-8"), media_type="text/markdown; charset=utf-8", producer_step_id="s1-manager-deliver", schema_version="conflux-weave.managed-research-report.v1")
         manifest = {
             "schema_version": "conflux-weave.managed-research-manifest.v1",
             "objective": objective,
+            "disposition": disposition.value,
             "manager_profile": asdict(self.manager_profile),
             "manager_plan_artifact": plan_ref.artifact_id,
             "manager_request_artifact": completion.request_artifact.artifact_id,
@@ -111,10 +132,18 @@ class ManagedVerifiedResearchWorkflow:
             "evidence_count": len(evidence),
             "citation_count": len(citations),
             "citation_closure": 1.0,
-            "stop_reason": "all_subquestions_verified",
+            "stop_reason": (
+                "all_subquestions_verified"
+                if disposition is DeliveryDisposition.COMPLETE
+                else "no_supported_claim"
+                if disposition is DeliveryDisposition.NO_ANSWER
+                else "partial_subquestion_coverage"
+            ),
+            "limitations": list(limitations),
+            "unmet_criteria": list(unmet_criteria),
         }
         manifest_ref = self.store.put_json(manifest, producer_step_id="s1-manager-deliver", schema_version=manifest["schema_version"])
-        return ManagedResearchExecution(plan, subruns, report_ref.artifact_id, manifest_ref.artifact_id, len(claims), len(evidence), len(citations))
+        return ManagedResearchExecution(plan, subruns, report_ref.artifact_id, manifest_ref.artifact_id, len(claims), len(evidence), len(citations), disposition, limitations, unmet_criteria)
 
     @staticmethod
     def _require_scope_preserved(objective: str, questions: tuple[str, ...]) -> None:
@@ -142,5 +171,8 @@ class ManagedVerifiedResearchWorkflow:
             for item in run.citations:
                 citations.append(Citation(f"managed-citation-{display_index:04d}", claim_map[item.claim_id], evidence_map[item.evidence_id], display_index))
                 display_index += 1
-            blocks.append(AnswerBlock(f"Subquestion {sub_index}: {question}", "\n\n".join(item.text for item in remapped_claims), EvidenceSupportStatus.CITED, tuple(item.claim_id for item in remapped_claims)))
+            if remapped_claims:
+                blocks.append(AnswerBlock(f"Subquestion {sub_index}: {question}", "\n\n".join(item.text for item in remapped_claims), EvidenceSupportStatus.CITED, tuple(item.claim_id for item in remapped_claims)))
+            else:
+                blocks.append(AnswerBlock(f"Subquestion {sub_index}: {question}", "No evidence-supported answer was found for this subquestion.", EvidenceSupportStatus.UNSUPPORTED_CLAIM))
         return tuple(claims), tuple(evidence), tuple(citations), tuple(blocks)

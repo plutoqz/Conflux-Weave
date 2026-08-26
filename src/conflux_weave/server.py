@@ -452,6 +452,7 @@ def build_local_app(
                 store,
                 retrieval,
                 OpenAICompatibleChatAdapter(store, config),
+                corpus_scope=f"corpus manifest {corpus_manifest}",
             )
             managed = ManagedVerifiedResearchWorkflow(
                 store,

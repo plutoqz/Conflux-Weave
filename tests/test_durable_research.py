@@ -2,7 +2,7 @@ import json
 from types import SimpleNamespace
 
 from conflux_weave.api_contracts import WorkbenchQueryService
-from conflux_weave.core import BudgetLedger, RunStatus, StepStatus
+from conflux_weave.core import BudgetLedger, DeliveryDisposition, RunStatus, StepStatus
 from conflux_weave.evidence import EvidenceRef
 from conflux_weave.runtime import (
     BudgetAmount,
@@ -23,11 +23,12 @@ class SimulatedProcessExit(BaseException):
 
 
 class FixtureExecutor:
-    def __init__(self, store, *, crash=False, usage=None):
+    def __init__(self, store, *, crash=False, usage=None, disposition=DeliveryDisposition.COMPLETE):
         self.store = store
         self.crash = crash
         self.calls = 0
         self.usage = usage or BudgetAmount(120, 40, 4, 1)
+        self.disposition = disposition
 
     def __call__(self, task_kind, objective, max_subquestions):
         self.calls += 1
@@ -48,11 +49,12 @@ class FixtureExecutor:
             producer_step_id="fixture-research",
             schema_version="fixture-manifest.v1",
         )
+        no_answer = self.disposition is DeliveryDisposition.NO_ANSWER
         return DurableResearchExecution(
             report.artifact_id,
             manifest.artifact_id,
-            ("evidence-fixture-1",),
-            (
+            () if no_answer else ("evidence-fixture-1",),
+            () if no_answer else (
                 {
                     "evidence_id": "evidence-fixture-1",
                     "source_snapshot_id": "source-fixture-1",
@@ -63,6 +65,8 @@ class FixtureExecutor:
             ),
             self.usage,
             self.usage.tool_calls,
+            self.disposition,
+            ("No fixture evidence supports this objective.",) if no_answer else (),
         )
 
 
@@ -153,6 +157,32 @@ def test_successful_delivery_and_budget_survive_repository_reopen(tmp_path):
     )
     assert projected.source_snapshot_id == "source-fixture-1"
     assert projected.locator == {"page": 1}
+
+
+def test_no_answer_is_published_as_successful_delivery(tmp_path):
+    store = LocalArtifactStore(tmp_path / "artifacts")
+    executor = FixtureExecutor(store, disposition=DeliveryDisposition.NO_ANSWER)
+    repository = SQLiteRuntimeRepository(
+        tmp_path / "db" / "runtime.sqlite3", store, clock=lambda: T0
+    )
+    runtime = DurableResearchRuntime(
+        repository,
+        store,
+        executor,
+        worker_id="research-worker-fixture",
+        clock=lambda: T0,
+    )
+    submission = runtime.submit("An objective outside the configured corpus")
+
+    assert runtime.work_once().step_kind == "execute_research"
+    assert runtime.work_once().step_kind == "publish_delivery"
+
+    assert repository.get_run(submission.run_id).status is RunStatus.SUCCEEDED
+    delivery = repository.get_delivery(submission.run_id)
+    assert delivery.disposition is DeliveryDisposition.NO_ANSWER
+    assert delivery.evidence_refs == ()
+    assert "No fixture evidence" in delivery.limitations[0]
+    assert repository.get_errors(submission.run_id) == ()
 
 
 def test_unknown_paid_batch_outcome_is_not_automatically_replayed(tmp_path):
@@ -284,3 +314,21 @@ def test_verified_workflow_adapter_collects_traceable_provider_usage(tmp_path):
     assert execution.evidence_refs == ("evidence-1",)
     assert execution.provider_call_count == 3
     assert execution.usage == BudgetAmount(23, 5, 3, 1)
+
+    no_answer_result = SimpleNamespace(
+        report_artifact_id=report.artifact_id,
+        manifest_artifact_id=manifest.artifact_id,
+        evidence=(),
+        disposition=DeliveryDisposition.NO_ANSWER,
+        limitations=("No supported Claim in the configured corpus.",),
+        unmet_criteria=(),
+    )
+    no_answer_execution = VerifiedWorkflowExecutorAdapter(
+        store, SimpleNamespace(execute=lambda objective: no_answer_result)
+    )("verified_paper_research", "objective", 4)
+
+    assert no_answer_execution.disposition is DeliveryDisposition.NO_ANSWER
+    assert no_answer_execution.evidence_refs == ()
+    assert no_answer_execution.limitations == (
+        "No supported Claim in the configured corpus.",
+    )

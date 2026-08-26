@@ -107,3 +107,19 @@ temporary-directory cleanup permission warnings after the successful exit.
 S1.5 and S1 are therefore not complete. The next acceptance point is S1.6 failure-driven
 optimization, bounded to abstention delivery, correct corpus-boundary reporting, objective
 coverage and Agent scheduling before a fresh closeout evaluation is authorized.
+
+S1.6-A is `implemented_and_validated_offline`. It replaces the research workflow's
+exception-based zero-Claim behavior with an explicit result contract: both an empty draft
+and a fully rejected post-repair Claim set produce a citation-empty `NO_ANSWER` Delivery,
+with the retrieval boundary retained in Artifacts and no fake supporting Evidence. Durable
+publication maps this disposition to a successful Run, while validating that no-answer
+results explain their corpus boundary. Managed aggregation now preserves no-answer and
+partial subrun outcomes instead of requiring every subrun to contain a Claim.
+
+Research workflows also receive their configured corpus scope; reports and manifests no
+longer hard-code the frozen local corpus when the Run uses new or mixed indexes. Focused
+workflow/runtime/API coverage passed (`39 passed`), and the full regression passed
+(`316 passed in 82.19s`). These are offline mechanism results only: no S1.5-C Run was
+replayed, no fresh live acceptance has occurred, and the prior `reject` remains authoritative.
+The next acceptance point is S1.6-B: structured Manager objective-coverage obligations and
+a discovery Claim-support gate, followed by frozen failure replay before any new live Run.

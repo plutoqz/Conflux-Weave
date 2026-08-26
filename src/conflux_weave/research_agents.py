@@ -6,7 +6,7 @@ import hashlib
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 
-from conflux_weave.core import BudgetLedger
+from conflux_weave.core import BudgetLedger, DeliveryDisposition
 from conflux_weave.evidence import (
     AnswerBlock, AssessmentVerdict, Citation, Claim, ClaimAssessment,
     EvidenceRef, EvidenceRelation, EvidenceSupportStatus, SourceTrustLevel,
@@ -51,11 +51,17 @@ class ResearchExecution:
     citations: tuple[Citation, ...]
     assessments: tuple[ClaimAssessment, ...]
     coverage: CoverageReport
+    disposition: DeliveryDisposition = DeliveryDisposition.COMPLETE
+    limitations: tuple[str, ...] = ()
+    unmet_criteria: tuple[str, ...] = ()
 
 
 class VerifiedResearchWorkflow:
-    def __init__(self, store: LocalArtifactStore, retrieval: HybridRetrievalPipeline, chat: OpenAICompatibleChatAdapter) -> None:
+    def __init__(self, store: LocalArtifactStore, retrieval: HybridRetrievalPipeline, chat: OpenAICompatibleChatAdapter, *, corpus_scope: str = "configured paper corpus") -> None:
+        if not corpus_scope.strip():
+            raise ValueError("corpus_scope must not be empty")
         self.store, self.retrieval, self.chat = store, retrieval, chat
+        self.corpus_scope = corpus_scope.strip()
         self.research_profile = AgentProfile("research_agent", "v1", "Evidence-bound paper ResearchAgent", ("verified_paper_research",), (RESEARCH_TOOL_ID,), BudgetLedger(180, 30000, 5000, "provider-price-not-frozen", 3, 1, 1))
         self.verifier_profile = AgentProfile("verifier", "v1", "Independent Claim/Evidence verifier", ("verify_research_claims",), (), BudgetLedger(120, 30000, 4000, "provider-price-not-frozen", 2, 0, 1))
 
@@ -67,6 +73,16 @@ class VerifiedResearchWorkflow:
         evidence = self._evidence(run)
         retrieval_ref = self.store.put_json(self._retrieval_payload(run), producer_step_id="s1-research-retrieval", schema_version="conflux-weave.retrieval-tool-result.v1")
         claims, research_refs = self._draft(objective, evidence, repair=False)
+        if not claims:
+            return self._no_answer(
+                objective,
+                plan_ref.artifact_id,
+                retrieval_ref,
+                evidence,
+                research_refs,
+                candidate_claim_count=0,
+                repair_rounds=0,
+            )
         assessments, verify_refs = self._verify(claims, evidence, round_number=0)
         repair_rounds = 0
         if any(item.verdict is not AssessmentVerdict.ACCEPTED for item in assessments):
@@ -77,18 +93,80 @@ class VerifiedResearchWorkflow:
         accepted_ids = {item.claim_id for item in assessments if item.verdict is AssessmentVerdict.ACCEPTED and item.relation is EvidenceRelation.SUPPORTS}
         accepted_claims = tuple(claim for claim in claims if claim.claim_id in accepted_ids)
         accepted_assessments = tuple(item for item in assessments if item.claim_id in accepted_ids)
-        if not accepted_claims: raise ValueError("Verifier accepted no evidence-supported claims")
+        if not accepted_claims:
+            return self._no_answer(
+                objective,
+                plan_ref.artifact_id,
+                retrieval_ref,
+                evidence,
+                research_refs + verify_refs,
+                candidate_claim_count=len(claims),
+                repair_rounds=repair_rounds,
+            )
         allowed_evidence = {evidence_id for item in accepted_assessments for evidence_id in item.evidence_ids}
         accepted_evidence = tuple(item for item in evidence if item.evidence_id in allowed_evidence)
         citations = tuple(Citation(f"citation-{index:04d}", claim.claim_id, evidence_id, index) for index, (claim, evidence_id) in enumerate(((claim, evidence_id) for claim in accepted_claims for evidence_id in next(item.evidence_ids for item in accepted_assessments if item.claim_id == claim.claim_id)), 1))
         require_closed_citations(accepted_claims, accepted_evidence, citations)
-        report = render_evidence_report(title="Verified paper research", intro_lines=(f"> Objective: {objective}", f"> Plan Artifact: `{plan_ref.artifact_id}`", f"> Retrieval Artifact: `{retrieval_ref.artifact_id}`"), blocks=tuple(AnswerBlock(f"Claim {index}", claim.text, EvidenceSupportStatus.CITED, (claim.claim_id,)) for index, claim in enumerate(accepted_claims, 1)), claims=accepted_claims, evidence=accepted_evidence, citations=citations, evidence_trust={item.evidence_id: SourceTrustLevel.GENERAL_SOURCE for item in accepted_evidence}, limitations=("Evidence is limited to retrieved page-level PDF chunks from the frozen local corpus.", "AcademyHunter metadata is not used as Claim evidence."))
+        limitations = self._limitations()
+        report = render_evidence_report(title="Verified paper research", intro_lines=(f"> Objective: {objective}", f"> Plan Artifact: `{plan_ref.artifact_id}`", f"> Retrieval Artifact: `{retrieval_ref.artifact_id}`"), blocks=tuple(AnswerBlock(f"Claim {index}", claim.text, EvidenceSupportStatus.CITED, (claim.claim_id,)) for index, claim in enumerate(accepted_claims, 1)), claims=accepted_claims, evidence=accepted_evidence, citations=citations, evidence_trust={item.evidence_id: SourceTrustLevel.GENERAL_SOURCE for item in accepted_evidence}, limitations=limitations)
         report_ref = self.store.put_bytes(report.encode("utf-8"), media_type="text/markdown; charset=utf-8", producer_step_id="s1-research-deliver", schema_version="conflux-weave.verified-research-report.v1")
         coverage = CoverageReport(len(accepted_evidence), len(claims), len(accepted_claims), len(claims) - len(accepted_claims), repair_rounds, "verified_delivery" if accepted_claims else "no_supported_claim")
         harness_refs = self._harness_trace(objective, plan_ref.artifact_id, retrieval_ref, report_ref, accepted_evidence, coverage)
-        manifest = {"schema_version": "conflux-weave.verified-research-manifest.v1", "objective": objective, "profiles": {"research": asdict(self.research_profile), "verifier": asdict(self.verifier_profile)}, "plan_artifact": plan_ref.artifact_id, "retrieval_artifact": retrieval_ref.artifact_id, "model_artifacts": research_refs + verify_refs, "harness_artifacts": harness_refs, "report_artifact": report_ref.artifact_id, "coverage": asdict(coverage), "citation_closure": 1.0, "repair_rounds": repair_rounds}
+        manifest = {"schema_version": "conflux-weave.verified-research-manifest.v1", "objective": objective, "corpus_scope": self.corpus_scope, "disposition": DeliveryDisposition.COMPLETE.value, "profiles": {"research": asdict(self.research_profile), "verifier": asdict(self.verifier_profile)}, "plan_artifact": plan_ref.artifact_id, "retrieval_artifact": retrieval_ref.artifact_id, "model_artifacts": research_refs + verify_refs, "harness_artifacts": harness_refs, "report_artifact": report_ref.artifact_id, "coverage": asdict(coverage), "citation_closure": 1.0, "repair_rounds": repair_rounds, "limitations": list(limitations)}
         manifest_ref = self.store.put_json(manifest, producer_step_id="s1-research-deliver", schema_version=manifest["schema_version"])
-        return ResearchExecution(report_ref.artifact_id, manifest_ref.artifact_id, accepted_claims, accepted_evidence, citations, assessments, coverage)
+        return ResearchExecution(report_ref.artifact_id, manifest_ref.artifact_id, accepted_claims, accepted_evidence, citations, assessments, coverage, DeliveryDisposition.COMPLETE, limitations)
+
+    def _no_answer(self, objective, plan_ref, retrieval_ref, retrieved_evidence, model_refs, *, candidate_claim_count, repair_rounds):
+        limitations = self._limitations() + (
+            "No evidence-supported Claim was found in the retrieved chunks for this objective.",
+        )
+        coverage = CoverageReport(len(retrieved_evidence), candidate_claim_count, 0, candidate_claim_count, repair_rounds, "no_supported_claim")
+        report = render_evidence_report(
+            title="Verified paper research",
+            intro_lines=(
+                f"> Objective: {objective}",
+                f"> Plan Artifact: `{plan_ref}`",
+                f"> Retrieval Artifact: `{retrieval_ref.artifact_id}`",
+            ),
+            blocks=(
+                AnswerBlock(
+                    "No evidence-supported answer",
+                    "The configured corpus did not yield a Claim that could be supported by the retrieved page-level chunks.",
+                    EvidenceSupportStatus.UNSUPPORTED_CLAIM,
+                ),
+            ),
+            claims=(),
+            evidence=(),
+            citations=(),
+            evidence_trust={},
+            limitations=limitations,
+        )
+        report_ref = self.store.put_bytes(report.encode("utf-8"), media_type="text/markdown; charset=utf-8", producer_step_id="s1-research-deliver", schema_version="conflux-weave.verified-research-report.v1")
+        harness_refs = self._harness_no_answer_trace(objective, plan_ref, retrieval_ref, report_ref, coverage)
+        manifest = {
+            "schema_version": "conflux-weave.verified-research-manifest.v1",
+            "objective": objective,
+            "corpus_scope": self.corpus_scope,
+            "disposition": DeliveryDisposition.NO_ANSWER.value,
+            "profiles": {"research": asdict(self.research_profile), "verifier": asdict(self.verifier_profile)},
+            "plan_artifact": plan_ref,
+            "retrieval_artifact": retrieval_ref.artifact_id,
+            "model_artifacts": model_refs,
+            "harness_artifacts": harness_refs,
+            "report_artifact": report_ref.artifact_id,
+            "coverage": asdict(coverage),
+            "citation_closure": 1.0,
+            "repair_rounds": repair_rounds,
+            "limitations": list(limitations),
+        }
+        manifest_ref = self.store.put_json(manifest, producer_step_id="s1-research-deliver", schema_version=manifest["schema_version"])
+        return ResearchExecution(report_ref.artifact_id, manifest_ref.artifact_id, (), (), (), (), coverage, DeliveryDisposition.NO_ANSWER, limitations)
+
+    def _limitations(self) -> tuple[str, ...]:
+        return (
+            f"Evidence is limited to retrieved page-level PDF chunks from: {self.corpus_scope}.",
+            "AcademyHunter metadata is not used as Claim evidence.",
+        )
 
     def _evidence(self, run: HybridRetrievalRun) -> tuple[EvidenceRef, ...]:
         evidence = []
@@ -106,7 +184,6 @@ class VerifiedResearchWorkflow:
             ids=item.get("evidence_ids"); text=item.get("text")
             if not isinstance(text,str) or not text.strip() or not isinstance(ids,list) or not ids or any(value not in allowed for value in ids): raise ValueError("ResearchAgent returned invalid Claim/Evidence mapping")
             claims.append(Claim(f"claim-{index:04d}", text.strip(), "research_finding", "primary", "s1-research-repair" if repair else "s1-research-draft"))
-        if not claims: raise ValueError("ResearchAgent returned no claims")
         mapping_ref=self.store.put_json({"claims":[{"claim_id":claim.claim_id,"evidence_ids":payload["claims"][i]["evidence_ids"]} for i,claim in enumerate(claims)]},producer_step_id="s1-research-repair" if repair else "s1-research-draft",schema_version="conflux-weave.claim-evidence-map.v1")
         return tuple(claims), [completion.request_artifact.artifact_id, completion.response_artifact.artifact_id, mapping_ref.artifact_id]
 
@@ -146,3 +223,21 @@ class VerifiedResearchWorkflow:
         for message in messages:
             ref=self.store.put_json(contract_to_dict(message),producer_step_id="s1-harness-messages",schema_version=message.schema_version); refs.append(ref.artifact_id)
         return refs
+
+    def _harness_no_answer_trace(self, objective, plan_ref, retrieval_ref, report_ref, coverage):
+        digest = hashlib.sha256(objective.encode()).hexdigest()[:16]
+        run_id = f"research-run-{digest}"
+        created_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        research_task_id = f"{run_id}:research"
+        context = ContextBundle(f"context:{research_task_id}", research_task_id, "research_agent@v1", objective, {"run_id": run_id, "phase": "research", "retrieval_rounds": 1}, (plan_ref,), (), (), (RESEARCH_TOOL_ID,), ("use retrieved Evidence only", "return no claims when Evidence does not support an answer"), ("submit supported claims or an explicit no-answer result",), created_at)
+        context_ref = self.store.put_json(contract_to_dict(context), producer_step_id="s1-harness-research", schema_version=context.schema_version)
+        task = AgentTask(research_task_id, run_id, "s1-research", "verified_paper_research", objective, context.completion_criteria, context_ref.artifact_id, (plan_ref,), (RESEARCH_TOOL_ID,), self.research_profile.default_budget, f"agent-task:{research_task_id}")
+        task_ref = self.store.put_json(contract_to_dict(task), producer_step_id="s1-harness-research", schema_version=task.schema_version)
+        tool = ToolResult(f"tool-call:{research_task_id}", RESEARCH_TOOL_ID, research_task_id, ToolResultStatus.SUCCEEDED, (retrieval_ref.artifact_id,), (), None, created_at, created_at)
+        tool_ref = self.store.put_json(contract_to_dict(tool), producer_step_id="s1-harness-research", schema_version=tool.schema_version)
+        result = AgentResult(research_task_id, AgentResultStatus.COMPLETED, "ResearchAgent returned no evidence-supported claims.", (retrieval_ref.artifact_id, report_ref.artifact_id), ())
+        result_ref = self.store.put_json(contract_to_dict(result), producer_step_id="s1-harness-research", schema_version=result.schema_version)
+        message = MessageEnvelope(f"message:{research_task_id}:result", run_id, research_task_id, "research_agent@v1", "orchestrator", MessageType.RESULT_SUBMITTED, None, run_id, result_ref.artifact_id, f"message:{research_task_id}:result", created_at)
+        message_ref = self.store.put_json(contract_to_dict(message), producer_step_id="s1-harness-messages", schema_version=message.schema_version)
+        coverage_ref = self.store.put_json(asdict(coverage), producer_step_id="s1-harness-research", schema_version="conflux-weave.coverage-report.v1")
+        return [context_ref.artifact_id, task_ref.artifact_id, tool_ref.artifact_id, result_ref.artifact_id, message_ref.artifact_id, coverage_ref.artifact_id]

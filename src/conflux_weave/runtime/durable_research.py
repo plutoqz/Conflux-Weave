@@ -59,6 +59,9 @@ class DurableResearchExecution:
     evidence_records: tuple[dict[str, Any], ...]
     usage: BudgetAmount
     provider_call_count: int
+    disposition: DeliveryDisposition = DeliveryDisposition.COMPLETE
+    limitations: tuple[str, ...] = ()
+    unmet_criteria: tuple[str, ...] = ()
 
 
 class ResearchExecutor(Protocol):
@@ -122,17 +125,20 @@ class VerifiedWorkflowExecutorAdapter:
         if provider_calls < 1:
             raise ValueError("research manifest contains no traceable Provider response")
         return DurableResearchExecution(
-            result.report_artifact_id,
-            result.manifest_artifact_id,
-            evidence_refs,
-            evidence_records,
-            BudgetAmount(
+            report_artifact_id=result.report_artifact_id,
+            manifest_artifact_id=result.manifest_artifact_id,
+            evidence_refs=evidence_refs,
+            evidence_records=evidence_records,
+            usage=BudgetAmount(
                 input_tokens,
                 output_tokens,
                 provider_calls,
                 retrieval_rounds,
             ),
-            provider_calls,
+            provider_call_count=provider_calls,
+            disposition=getattr(result, "disposition", DeliveryDisposition.COMPLETE),
+            limitations=tuple(getattr(result, "limitations", ())),
+            unmet_criteria=tuple(getattr(result, "unmet_criteria", ())),
         )
 
     def _collect_usage(self, root_artifact_id: str) -> tuple[int, int, int]:
@@ -491,6 +497,9 @@ class DurableResearchRuntime:
                 "usage": asdict(execution.usage),
                 "provider_call_count": execution.provider_call_count,
                 "usage_granularity": "aggregate_research_batch",
+                "disposition": execution.disposition.value,
+                "limitations": list(execution.limitations),
+                "unmet_criteria": list(execution.unmet_criteria),
             },
             producer_step_id=claim.step_id,
             schema_version=EXECUTION_SCHEMA,
@@ -559,18 +568,28 @@ class DurableResearchRuntime:
             producer_step_id=claim.step_id,
             schema_version=DURABLE_RESEARCH_EVIDENCE_SCHEMA,
         )
+        disposition = DeliveryDisposition(
+            response.get("disposition", DeliveryDisposition.COMPLETE.value)
+        )
+        limitations = tuple(response.get("limitations", ())) + (
+            "Durability is enforced at an opaque paid research-batch boundary; individual Provider-call recovery is not implemented.",
+        )
         delivery = DeliveryRecord(
             claim.run_id,
-            DeliveryDisposition.COMPLETE,
+            disposition,
             (report.artifact_id, manifest.artifact_id, evidence.artifact_id),
             tuple(response["evidence_refs"]),
-            (
-                "Durability is enforced at an opaque paid research-batch boundary; individual Provider-call recovery is not implemented.",
-            ),
+            limitations,
+            tuple(response.get("unmet_criteria", ())),
+        )
+        run_status = (
+            RunStatus.PARTIAL
+            if disposition is DeliveryDisposition.PARTIAL
+            else RunStatus.SUCCEEDED
         )
         self.repository.publish_delivery(
             claim.run_id,
-            RunStatus.SUCCEEDED,
+            run_status,
             delivery,
             (report, manifest, evidence),
             claim=claim,
@@ -604,6 +623,15 @@ class DurableResearchRuntime:
             execution.evidence_refs
         ):
             raise ValueError("evidence records must match declared evidence refs")
+        if execution.disposition is DeliveryDisposition.NO_ANSWER:
+            if execution.evidence_refs:
+                raise ValueError("no-answer research must not publish Evidence as support")
+            if not execution.limitations:
+                raise ValueError("no-answer research must explain its evidence boundary")
+        if execution.disposition is DeliveryDisposition.PARTIAL and not execution.unmet_criteria:
+            raise ValueError("partial research must identify unmet criteria")
+        if execution.disposition is DeliveryDisposition.COMPLETE and execution.unmet_criteria:
+            raise ValueError("complete research cannot have unmet criteria")
         for artifact_id in (
             execution.report_artifact_id,
             execution.manifest_artifact_id,

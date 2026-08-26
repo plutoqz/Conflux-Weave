@@ -66,7 +66,7 @@ def main() -> None:
         ),
     }
     runtimes = {
-        scope: _runtime(repository, store, config, revision, manifest, lancedb)
+        scope: _runtime(repository, store, config, revision, manifest, lancedb, scope)
         for scope, (manifest, lancedb) in scope_paths.items()
     }
 
@@ -88,7 +88,7 @@ def main() -> None:
     print(args.output.read_text(encoding="utf-8"))
 
 
-def _runtime(repository, store, config, revision, manifest, lancedb):
+def _runtime(repository, store, config, revision, manifest, lancedb, corpus_scope):
     documents = load_chunks(manifest, store)
     retrieval = HybridRetrievalPipeline(
         documents,
@@ -96,7 +96,12 @@ def _runtime(repository, store, config, revision, manifest, lancedb):
         OpenAICompatibleEmbeddingAdapter(store, config),
         OpenAICompatibleRerankerAdapter(store, config),
     )
-    verified = VerifiedResearchWorkflow(store, retrieval, OpenAICompatibleChatAdapter(store, config))
+    verified = VerifiedResearchWorkflow(
+        store,
+        retrieval,
+        OpenAICompatibleChatAdapter(store, config),
+        corpus_scope=f"S1.5-C {corpus_scope} corpus ({manifest})",
+    )
     managed = ManagedVerifiedResearchWorkflow(store, verified, OpenAICompatibleChatAdapter(store, config))
     return DurableResearchRuntime(
         repository,
