@@ -124,7 +124,7 @@ class VerifiedResearchWorkflow:
     @staticmethod
     def _retrieval_payload(run: HybridRetrievalRun):
         def rows(result): return [{"chunk_id":hit.document_id,"score":hit.score,"rank":hit.rank,"source_snapshot_id":hit.source_snapshot_id,"locator":hit.locator} for hit in result.hits]
-        return {"query":run.query,"rerank_status":run.rerank_status,"bm25":rows(run.bm25),"dense":rows(run.dense),"hybrid":rows(run.hybrid),"final":rows(run.final),"embedding_response":run.embedding_response_artifact,"rerank_response":run.rerank_response_artifact}
+        return {"query":run.query,"rerank_status":run.rerank_status,"bm25":rows(run.bm25),"dense":rows(run.dense),"hybrid":rows(run.hybrid),"final":rows(run.final),"embedding_request":run.embedding_request_artifact,"embedding_response":run.embedding_response_artifact,"rerank_request":run.rerank_request_artifact,"rerank_response":run.rerank_response_artifact}
 
     def _harness_trace(self, objective, plan_ref, retrieval_ref, report_ref, evidence, coverage):
         digest = hashlib.sha256(objective.encode()).hexdigest()[:16]; run_id=f"research-run-{digest}"; created_at=datetime.now(UTC).isoformat().replace("+00:00","Z"); refs=[]

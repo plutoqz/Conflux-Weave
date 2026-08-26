@@ -66,6 +66,10 @@ __all__ = [
     "DeterministicValidationAdapter",
     "DURABLE_WORKFLOW_VERSION",
     "DurablePaperDiscoveryRuntime",
+    "DURABLE_RESEARCH_WORKFLOW_VERSION",
+    "DurableResearchExecution",
+    "DurableResearchRuntime",
+    "VerifiedWorkflowExecutorAdapter",
     "DurableWorkResult",
     "FixedValidationWorkflow",
     "FixedOutcomeWorkflow",
@@ -116,4 +120,13 @@ def __getattr__(name: str):
         from conflux_weave.runtime import durable_paper_discovery
 
         return getattr(durable_paper_discovery, name)
+    if name in {
+        "DURABLE_RESEARCH_WORKFLOW_VERSION",
+        "DurableResearchExecution",
+        "DurableResearchRuntime",
+        "VerifiedWorkflowExecutorAdapter",
+    }:
+        from conflux_weave.runtime import durable_research
+
+        return getattr(durable_research, name)
     raise AttributeError(name)
