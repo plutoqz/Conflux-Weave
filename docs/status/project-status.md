@@ -183,3 +183,12 @@ This preflight proves current port connectivity and one bounded source parse onl
 not prove post-remediation research quality, Manager gain or S1 completion. The next
 acceptance point is to execute the frozen S1.6-C eight-case protocol once, creating new
 immutable Runs and preserving any Provider or acceptance failures without automatic retry.
+
+The first S1.6-C formal discovery attempt on revision `08c4852` is an immutable failed case,
+not a retry candidate. The draft call succeeded, but the independent support verifier returned
+`claims` instead of the required `assessments` root, so the workflow failed closed with
+`paper_claim_verification_invalid`. The failure manifest, both model request/response pairs
+and source response remain in the Artifact Store. Provider automatic retry was disabled.
+The matrix runner is being minimally extended to admit this frozen failure Artifact as the
+discovery case and continue the seven independent research cases; no protocol question,
+acceptance criterion or previous Run is changed.

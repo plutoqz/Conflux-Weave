@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 
 
 DATASET = Path("datasets/regression/s15-live-research-v1")
@@ -78,3 +79,17 @@ def test_s16_runner_defaults_are_isolated_from_s15() -> None:
     assert "--execute-live is required" in preflight
     assert "max_attempts=1" in preflight
     assert '"arxiv"' in preflight
+
+
+def test_s16_runner_accepts_a_frozen_discovery_failure() -> None:
+    completed = subprocess.run(
+        ["uv", "run", "python", "scripts/run_s16_live_matrix.py", "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "--discovery-failure-artifact" in completed.stdout
+    runner = Path("scripts/run_s15_live_matrix.py").read_text(encoding="utf-8")
+    assert '"mechanical_acceptance": "failed_execution"' in runner
+    assert 'else "failed_execution"' in runner

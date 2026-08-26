@@ -38,7 +38,9 @@ def main() -> None:
         "--summary-schema-version",
         default="conflux-weave.s15c-live-matrix-summary.v1",
     )
-    parser.add_argument("--discovery-manifest-artifact", required=True)
+    discovery = parser.add_mutually_exclusive_group(required=True)
+    discovery.add_argument("--discovery-manifest-artifact")
+    discovery.add_argument("--discovery-failure-artifact")
     parser.add_argument("--execute-live", action="store_true")
     args = parser.parse_args()
     if not args.execute_live:
@@ -54,14 +56,21 @@ def main() -> None:
     repository = SQLiteRuntimeRepository(args.database, store)
     revision = _revision()
     protocol_hash = _dataset_hash(args.dataset)
-    records = [
-        _discovery_record(
-            store,
-            args.discovery_manifest_artifact,
-            cases[0],
-            dataset_manifest=dataset_manifest,
-        )
-    ]
+    if args.discovery_failure_artifact:
+        records = [
+            _discovery_failure_record(
+                store, args.discovery_failure_artifact, cases[0]
+            )
+        ]
+    else:
+        records = [
+            _discovery_record(
+                store,
+                args.discovery_manifest_artifact,
+                cases[0],
+                dataset_manifest=dataset_manifest,
+            )
+        ]
 
     scope_paths = _scope_paths(dataset_manifest)
     _verify_corpus_hashes(dataset_manifest, scope_paths)
@@ -258,6 +267,46 @@ def _discovery_record(store, artifact_id, case, *, dataset_manifest):
     }
 
 
+def _discovery_failure_record(store, artifact_id, case):
+    payload = _read_artifact(store, artifact_id)
+    if payload.get("schema_version") not in {
+        "conflux-weave.arxiv-paper-discovery-live.v1",
+        "conflux-weave.arxiv-paper-discovery-live.v2",
+    }:
+        raise ValueError("discovery failure manifest schema mismatch")
+    if payload.get("status") != "failed" or not payload.get("error_code"):
+        raise ValueError("discovery failure manifest must record a failed result")
+    config = _read_artifact(store, payload["config_artifact_ref"])
+    return {
+        **case,
+        "run_id": payload["run_id"],
+        "run_status": "failed",
+        "source_revision": config.get("code_revision"),
+        "manifest_artifact": artifact_id,
+        "config_artifact": payload["config_artifact_ref"],
+        "provider_request_artifact": payload.get("provider_request_artifact_ref"),
+        "provider_response_artifact": payload.get("provider_response_artifact_ref"),
+        "verification_request_artifact": payload.get(
+            "verification_request_artifact_ref"
+        ),
+        "verification_response_artifact": payload.get(
+            "verification_response_artifact_ref"
+        ),
+        "source_response_artifact": payload.get("search_response_artifact_ref"),
+        "errors": [
+            {
+                "code": payload["error_code"],
+                "message": payload.get("message"),
+                "retryable": False,
+            }
+        ],
+        "provider_automatic_retry": payload.get(
+            "provider_automatic_retry", False
+        ),
+        "mechanical_acceptance": "failed_execution",
+    }
+
+
 def _delivery_metrics(store, delivery, *, required_coverage_quotes):
     if delivery is None:
         return None
@@ -328,6 +377,7 @@ def _write_summary(
 ):
     all_recorded = len(records) == dataset_manifest["case_count"]
     needs_attention = any(item.get("run_status") == "waiting_for_user" for item in records)
+    failed_execution = any(item.get("run_status") == "failed" for item in records)
     complete = all_recorded and not needs_attention
     payload = {
         "schema_version": schema_version,
@@ -345,6 +395,8 @@ def _write_summary(
         "acceptance_status": (
             "blocked_unknown_outcome"
             if needs_attention
+            else "failed_execution"
+            if complete and failed_execution
             else "pending_manual_review"
             if complete
             else "in_progress"
