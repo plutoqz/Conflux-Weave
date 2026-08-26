@@ -1,0 +1,35 @@
+{
+  "schema_version": "conflux-weave.s15-live-research-dataset.v1",
+  "dataset_id": "s15-live-research-v1",
+  "created_at": "2026-08-26",
+  "case_count": 8,
+  "live_execution_requires_explicit_flag": true,
+  "provider_models": {
+    "chat": "qwen3.7-flash",
+    "embedding": "text-embedding-v4",
+    "reranker": "qwen3-rerank"
+  },
+  "new_sources": [
+    {
+      "arxiv_id": "2608.24188v1",
+      "title": "Paritok-4B: Intent-Conditioned Context Compression for Coding Agents",
+      "pdf_url": "https://arxiv.org/pdf/2608.24188v1",
+      "sha256": "c9b47e92dceabac96ca1b9f6c61913540f9b42514098268fb71c3235422a9b15"
+    },
+    {
+      "arxiv_id": "2608.24876v1",
+      "title": "Recursive Experiential-Working Memory Evolution for Long-Horizon Agent Harnesses",
+      "pdf_url": "https://arxiv.org/pdf/2608.24876v1",
+      "sha256": "dfa6f6d1174ad07dee26e5e3d310b750280fe3eaba16b371ef1e0d80bce8ae41"
+    }
+  ],
+  "paired_case_rule": "Paired single and Manager cases use byte-identical objectives and the same corpus/index.",
+  "acceptance": {
+    "minimum_real_tasks": 8,
+    "citation_closure": 1.0,
+    "critical_claims_require_manual_support": true,
+    "no_answer_requires_explicit_abstention": true,
+    "provider_failures_are_not_retried_automatically": true
+  },
+  "evidence_boundary": "The first matrix is frozen before deep-research execution. Failures remain results and may only drive S1.6 changes after this matrix is sealed."
+}

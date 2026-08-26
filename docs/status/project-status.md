@@ -9,7 +9,7 @@ Updated: 2026-08-26
 | Existing runtime | `legacy_v0.2_implemented` | SQLite, Artifact, Evidence, recovery, FastAPI and Workbench assets remain in source |
 | Existing live capability | `bounded_retrieval_evidence` | Historical qwen3.7flash arXiv/GitHub runs; not full RAG or multi-Agent proof |
 | v0.3 S0/P0 plan | `implemented_and_validated_offline` | S0.0-S0.5 are committed; current work continues on `codex/v0.3-s0-harness` and is pushed to `origin/main` at phase checkpoints |
-| v0.3 S1 | `implemented_partial` | S1.0-S1.5-B real corpus, LanceDB Hybrid/Rerank, verified single/managed Agent delivery, durable research and Workbench interaction exist; the S1.5-C multi-case live closure remains pending |
+| v0.3 S1 | `implemented_partial_live_acceptance_failed` | S1.0-S1.5-B mechanisms exist; the frozen S1.5-C first live matrix was executed but rejected after manual support, coverage and abstention review |
 
 The v0.2 W0-W5 plans are no longer active gates. Their implementation and
 validation evidence remains available at `docs/plans/deprecated/v0.2/`; the
@@ -52,8 +52,9 @@ S1.4 also adds durable `verified_paper_research` and `managed_verified_research`
 kinds over the existing SQLite Task/Run/Step/Delivery authority. Cancellation before
 execution, aggregate budget accounting, terminal replay and no automatic replay after
 an unknown paid research-batch outcome are mechanism-tested. The recovery boundary is
-the complete research batch, not each internal Provider call; individual-call recovery,
-and the S1.5-C eight-task live acceptance remain incomplete.
+the complete research batch, not each internal Provider call; individual-call recovery
+remains incomplete. The S1.5-C eight-task live matrix has now executed once, but failed
+acceptance as described below.
 Image-first multimodal RAG is scheduled for P2 and is not part of S1 capability.
 
 S1.5-A connects both durable research task kinds to the existing FastAPI boundary
@@ -78,5 +79,31 @@ Current S1.5-B evidence:
   so the responsive acceptance used bundled Playwright with installed Microsoft Edge.
 
 S1.5-B proves the interactive Workbench mechanism and one live Run's persisted browser
-delivery. It does not prove monetary limit enforcement, multi-Agent quality gain, or the
-S1.5-C eight-task live matrix. Those remain the next acceptance point.
+delivery. It does not prove monetary limit enforcement or multi-Agent quality gain.
+
+S1.5-C froze and executed eight live cases without retry: one arXiv discovery, two focused
+paper questions, two same-question single/Manager pairs, and one no-answer case. The local,
+new and mixed LanceDB corpora contain 4,043, 56 and 4,099 chunks respectively; the mixed
+index reused and verified the 4,043 existing local vectors and embedded only the 56 new
+chunks. The persisted matrix and manual review are at
+`var/acceptance/v0.3-s1/s15c-matrix-summary.json` and
+`var/acceptance/v0.3-s1/s15c-manual-review.json`.
+
+The S1.5-C decision is `reject` (`validated_live_failed_acceptance`). Mechanical execution
+produced six successful citation-closed research deliveries, one partial discovery report,
+and one failed no-answer Run. Manual review supported 41 of 42 Claims, but found one
+overstated discovery Claim, incomplete requested evaluation coverage in both local
+cross-paper modes and the mixed Manager mode, and an incorrect corpus limitation in the
+new-focused report. The no-answer model response contained zero Claims, but the runtime
+published no user-visible abstention Delivery and instead froze the Run as failed. In the
+paired cases, Manager used more tokens and latency without demonstrated quality gain; hard
+monetary enforcement also remains unavailable. The complete gate decision is at
+`var/acceptance/v0.3-s1/s15c-final-evaluation.json`.
+
+Post-freeze verification passed the focused S1.5-C contract test and the full regression
+suite (`312 passed in 118.09s`). Pytest reported only the existing Windows cache and
+temporary-directory cleanup permission warnings after the successful exit.
+
+S1.5 and S1 are therefore not complete. The next acceptance point is S1.6 failure-driven
+optimization, bounded to abstention delivery, correct corpus-boundary reporting, objective
+coverage and Agent scheduling before a fresh closeout evaluation is authorized.
