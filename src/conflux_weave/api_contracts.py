@@ -92,6 +92,17 @@ class VerifiedResearchTaskRequest(_ApiModel):
         return value.strip()
 
 
+class FollowUpResearchTaskRequest(_ApiModel):
+    question: str = Field(min_length=1, max_length=2_000)
+
+    @field_validator("question")
+    @classmethod
+    def require_nonblank_question(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("question must not be blank")
+        return value.strip()
+
+
 class ResearchTaskAcceptedResponse(_ApiModel):
     task_id: str
     run_id: str
@@ -115,6 +126,16 @@ class BudgetResponse(_ApiModel):
     output_tokens_limit: int = Field(ge=0)
     tool_calls_limit: int = Field(ge=0)
     retrieval_rounds_limit: int = Field(ge=0)
+    estimated_cost_limit: str
+    cost_enforcement: str
+
+
+class ResearchRunContextResponse(_ApiModel):
+    mode: Literal["discovery", "single", "managed", "fixture"]
+    corpus_scope: str
+    max_subquestions: int | None = Field(default=None, ge=2, le=4)
+    parent_run_id: str | None = None
+    follow_up_question: str | None = None
 
 
 class DeliveryResponse(_ApiModel):
@@ -155,6 +176,7 @@ class RunDetailResponse(RunSummaryResponse):
     budget: BudgetResponse
     delivery: DeliveryResponse | None = None
     error: ApiErrorResponse | None = None
+    research_context: ResearchRunContextResponse
 
 
 class RunEventKind(StrEnum):
@@ -413,9 +435,12 @@ class WorkbenchQueryService:
                 output_tokens_limit=budget.limit.output_tokens,
                 tool_calls_limit=budget.limit.tool_calls,
                 retrieval_rounds_limit=budget.limit.retrieval_rounds,
+                estimated_cost_limit=budget.estimated_cost_limit,
+                cost_enforcement=budget.cost_enforcement,
             ),
             delivery=delivery,
             error=error,
+            research_context=_research_context(task.kind, task.input),
         )
 
     def get_events(
@@ -585,6 +610,29 @@ def _summary(record: RunOverviewRecord) -> RunSummaryResponse:
     )
 
 
+def _research_context(task_kind: str, task_input: dict[str, Any]) -> ResearchRunContextResponse:
+    if task_kind == "verified_paper_research":
+        mode = "single"
+        corpus_scope = "已发布本地论文语料 / LanceDB Hybrid + Rerank"
+    elif task_kind == "managed_verified_research":
+        mode = "managed"
+        corpus_scope = "已发布本地论文语料 / Manager 分解 / LanceDB Hybrid + Rerank"
+    elif task_kind == "research_fixture":
+        mode = "fixture"
+        corpus_scope = "离线 Harness fixture"
+    else:
+        mode = "discovery"
+        corpus_scope = "外部论文发现"
+    max_subquestions = task_input.get("max_subquestions")
+    return ResearchRunContextResponse(
+        mode=mode,
+        corpus_scope=corpus_scope,
+        max_subquestions=(max_subquestions if isinstance(max_subquestions, int) else None),
+        parent_run_id=(task_input.get("parent_run_id") if isinstance(task_input.get("parent_run_id"), str) else None),
+        follow_up_question=(task_input.get("follow_up_question") if isinstance(task_input.get("follow_up_question"), str) else None),
+    )
+
+
 def _event(record: RunEventRecord, state: UserRunState) -> RunEventResponse:
     kind, message = _EVENT_MESSAGES.get(
         record.event_type,
@@ -632,10 +680,12 @@ __all__ = [
     "DeliveryResponse",
     "EvidenceResponse",
     "FixtureResearchTaskRequest",
+    "FollowUpResearchTaskRequest",
     "ProgressResponse",
     "ReadinessCheckResponse",
     "ReadinessResponse",
     "ResearchTaskAcceptedResponse",
+    "ResearchRunContextResponse",
     "ResearchTaskRequest",
     "RunDetailResponse",
     "RunEventKind",

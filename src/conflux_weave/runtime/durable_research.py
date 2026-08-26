@@ -232,6 +232,8 @@ class DurableResearchRuntime:
         max_subquestions: int = 4,
         budget: BudgetLedger | None = None,
         idempotency_key: str | None = None,
+        parent_run_id: str | None = None,
+        follow_up_question: str | None = None,
     ) -> SubmissionResult:
         normalized = objective.strip()
         if not normalized:
@@ -240,6 +242,16 @@ class DurableResearchRuntime:
             raise ValueError(f"unsupported research task kind: {task_kind}")
         if not 2 <= max_subquestions <= 4:
             raise ValueError("max_subquestions must be between 2 and 4")
+        if (parent_run_id is None) != (follow_up_question is None):
+            raise ValueError("parent_run_id and follow_up_question must be provided together")
+        if parent_run_id is not None and (
+            not isinstance(parent_run_id, str) or not parent_run_id.strip()
+        ):
+            raise ValueError("parent_run_id must not be blank")
+        if follow_up_question is not None and (
+            not isinstance(follow_up_question, str) or not follow_up_question.strip()
+        ):
+            raise ValueError("follow_up_question must not be blank")
 
         provider_call_limit = 6 if task_kind == VERIFIED_RESEARCH_TASK else 1 + 6 * max_subquestions
         retrieval_round_limit = 1 if task_kind == VERIFIED_RESEARCH_TASK else max_subquestions
@@ -272,6 +284,8 @@ class DurableResearchRuntime:
             "reservation": asdict(reservation),
             "recovery_granularity": "opaque_paid_research_batch",
             "automatic_replay_after_unknown_outcome": False,
+            "parent_run_id": parent_run_id,
+            "follow_up_question": follow_up_question,
         }
         config = self.artifact_store.put_json(
             {

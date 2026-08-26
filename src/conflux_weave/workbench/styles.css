@@ -122,6 +122,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:fo
 }
 
 .icon-button:hover { border-color: #9eaaa4; background: #fafbfa; }
+.compact-icon { width: 38px; height: 38px; flex-basis: 38px; font-size: 19px; }
 
 .run-list { display: grid; gap: 3px; }
 
@@ -172,6 +173,21 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:fo
 .run-message { margin: 0; color: var(--muted); font-size: 14px; }
 .run-actions { flex-wrap: wrap; justify-content: flex-end; }
 
+.research-context {
+  margin-top: 24px;
+  display: grid;
+  grid-template-columns: minmax(120px, .7fr) minmax(240px, 1.6fr) minmax(120px, .7fr);
+  gap: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f8faf9;
+}
+.research-context div { min-width: 0; padding: 12px 15px; border-right: 1px solid var(--line); }
+.research-context div:last-child { border-right: 0; }
+.research-context span, .research-context strong { display: block; }
+.research-context span { color: var(--muted); font-size: 10px; }
+.research-context strong { margin-top: 5px; overflow-wrap: anywhere; font-size: 12px; font-weight: 650; }
+
 .state-badge {
   min-height: 32px;
   padding: 7px 10px;
@@ -205,7 +221,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:fo
 .summary-strip {
   margin: 32px 0 24px;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   border-block: 1px solid var(--line);
 }
 
@@ -244,11 +260,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:fo
 .content-section { margin-top: 44px; padding-top: 26px; border-top: 1px solid var(--line); }
 .count-label { color: var(--muted); font-size: 12px; }
 .evidence-list { margin-top: 14px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.evidence-item { min-height: 102px; padding: 15px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); text-align: left; }
+.evidence-item { width: 100%; min-width: 0; min-height: 102px; overflow: hidden; padding: 15px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); text-align: left; }
 .evidence-item:hover { border-color: #9eaaa4; }
-.evidence-item strong, .evidence-item span { display: block; }
+.evidence-item strong, .evidence-item span, .evidence-item small { display: block; }
 .evidence-item strong { margin-bottom: 7px; color: var(--green-dark); font-size: 12px; }
 .evidence-item span { display: -webkit-box; overflow: hidden; color: #424a46; font-size: 12px; line-height: 1.55; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.evidence-item small { margin-top: 9px; overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 
 .boundary-list { margin-top: 14px; display: grid; gap: 8px; }
 .boundary-item { padding: 12px 0 12px 18px; border-bottom: 1px solid var(--line); position: relative; font-size: 13px; line-height: 1.55; }
@@ -270,7 +287,7 @@ dialog::backdrop { background: rgba(25, 31, 28, .45); }
 .dialog-header { align-items: flex-start; margin-bottom: 24px; }
 .field-label { display: block; margin-bottom: 8px; color: #4f5954; font-size: 12px; font-weight: 700; }
 .mode-fieldset { margin: 0 0 18px; padding: 0; border: 0; }
-.mode-switch { display: grid; grid-template-columns: 1fr 1fr; width: min(320px, 100%); padding: 3px; border: 1px solid #bac4bf; border-radius: 6px; background: var(--soft); }
+.mode-switch { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); width: 100%; padding: 3px; border: 1px solid #bac4bf; border-radius: 6px; background: var(--soft); }
 .mode-switch label { position: relative; min-width: 0; }
 .mode-switch input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .mode-switch span { min-height: 34px; display: grid; place-items: center; padding: 6px 10px; border-radius: 4px; color: var(--muted); font-size: 12px; font-weight: 700; }
@@ -280,6 +297,7 @@ textarea, input { width: 100%; border: 1px solid #bac4bf; border-radius: 5px; ba
 textarea { min-height: 150px; padding: 12px; resize: vertical; line-height: 1.55; }
 input { height: 40px; padding: 0 10px; }
 .field-grid { margin-top: 18px; display: grid; grid-template-columns: 1fr 130px; gap: 16px; }
+.field-grid.single-field { grid-template-columns: minmax(130px, 180px); }
 .dialog-actions { margin-top: 24px; display: flex; justify-content: flex-end; gap: 10px; }
 .form-error { margin: 14px 0 0; color: var(--red); font-size: 12px; }
 
@@ -308,11 +326,15 @@ input { height: 40px; padding: 0 10px; }
   .run-header { display: block; }
   .run-header h1 { font-size: 23px; }
   .run-actions { margin-top: 18px; justify-content: flex-start; }
+  .research-context { grid-template-columns: 1fr; }
+  .research-context div { border-right: 0; border-bottom: 1px solid var(--line); }
+  .research-context div:last-child { border-bottom: 0; }
   .summary-strip { grid-template-columns: 1fr; }
   .summary-strip section, .summary-strip section:first-child { min-height: 82px; padding: 15px 0; border-right: 0; border-bottom: 1px solid var(--line); }
   .summary-strip section:last-child { border-bottom: 0; }
   .evidence-list { grid-template-columns: 1fr; }
   .field-grid { grid-template-columns: 1fr; }
+  .mode-switch { grid-template-columns: 1fr 1fr; }
   .evidence-meta div { grid-template-columns: 1fr; gap: 5px; }
 }
 

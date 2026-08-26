@@ -154,10 +154,19 @@ def test_workbench_is_packaged_same_origin_without_external_assets(tmp_path) -> 
     assert 'class="mode-switch"' in index
     assert 'id="retry-run"' in index
     assert 'id="fail-run"' in index
+    assert 'id="refresh-run"' in index
+    assert 'id="rerun-run"' in index
+    assert 'id="follow-up-run"' in index
+    assert 'value="single" checked' in index
+    assert 'value="managed"' in index
+    assert 'id="follow-up-dialog"' in index
     assert "@media (max-width: 760px)" in styles
     assert "EventSource" in script
     assert "/api/v1/tasks/research" in script
     assert "/api/v1/tasks/research-fixture" in script
+    assert "/api/v1/tasks/verified-research" in script
+    assert "/follow-up`" in script
+    assert "/rerun`" in script
     assert "updateTaskMode" in script
     assert "retry_unknown_external" in script
     assert "fail_unknown_external" in script
@@ -167,6 +176,8 @@ def test_workbench_is_packaged_same_origin_without_external_assets(tmp_path) -> 
     assert "if (run.is_terminal) return" not in script
     assert "overflow-wrap: anywhere" in styles
     assert "grid-template-columns: 1fr" in styles
+    assert ".research-context" in styles
+    assert "repeat(4, minmax(0, 1fr))" in styles
     assert "http://" not in index + styles + script
     assert "https://" not in index + styles + script
 

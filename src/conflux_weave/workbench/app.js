@@ -27,6 +27,15 @@ const stateLabels = {
 const familyLabels = {
   paper_discovery: "论文发现",
   research_fixture: "离线研究验证",
+  verified_paper_research: "核验研究",
+  managed_verified_research: "Manager 研究",
+};
+
+const modeLabels = {
+  discovery: "论文获取",
+  single: "单 Agent",
+  managed: "Manager 协作",
+  fixture: "离线验证",
 };
 
 async function api(path, options = {}) {
@@ -115,14 +124,30 @@ function renderRun(run) {
   $("#progress-value").textContent = `${completed} / ${total}`;
   $("#progress-bar").style.width = `${total ? Math.min(100, completed / total * 100) : 0}%`;
   const budget = run.budget || {};
+  const context = run.research_context || {};
   const tokens = (budget.input_tokens_used || 0) + (budget.output_tokens_used || 0);
   const tokenLimit = (budget.input_tokens_limit || 0) + (budget.output_tokens_limit || 0);
   $("#token-value").textContent = `${tokens.toLocaleString("zh-CN")} tokens`;
   $("#budget-state").textContent = tokenLimit ? `上限 ${tokenLimit.toLocaleString("zh-CN")}` : "未记录上限";
   $("#retrieval-value").textContent = `${budget.retrieval_rounds_used || 0} / ${budget.retrieval_rounds_limit || 0}`;
   $("#tool-value").textContent = `工具调用 ${budget.tool_calls_used || 0} / ${budget.tool_calls_limit || 0}`;
+  $("#cost-value").textContent = budget.estimated_cost_limit && budget.estimated_cost_limit !== "unavailable"
+    ? budget.estimated_cost_limit : "未提供";
+  $("#cost-state").textContent = budget.cost_enforcement === "unavailable" ? "未启用金额强制" : budget.cost_enforcement;
+  $("#run-mode").textContent = modeLabels[context.mode] || "研究任务";
+  $("#corpus-scope").textContent = context.corpus_scope || "未记录";
+  const verified = ["verified_paper_research", "managed_verified_research"].includes(run.task_family);
+  $("#confidence-value").textContent = verified && run.state === "complete"
+    ? "引用核验完成"
+    : verified && run.state === "partial"
+      ? "部分核验"
+      : run.delivery?.evidence_ids?.length
+        ? `${run.delivery.evidence_ids.length} 条证据`
+        : "待生成";
 
   $("#cancel-run").hidden = run.is_terminal || run.state === "needs_attention" || run.state === "cancelling";
+  $("#rerun-run").hidden = !run.is_terminal || run.state === "cancelled";
+  $("#follow-up-run").hidden = !run.is_terminal || !verified || !run.delivery;
   $("#retry-run").hidden = run.state !== "needs_attention";
   $("#fail-run").hidden = run.state !== "needs_attention";
   renderBoundaries(run.delivery, run.error);
@@ -224,7 +249,10 @@ async function loadEvidence(runId, evidenceIds) {
     title.textContent = `证据 ${index + 1}`;
     const quote = document.createElement("span");
     quote.textContent = item.quote;
-    button.append(title, quote);
+    const source = document.createElement("small");
+    const page = item.locator?.page ? ` · p.${item.locator.page}` : "";
+    source.textContent = `${item.source_snapshot_id}${page}`;
+    button.append(title, quote, source);
     button.addEventListener("click", () => openEvidence(item, index + 1));
     return button;
   }));
@@ -327,9 +355,59 @@ async function mutateRun(decision = null) {
   } catch (error) { showToast(error.recoveryAction || error.message); }
 }
 
+async function rerunSelected() {
+  if (!state.selected) return;
+  const button = $("#rerun-run");
+  button.disabled = true;
+  try {
+    const accepted = await api(`/api/v1/runs/${encodeURIComponent(state.selected.run_id)}/rerun`, { method: "POST" });
+    await loadRuns();
+    await selectRun(accepted.run_id);
+  } catch (error) {
+    showToast(error.recoveryAction || error.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function openFollowUpDialog() {
+  if (!state.selected) return;
+  $("#follow-up-question").value = "";
+  $("#follow-up-error").hidden = true;
+  $("#follow-up-dialog").showModal();
+  $("#follow-up-question").focus();
+}
+
+async function submitFollowUp() {
+  if (!state.selected) return;
+  const question = $("#follow-up-question").value.trim();
+  const errorNode = $("#follow-up-error");
+  if (!question) {
+    errorNode.textContent = "请输入追问。";
+    errorNode.hidden = false;
+    return;
+  }
+  const button = $("#submit-follow-up");
+  button.disabled = true;
+  try {
+    const accepted = await api(`/api/v1/runs/${encodeURIComponent(state.selected.run_id)}/follow-up`, {
+      method: "POST",
+      body: JSON.stringify({ question }),
+    });
+    $("#follow-up-dialog").close();
+    await loadRuns();
+    await selectRun(accepted.run_id);
+  } catch (error) {
+    errorNode.textContent = error.recoveryAction || error.message;
+    errorNode.hidden = false;
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function submitTask() {
   const query = $("#query").value.trim();
-  const mode = document.querySelector('input[name="task_mode"]:checked')?.value || "research";
+  const mode = document.querySelector('input[name="task_mode"]:checked')?.value || "single";
   const topics = $("#topics").value.split(/[，,]/).map((item) => item.trim()).filter(Boolean);
   const errorNode = $("#task-error");
   if (!query) {
@@ -342,15 +420,24 @@ async function submitTask() {
   button.textContent = "正在创建...";
   try {
     const fixture = mode === "fixture";
-    const accepted = await api(fixture ? "/api/v1/tasks/research-fixture" : "/api/v1/tasks/research", {
+    const discovery = mode === "discovery";
+    const endpoint = fixture
+      ? "/api/v1/tasks/research-fixture"
+      : discovery
+        ? "/api/v1/tasks/research"
+        : "/api/v1/tasks/verified-research";
+    const accepted = await api(endpoint, {
       method: "POST",
       body: JSON.stringify(fixture
         ? { objective: query }
-        : { query, topics, max_results: Number($("#max-results").value) }),
+        : discovery
+          ? { query, topics, max_results: Number($("#max-results").value) }
+          : { objective: query, mode, max_subquestions: Number($("#max-subquestions").value) }),
     });
     $("#task-dialog").close();
     $("#task-form").reset();
     $("#max-results").value = "15";
+    $("#max-subquestions").value = "4";
     updateTaskMode();
     errorNode.hidden = true;
     await loadRuns();
@@ -392,9 +479,13 @@ function openTaskDialog() {
 }
 
 function updateTaskMode() {
-  const fixture = document.querySelector('input[name="task_mode"]:checked')?.value === "fixture";
+  const mode = document.querySelector('input[name="task_mode"]:checked')?.value || "single";
+  const fixture = mode === "fixture";
+  const discovery = mode === "discovery";
+  const managed = mode === "managed";
   $("#query-label").textContent = fixture ? "验证目标" : "研究问题";
-  $("#research-options").hidden = fixture;
+  $("#discovery-options").hidden = !discovery;
+  $("#managed-options").hidden = !managed;
 }
 
 $("#new-task").addEventListener("click", openTaskDialog);
@@ -405,12 +496,19 @@ document.querySelectorAll('input[name="task_mode"]').forEach((input) => {
   input.addEventListener("change", updateTaskMode);
 });
 $("#cancel-run").addEventListener("click", () => mutateRun("cancel"));
+$("#refresh-run").addEventListener("click", () => state.selected && selectRun(state.selected.run_id));
+$("#rerun-run").addEventListener("click", rerunSelected);
+$("#follow-up-run").addEventListener("click", openFollowUpDialog);
+$("#submit-follow-up").addEventListener("click", submitFollowUp);
 $("#retry-run").addEventListener("click", () => mutateRun("retry_unknown_external"));
 $("#fail-run").addEventListener("click", () => mutateRun("fail_unknown_external"));
 $("#answer-tab").addEventListener("click", () => setTab("answer"));
 $("#activity-tab").addEventListener("click", () => setTab("activity"));
 $("[data-close-evidence]").addEventListener("click", () => $("#evidence-dialog").close());
 $("#task-form").addEventListener("submit", (event) => {
+  if (event.submitter?.value !== "cancel") event.preventDefault();
+});
+$("#follow-up-form").addEventListener("submit", (event) => {
   if (event.submitter?.value !== "cancel") event.preventDefault();
 });
 

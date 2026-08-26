@@ -128,4 +128,6 @@ def test_durable_research_adapter_preserves_mode_and_rerun_key() -> None:
         "task_kind": "managed_verified_research",
         "max_subquestions": 3,
         "idempotency_key": "rerun:run-1:new",
+        "parent_run_id": None,
+        "follow_up_question": None,
     }

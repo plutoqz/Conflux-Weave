@@ -201,6 +201,8 @@ class DurableResearchRuntimeAdapter:
             task_kind=submission.task_kind,
             max_subquestions=max_subquestions,
             idempotency_key=submission.idempotency_key,
+            parent_run_id=submission.input.get("parent_run_id"),
+            follow_up_question=submission.input.get("follow_up_question"),
         )
 
     def work_once(self, *, now: str | None = None) -> Any:

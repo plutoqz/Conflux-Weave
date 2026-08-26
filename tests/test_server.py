@@ -5,6 +5,7 @@ import pytest
 
 from conflux_weave.api_contracts import (
     FixtureResearchTaskRequest,
+    FollowUpResearchTaskRequest,
     ResearchTaskRequest,
     VerifiedResearchTaskRequest,
 )
@@ -46,6 +47,9 @@ class FixtureRuntime:
                 "objective": str(submission.input["objective"]),
                 "max_subquestions": int(submission.input.get("max_subquestions", 4)),
             }
+            for key in ("parent_run_id", "follow_up_question"):
+                if key in submission.input:
+                    task_input[key] = submission.input[key]
         task = TaskSpec(
             task_id=f"task-fixture-{suffix}",
             kind=submission.task_kind,
@@ -167,6 +171,7 @@ async def _test_verified_research_submit_and_rerun_preserve_task_scope(tmp_path)
     app = create_app(repository, runtime, worker=WorkerLoop(runtime, interval_seconds=1))
     submit = route(app, "/api/v1/tasks/verified-research")
     rerun = route(app, "/api/v1/runs/{run_id}/rerun")
+    follow_up = route(app, "/api/v1/runs/{run_id}/follow-up")
 
     accepted = await submit(
         VerifiedResearchTaskRequest(
@@ -179,6 +184,11 @@ async def _test_verified_research_submit_and_rerun_preserve_task_scope(tmp_path)
     detail = await route(app, "/api/v1/runs/{run_id}")(accepted.run_id)
     repeated = await rerun(accepted.run_id)
     cloned = repository.get_task_for_run(repeated.run_id)
+    continued = await follow_up(
+        accepted.run_id,
+        FollowUpResearchTaskRequest(question="Which evaluation is most diagnostic?"),
+    )
+    continued_task = repository.get_task_for_run(continued.run_id)
 
     assert original.kind == cloned.kind == "managed_verified_research"
     assert detail.query == "Compare context reduction methods and evaluations"
@@ -189,6 +199,12 @@ async def _test_verified_research_submit_and_rerun_preserve_task_scope(tmp_path)
     }
     assert repeated.created is True
     assert repeated.run_id != accepted.run_id
+    assert continued_task.kind == "managed_verified_research"
+    assert continued_task.input["parent_run_id"] == accepted.run_id
+    assert continued_task.input["follow_up_question"] == (
+        "Which evaluation is most diagnostic?"
+    )
+    assert "Original research objective" in continued_task.input["objective"]
 
 
 def test_missing_provider_build_is_local_not_ready_and_does_not_start_calls(

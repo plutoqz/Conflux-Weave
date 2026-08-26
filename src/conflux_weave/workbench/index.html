@@ -4,9 +4,10 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light">
+    <link rel="icon" href="data:,">
     <title>Conflux Weave</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=v0.3-s0">
-    <script type="module" src="/assets/app.js?v=v0.3-s0"></script>
+    <link rel="stylesheet" href="/assets/styles.css?v=v0.3-s15b">
+    <script type="module" src="/assets/app.js?v=v0.3-s15b"></script>
   </head>
   <body>
     <header class="topbar">
@@ -57,11 +58,20 @@
             </div>
             <div class="run-actions">
               <span id="run-state" class="state-badge"></span>
+              <button id="refresh-run" class="icon-button compact-icon" type="button" title="刷新 Run" aria-label="刷新 Run">&#8635;</button>
               <button id="cancel-run" class="danger-button" type="button" hidden>取消</button>
+              <button id="follow-up-run" class="quiet-button" type="button" hidden>继续研究</button>
+              <button id="rerun-run" class="primary-button" type="button" hidden>重新研究</button>
               <button id="retry-run" class="primary-button" type="button" hidden>重新执行</button>
               <button id="fail-run" class="quiet-button" type="button" hidden>标记失败</button>
             </div>
           </header>
+
+          <div class="research-context" aria-label="研究范围">
+            <div><span>执行模式</span><strong id="run-mode">-</strong></div>
+            <div><span>语料范围</span><strong id="corpus-scope">-</strong></div>
+            <div><span>证据状态</span><strong id="confidence-value">待生成</strong></div>
+          </div>
 
           <div class="summary-strip" aria-label="运行摘要">
             <section>
@@ -78,6 +88,11 @@
               <span>检索轮次</span>
               <strong id="retrieval-value">0 / 0</strong>
               <small id="tool-value"></small>
+            </section>
+            <section>
+              <span>费用边界</span>
+              <strong id="cost-value">未提供</strong>
+              <small id="cost-state">未启用金额强制</small>
             </section>
           </div>
 
@@ -140,8 +155,16 @@
           <legend class="field-label">任务类型</legend>
           <div class="mode-switch">
             <label>
-              <input type="radio" name="task_mode" value="research" checked>
-              <span>论文研究</span>
+              <input type="radio" name="task_mode" value="discovery">
+              <span>论文获取</span>
+            </label>
+            <label>
+              <input type="radio" name="task_mode" value="single" checked>
+              <span>单 Agent</span>
+            </label>
+            <label>
+              <input type="radio" name="task_mode" value="managed">
+              <span>Manager</span>
             </label>
             <label>
               <input type="radio" name="task_mode" value="fixture">
@@ -151,7 +174,7 @@
         </fieldset>
         <label id="query-label" class="field-label" for="query">研究问题</label>
         <textarea id="query" name="query" rows="6" maxlength="4000" required></textarea>
-        <div id="research-options" class="field-grid">
+        <div id="discovery-options" class="field-grid" hidden>
           <label>
             <span class="field-label">主题</span>
             <input id="topics" name="topics" type="text" maxlength="600">
@@ -161,10 +184,35 @@
             <input id="max-results" name="max_results" type="number" min="1" max="50" value="15" required>
           </label>
         </div>
+        <div id="managed-options" class="field-grid single-field" hidden>
+          <label>
+            <span class="field-label">子问题上限</span>
+            <input id="max-subquestions" name="max_subquestions" type="number" min="2" max="4" value="4" required>
+          </label>
+        </div>
         <p id="task-error" class="form-error" role="alert" hidden></p>
         <footer class="dialog-actions">
           <button class="quiet-button" value="cancel" formmethod="dialog" type="submit">取消</button>
           <button id="submit-task" class="primary-button" type="button">创建 Run</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="follow-up-dialog" class="task-dialog">
+      <form id="follow-up-form" method="dialog">
+        <header class="dialog-header">
+          <div>
+            <span class="eyebrow">Follow-up run</span>
+            <h2>继续研究</h2>
+          </div>
+          <button class="icon-button" value="cancel" formmethod="dialog" type="submit" aria-label="关闭" title="关闭">&times;</button>
+        </header>
+        <label class="field-label" for="follow-up-question">追问</label>
+        <textarea id="follow-up-question" rows="5" maxlength="2000" required></textarea>
+        <p id="follow-up-error" class="form-error" role="alert" hidden></p>
+        <footer class="dialog-actions">
+          <button class="quiet-button" value="cancel" formmethod="dialog" type="submit">取消</button>
+          <button id="submit-follow-up" class="primary-button" type="button">创建新 Run</button>
         </footer>
       </form>
     </dialog>

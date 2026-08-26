@@ -20,6 +20,7 @@ from conflux_weave.api_contracts import (
     ApiErrorResponse,
     ArtifactContentResponse,
     FixtureResearchTaskRequest,
+    FollowUpResearchTaskRequest,
     ResearchTaskAcceptedResponse,
     ResearchTaskRequest,
     RunDetailResponse,
@@ -250,6 +251,47 @@ def create_app(
                     task_kind=task.kind,
                     input=task.input,
                     idempotency_key=f"rerun:{run_id}:{uuid4().hex}",
+                )
+            )
+            state = query_service.get_run(result.run_id).state
+            return ResearchTaskAcceptedResponse(
+                task_id=result.task_id,
+                run_id=result.run_id,
+                created=result.created,
+                state=state,
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post(
+        "/api/v1/runs/{run_id}/follow-up",
+        response_model=ResearchTaskAcceptedResponse,
+    )
+    async def follow_up(run_id: str, request: FollowUpResearchTaskRequest):
+        try:
+            task = repository.get_task_for_run(run_id)
+            if task.kind not in {
+                "verified_paper_research",
+                "managed_verified_research",
+            }:
+                raise ValueError("follow-up requires a verified research Run")
+            original = task.input.get("objective")
+            if not isinstance(original, str) or not original.strip():
+                raise ValueError("original research objective is unavailable")
+            objective = (
+                f"Original research objective: {original.strip()}\n"
+                f"Follow-up question: {request.question}"
+            )
+            result = orchestrator.submit(
+                TaskSubmission(
+                    task_kind=task.kind,
+                    input={
+                        "objective": objective,
+                        "max_subquestions": task.input.get("max_subquestions", 4),
+                        "parent_run_id": run_id,
+                        "follow_up_question": request.question,
+                    },
+                    idempotency_key=f"follow-up:{run_id}:{uuid4().hex}",
                 )
             )
             state = query_service.get_run(result.run_id).state
