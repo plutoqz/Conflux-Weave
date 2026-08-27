@@ -343,3 +343,13 @@ and temporary-directory cleanup permission warnings after successful execution. 
 S1.6 protocol disposition remains `pending_protocol_owner_sign_off` because the new
 8-Claim review is `passed_agent_assisted` with `human_sign_off: pending`. No Manager
 quality, cost or latency gain is claimed, and no sealed failed Run is authorized for replay.
+
+On 2026-08-27, the human protocol owner approved the S1.6-F worker Verifier
+referential-integrity closeout and the agent-assisted 8-Claim discovery review. The signed
+review now records `human_sign_off.status: approved` and `overall_acceptance: accepted`;
+its post-sign-off SHA-256 is
+`b4ddd345bb5174e9db873855d77a4146daeed600e377d4b29787a93fce44e3e4`.
+This approval closes S1.6 as `accepted`: the original discovery/Manager shape failures and
+the later worker Verifier reference failure are repaired and validated live on their affected
+surfaces. The approval does not establish or approve a Manager quality, cost or latency
+benefit, and it does not authorize replay or resume of any sealed failed Run.
