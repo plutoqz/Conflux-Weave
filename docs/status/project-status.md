@@ -354,8 +354,8 @@ the later worker Verifier reference failure are repaired and validated live on t
 surfaces. The approval does not establish or approve a Manager quality, cost or latency
 benefit, and it does not authorize replay or resume of any sealed failed Run.
 
-S1 Final Closure has completed its agent-assisted evidence audit against all seven completion
-criteria in the active S1 plan. The review recommends overall stage status `validated_live`:
+S1 Final Closure completed its agent-assisted evidence audit against all seven completion
+criteria in the completed S1 plan. The signed final disposition is `validated_live`:
 179 local SourceSnapshots and two newly acquired PDFs are versioned; BM25, LanceDB Dense,
 Hybrid/RRF and qwen3-rerank have traceable live evaluation; ResearchAgent, Verifier and
 Manager have citation-closed live deliveries; failed evaluations remain preserved; all three
@@ -366,10 +366,11 @@ This is a composite affected-surface closure, not a rewritten S1.6-C matrix. The
 decision remains `blocked_unknown_outcome`; later S1.6-E/F evidence closes only its discovery,
 Manager schema and worker Verifier reference failures under fresh namespaces. The machine-
 readable review is `var/acceptance/v0.3-s1/s1-final-closure-review.json`, SHA-256
-`99066b843bb2b8c0a84d8aa1a9235185ac3657c978da6d8764a1187e96aeeead`.
-It records 7/7 criteria as passed, but final S1 disposition remains
-`pending_protocol_owner_sign_off`; no stage-level approval is inferred from the earlier S1.6
-sign-off.
+`1d5cbb086a98d487ae02b350f6557df234089a62f04ec4dac2cc8a6e67534935`.
+It records 7/7 criteria as passed. On 2026-08-27, the human protocol owner approved the
+entire S1 Final Closure, so the final S1 disposition is `validated_live` and the review's
+`overall_acceptance` is `accepted`. Its post-sign-off SHA-256 is shown above. This approval
+does not rewrite the historical S1.6-C disposition or broaden the bounded capability claims.
 
 Workbench UX optimization is feasible as a bounded bridge between S1 and P2. The current
 same-origin Vanilla HTML/CSS/JavaScript surface has stable Run/API/SSE/Evidence boundaries
@@ -378,6 +379,6 @@ does not require a framework migration or Runtime change. The proposed
 `v0.3-UX0-Workbench前端体验优化-细化实施方案.md` inserts UX-0 before P2.0 and freezes
 information hierarchy, complete Run-state coverage, evidence inspection, responsive layout,
 keyboard accessibility and browser verification. It explicitly excludes API/Runtime changes,
-image extraction, OCR, image embedding and multimodal retrieval. The next gate remains human
-S1 Final Closure sign-off; after approval, the next single acceptance point is UX-0.0 baseline
-and design freeze, not visual implementation.
+image extraction, OCR, image embedding and multimodal retrieval. S1 is archived under
+`docs/plans/completed/v0.3/`; the next single acceptance point is UX-0.0 baseline and design
+freeze, not visual implementation. UX-0 execution still requires an explicit user entry instruction.
