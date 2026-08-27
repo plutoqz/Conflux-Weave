@@ -3,8 +3,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import subprocess
+import sys
 
-from scripts.run_s15_live_matrix import _required_quote_matches_objective_span
+
+sys.path.insert(0, str(Path("scripts").resolve()))
+
+from run_s15_live_matrix import _required_quote_matches_objective_span  # noqa: E402
 
 
 DATASET = Path("datasets/regression/s15-live-research-v1")
