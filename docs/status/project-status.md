@@ -217,3 +217,33 @@ The persisted matrix, SQLite state and structured mechanical review are at
 and the relevant raw response Artifact IDs. The next acceptance point is a bounded manual
 Claim/Evidence audit of the five successful deliveries, followed by an offline Manager plan
 contract repair/replay decision. It must not modify or retry any sealed S1.6-C Run.
+
+The bounded Claim/Evidence audit was completed on 2026-08-27 and is recorded in
+`var/acceptance/v0.3-s1/s16c-manual-claim-review.json`. All 19 Claims across the four
+answerable single reports (5 + 5 + 5 + 4) were checked against the exact retrieved page-level
+quotes in their sealed Evidence Artifacts: every Claim directly restates text present in the
+sealed chunk, every numeric value is supported verbatim or recomputes correctly, zero Claims
+lacked direct support, and the `no_answer` Delivery fabricated none. Corpus scope held on
+all five cases: each SourceSnapshot resolves to a document listed in that case's frozen
+corpus import manifest (`2606.10209`, `2606.08151` and `2606.13177` for local-only,
+`2608.24188v1` for new-only, and exactly the local-plus-new pair for mixed), and boundary
+limitations were retained everywhere. The audit is agent-assisted output; final S1.6-C
+sign-off remains reserved for the human protocol owner.
+
+On 2026-08-27, the human protocol owner approved the bounded Claim/Evidence review. This
+sign-off confirms the 19/19 direct-support result, zero fabricated no-answer Claims and the
+recorded corpus-scope checks. It does not approve S1.6-C as a whole and does not authorize
+replay or replacement of any sealed Run. The signed review remains in the ignored acceptance
+evidence directory; its post-sign-off SHA-256 is
+`684106853b53460f8377de21ed097197a2810121ad78fb8fbf9f677ce171ff3c`.
+
+S1.6-C therefore remains `blocked_unknown_outcome`, not accepted. Passing the Claim audit
+does not remedy the discovery workflow contract failure
+(`paper_claim_verification_invalid`) or either Manager schema failure
+(`text`/`subquestion_id`/`mapped_coverage_ids` versus the parser-required
+`objective_quote`/`question`/`coverage_ids`), so Manager token/latency comparison and
+coverage acceptance stay unmeasurable in this matrix. The next step is unchanged: perform
+the offline Manager plan contract repair with fixture validation (covering both observed
+plan shapes and the discovery verifier `assessments` root), then decide whether to create
+new immutable Runs under a fresh acceptance protocol. Sealed S1.6-C Runs, including the
+failed discovery and both frozen Manager Runs, must not be retried, replayed or resumed.
