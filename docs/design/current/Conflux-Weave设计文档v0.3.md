@@ -579,6 +579,14 @@ Trace 是质量支撑面，不拥有业务状态。至少记录：
 
 交付自然语言论文获取、文档解析、BM25/Dense Hybrid、Citation 验证、深度研究基本闭环和 qwen3.7flash 成本记录。
 
+### UX-0：Workbench 前端体验稳定化
+
+在 P1/S1 完成后、P2 多模态能力进入前，对现有 Research Workbench 做一次有界的信息架构、
+状态矩阵、证据阅读、响应式与可访问性优化。该阶段复用现有 FastAPI 同源 Vanilla
+HTML/CSS/JavaScript，不改变 Runtime、API、Artifact/Evidence 或 Agent workflow，也不提前
+实现图片字段。UX-0 的目标是让论文发现、单 Agent、Manager、follow-up、恢复和证据复核
+形成稳定的日常工作界面，并为 P2 图片 Evidence 检查器预留明确但无数据的布局边界。
+
 ### P2：文档分析、图片资产与多模态 RAG
 
 交付 PDF/Markdown/HTML/DOCX 输入、Markdown/HTML 笔记、版本、patch、局部修订和 Artifact 预览；增加 PDF 页面图片资产抽取、页码/区域定位、图片哈希与父 Chunk lineage。随后以可替换图像 embedding 和 LanceDB modality/filter 字段支持文本->图片、图片->文本和图文混合检索。图片证据必须与 SourceSnapshot、页码/区域和 Artifact 绑定；OCR、复杂公式/表格和扫描 PDF 作为独立失败类别统计，不以自动生成描述替代原始图片证据。
