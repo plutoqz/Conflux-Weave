@@ -289,3 +289,57 @@ namespace and SQLite database, pins the existing local/mixed corpus hashes, requ
 production Prompt/parser schema canary before Runs, and explicitly excludes repeated
 single-Agent/no-answer/UI/retrieval acceptance. Focused protocol and contract tests passed
 (`34 passed`). No S1.6-E Provider call or Run has occurred at this checkpoint.
+
+S1.6-E executed on clean revision `1f5a601`. Its production-schema canary passed
+with no automatic Provider retry, and the new discovery record closed the original
+`assessments`-root failure (`partial`, 8 Claims, 8 Evidence, 8 Citations, citation
+closure 1.0). The local Manager Run `run-31124df7c520491bb38c89cb983b94f4`
+succeeded with a complete Delivery and all four required coverage phrases marked
+`covered`. This proves the original discovery and Manager plan shape repairs on live
+paths; it does not establish a Manager quality, cost or latency benefit.
+
+The sealed S1.6-E mixed Manager Run `run-18d1c0f436df443095e84a85c488e762`
+exposed a distinct referential-integrity failure after its JSON shape had parsed. The
+worker Verifier cited supplied `evidence-0002` and `evidence-0007` but also invented
+`evidence-0014`, although the request contained only `evidence-0001` through
+`evidence-0008`. The Run correctly stopped as `research_batch_outcome_unknown`; it
+was not resumed or retried. Its request, response and technical-detail Artifact IDs
+are frozen in `tests/fixtures/s16e_referential_failure.json` (SHA-256
+`917607e82f61e9c19c272b0864a2457570eca661c14e22d74920ffb1895ee282`).
+
+S1.6-F repairs that second-layer contract at the untrusted Provider boundary. Verifier
+outputs now require the exact root, fields, enums, known Claim IDs and exactly one
+assessment per Claim. When an assessment contains both valid Evidence IDs and extra
+unknown IDs, only the known-set intersection is admitted and the discarded IDs are
+recorded in `normalization_warnings`; an empty intersection still fails closed. Raw
+Provider responses remain immutable. The implementation plan now requires both schema
+shape and referential-integrity canaries and documents this narrow, auditable
+normalization rule rather than relying on retries, aliases or inferred replacements.
+
+The focused `s16-worker-verifier-closeout-live-v1` protocol used new namespace `s16f`
+and executed only the affected mixed Manager case; the discovery row is a sealed
+reference and the already successful local Manager was not repeated. Its canary passed
+on clean revision `1317d9b` with three live contract calls and zero normalization
+warnings. The new Run `run-fc547714b12c4607b1da910f82c1f0ad` succeeded in 30.542
+seconds with a complete Delivery, 10 Claims, 12 Evidence, 17 Citations, citation closure
+1.0, all four required coverage phrases `covered`, and no errors. Both worker assessment
+Artifacts contain an empty `normalization_warnings` list.
+
+Agent-assisted review checked all eight sealed discovery Claims against their exact Atom
+entries and found 8/8 directly supported. The review records the CaSKG scope wording and
+clarifies that PolyMemDB `polyglot` means multiple data models/storage paradigms, not
+natural-language multilingual storage. Evidence is at
+`var/acceptance/v0.3-s1/s16f-schema-canary.json`,
+`var/acceptance/v0.3-s1/s16f-closeout-summary.json` and
+`var/acceptance/v0.3-s1/s16f-closeout-review.json`, with SHA-256 values
+`f8d3df6de354bf455788c2e13db68b88453ae8d06f98d260ec0ea32e4696c472`,
+`17949e555f5573ca4c75bee5d5ee14288c9f0d27a153e0bacc0d57e8612558b8`
+and `d19f47dd0b2c4aa8c106bb1acee6287f149468c90c4997f1738db5c391906efc`.
+
+S1.6 repair implementation is complete and validated live on the affected surface.
+Focused tests passed (`22 passed`), full regression passed (`336 passed in 182.66s`),
+and fresh sdist/wheel builds succeeded. Pytest emitted only the existing Windows cache
+and temporary-directory cleanup permission warnings after successful execution. Final
+S1.6 protocol disposition remains `pending_protocol_owner_sign_off` because the new
+8-Claim review is `passed_agent_assisted` with `human_sign_off: pending`. No Manager
+quality, cost or latency gain is claimed, and no sealed failed Run is authorized for replay.
