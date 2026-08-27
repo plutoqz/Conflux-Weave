@@ -22,6 +22,18 @@ from conflux_weave.research_agents import ResearchExecution, ResearchPlan, Verif
 from conflux_weave.runtime import LocalArtifactStore
 
 
+MANAGER_PLAN_SCHEMA = (
+    '{"coverage_requirements":[{"coverage_id":"coverage-1",'
+    '"objective_quote":"exact span copied from objective"}],'
+    '"subquestions":[{"question":"evidence-seeking question",'
+    '"coverage_ids":["coverage-1"]}]}'
+)
+MANAGER_COVERAGE_SCHEMA = (
+    '{"assessments":[{"coverage_id":"coverage-1","status":"covered|missing",'
+    '"claim_ids":["verified-claim-id"],"rationale":"direct coverage rationale"}]}'
+)
+
+
 @dataclass(frozen=True, slots=True)
 class ManagedResearchExecution:
     plan: ResearchPlan
@@ -62,7 +74,7 @@ class ManagedVerifiedResearchWorkflow:
         self.store, self.worker, self.manager_chat = store, worker, manager_chat
         self.manager_profile = AgentProfile(
             "research_manager",
-            "v2",
+            "v3",
             "Plan and audit bounded objective coverage without generating factual conclusions",
             ("managed_verified_research",),
             (),
@@ -76,7 +88,12 @@ class ManagedVerifiedResearchWorkflow:
             raise ValueError("max_subquestions must be between 2 and 4")
         plan_completion = self.manager_chat.complete(
             system_prompt=(
-                "You are a research Manager. Return JSON with coverage_requirements and subquestions only. "
+                "You are a research Manager. Return exactly this JSON object shape: "
+                f"{MANAGER_PLAN_SCHEMA} "
+                "The root must contain only coverage_requirements and subquestions. "
+                "Each coverage requirement must contain only coverage_id and objective_quote. "
+                "Each subquestion must contain only question and coverage_ids. "
+                "Do not use text, subquestion_id, or mapped_coverage_ids as field names. "
                 "Each coverage requirement must quote an exact, non-empty span from the objective. "
                 "Create 2 to the supplied maximum distinct evidence-seeking subquestions and map every "
                 "coverage_id to at least one subquestion. "
@@ -285,8 +302,11 @@ class ManagedVerifiedResearchWorkflow:
     def _assess_coverage(self, objective, requirements, claims):
         completion = self.manager_chat.complete(
             system_prompt=(
-                "Audit objective coverage without adding factual conclusions. Return JSON with "
-                "assessments only. For every coverage_id, use status covered only when one or more "
+                "Audit objective coverage without adding factual conclusions. Return exactly this "
+                f"JSON object shape: {MANAGER_COVERAGE_SCHEMA} "
+                "The root must contain only assessments. Each assessment must contain only "
+                "coverage_id, status, claim_ids, and rationale. For every coverage_id, use status "
+                "covered only when one or more "
                 "supplied verified claim_ids directly address the quoted objective requirement; "
                 "otherwise use missing and an empty claim_ids list."
             ),

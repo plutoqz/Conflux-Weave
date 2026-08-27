@@ -1,0 +1,68 @@
+{
+  "schema_version": "conflux-weave.s16c-contract-failure-fixtures.v1",
+  "source": "Sealed S1.6-C Provider response Artifacts; content copied without semantic edits.",
+  "manager_plan_responses": [
+    {
+      "case_id": "s16c-local-cross-manager",
+      "objective": "Compare context pruning, automated summarization, and external memory approaches for reducing context pressure in long-horizon tool-using LLM agents, including their reported evaluation outcomes.",
+      "observed": {
+        "coverage_requirements": [
+          {"coverage_id": "CR1", "text": "Compare context pruning, automated summarization, and external memory approaches for reducing context pressure in long-horizon tool-using LLM agents"},
+          {"coverage_id": "CR2", "text": "including their reported evaluation outcomes"}
+        ],
+        "subquestions": [
+          {"subquestion_id": "SQ1", "text": "How do context pruning, automated summarization, and external memory approaches differ in their mechanisms for reducing context pressure in long-horizon tool-using LLM agents?", "mapped_coverage_ids": ["CR1"]},
+          {"subquestion_id": "SQ2", "text": "What are the reported evaluation outcomes for context pruning, automated summarization, and external memory approaches when applied to long-horizon tool-using LLM agents?", "mapped_coverage_ids": ["CR2"]}
+        ]
+      },
+      "canonical": {
+        "coverage_requirements": [
+          {"coverage_id": "CR1", "objective_quote": "context pruning, automated summarization, and external memory approaches"},
+          {"coverage_id": "CR2", "objective_quote": "reported evaluation outcomes"}
+        ],
+        "subquestions": [
+          {"question": "How do the three approaches reduce context pressure?", "coverage_ids": ["CR1"]},
+          {"question": "What evaluation outcomes are reported for the approaches?", "coverage_ids": ["CR2"]}
+        ]
+      }
+    },
+    {
+      "case_id": "s16c-mixed-cross-manager",
+      "objective": "Compare intent-conditioned compression in Paritok-4B with context pruning and summarization in Less Context, Better Agents, including mechanisms and reported evaluation results.",
+      "observed": {
+        "coverage_requirements": [
+          {"coverage_id": "CR1", "text": "intent-conditioned compression in Paritok-4B"},
+          {"coverage_id": "CR2", "text": "context pruning and summarization in Less Context, Better Agents"},
+          {"coverage_id": "CR3", "text": "mechanisms and reported evaluation results"}
+        ],
+        "subquestions": [
+          {"subquestion_id": "SQ1", "text": "What are the specific mechanisms of intent-conditioned compression used in Paritok-4B compared to the context pruning and summarization approaches employed in Less Context, Better Agents?", "mapped_coverage_ids": ["CR1", "CR2", "CR3"]},
+          {"subquestion_id": "SQ2", "text": "What reported evaluation results are provided for intent-conditioned compression in Paritok-4B versus context pruning and summarization in Less Context, Better Agents?", "mapped_coverage_ids": ["CR1", "CR2", "CR3"]}
+        ]
+      },
+      "canonical": {
+        "coverage_requirements": [
+          {"coverage_id": "CR1", "objective_quote": "intent-conditioned compression in Paritok-4B"},
+          {"coverage_id": "CR2", "objective_quote": "context pruning and summarization in Less Context, Better Agents"},
+          {"coverage_id": "CR3", "objective_quote": "mechanisms and reported evaluation results"}
+        ],
+        "subquestions": [
+          {"question": "How do the mechanisms compare?", "coverage_ids": ["CR1", "CR2", "CR3"]},
+          {"question": "What evaluation results are reported?", "coverage_ids": ["CR1", "CR2", "CR3"]}
+        ]
+      }
+    }
+  ],
+  "discovery_verifier_response": {
+    "claims": [
+      {"claim_id": "paper-claim-0001", "relation": "supports", "verdict": "accepted"},
+      {"claim_id": "paper-claim-0002", "relation": "supports", "verdict": "accepted"},
+      {"claim_id": "paper-claim-0003", "relation": "supports", "verdict": "accepted"},
+      {"claim_id": "paper-claim-0004", "relation": "supports", "verdict": "accepted"},
+      {"claim_id": "paper-claim-0005", "relation": "supports", "verdict": "accepted"},
+      {"claim_id": "paper-claim-0006", "relation": "supports", "verdict": "accepted"},
+      {"claim_id": "paper-claim-0007", "relation": "supports", "verdict": "accepted"},
+      {"claim_id": "paper-claim-0008", "relation": "supports", "verdict": "accepted"}
+    ]
+  }
+}

@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -47,6 +48,7 @@ ATOM_FIXTURE = b"""<?xml version="1.0" encoding="UTF-8"?>
   </entry>
 </feed>
 """
+FAILURE_FIXTURE = Path("tests/fixtures/s16c_contract_failures.json")
 
 
 class ArxivTransport:
@@ -347,6 +349,36 @@ def test_paper_workflow_fails_closed_when_verifier_omits_a_claim(tmp_path):
     assert failure["verification_response_artifact_ref"] == (
         captured.value.response_artifact_ref
     )
+
+
+def test_paper_workflow_replays_s16c_wrong_verifier_root_and_freezes_prompt_schema(
+    tmp_path,
+):
+    fixture = json.loads(FAILURE_FIXTURE.read_text(encoding="utf-8"))
+    candidate = {
+        "claims": [
+            {
+                "text": "Context Management studies agent context.",
+                "evidence_ids": ["arxiv-paper-01"],
+            }
+        ]
+    }
+    workflow, _, _, provider_transport = build_workflow(
+        tmp_path, candidate, fixture["discovery_verifier_response"]
+    )
+
+    with pytest.raises(
+        LiveResearchValidationError,
+        match="verification output must contain only assessments",
+    ) as captured:
+        workflow.execute("papers", search_query="agent context", max_results=2)
+
+    assert captured.value.code == "paper_claim_verification_invalid"
+    prompt = provider_transport.requests[1]["messages"][0]["content"]
+    assert '{"assessments"' in prompt
+    assert '"evidence_ids"' in prompt
+    assert '"rationale"' in prompt
+    assert "Do not return claims" in prompt
 
 
 def test_paper_workflow_rejects_assessment_evidence_rebinding(tmp_path):

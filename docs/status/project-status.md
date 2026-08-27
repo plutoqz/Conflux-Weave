@@ -247,3 +247,31 @@ the offline Manager plan contract repair with fixture validation (covering both 
 plan shapes and the discovery verifier `assessments` root), then decide whether to create
 new immutable Runs under a fresh acceptance protocol. Sealed S1.6-C Runs, including the
 failed discovery and both frozen Manager Runs, must not be retried, replayed or resumed.
+
+S1.6-D is `implemented_and_validated_offline`. The repair keeps both strict parsers and all
+delivery/state semantics unchanged, but makes their Provider contracts unambiguous. Manager
+plan prompts now enumerate the exact `coverage_requirements[].coverage_id/objective_quote`
+and `subquestions[].question/coverage_ids` object shape and explicitly prohibit the three
+observed aliases; the Manager profile is version `v3`. Its coverage-audit prompt likewise
+enumerates the exact assessment object. The discovery verifier prompt now requires an
+`assessments` root with `claim_id`, `evidence_ids`, `relation`, `verdict` and `rationale`,
+explicitly forbids a `claims` root, and advances to prompt version
+`arxiv-relevance-claims-zh-v5-explicit-verification-schema`.
+
+The three sealed failure response shapes were copied without semantic edits into
+`tests/fixtures/s16c_contract_failures.json` (SHA-256
+`e30a5cc2c8a28f51e1615eb86fb716385b15330c93e76917ddb35e2c598f9fbd`). Offline replay
+proves both observed Manager alias shapes and the discovery `claims` root still fail closed;
+canonical Manager responses for both frozen objectives parse successfully, and tests inspect
+the actual outgoing prompts for every required field. Focused Manager/discovery tests passed
+(`29 passed`), and the full regression passed (`330 passed in 142.15s`). Pytest emitted only
+the existing Windows cache and temporary-directory cleanup permission warnings after its
+successful exit.
+
+Direct wheel build succeeded. Root-directory sdist selection stalled while scanning the
+large ignored runtime/evidence tree, so that process was terminated without deleting any
+evidence; an equivalent clean source-only export containing all current changes then built
+both sdist and wheel successfully. This is offline implementation and replay evidence only:
+no Provider was called, no sealed S1.6-C Run changed, and S1.6-C remains
+`blocked_unknown_outcome`. The next acceptance point is to freeze a fresh post-repair live
+protocol and idempotency namespace before creating any new immutable discovery/Manager Runs.

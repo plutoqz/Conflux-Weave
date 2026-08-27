@@ -59,7 +59,7 @@ ATOM = "{http://www.w3.org/2005/Atom}"
 ARXIV = "{http://arxiv.org/schemas/atom}"
 WORKFLOW_VERSION = "fixed-arxiv-paper-discovery-live-v2"
 SCHEMA_VERSION = "conflux-weave.arxiv-paper-discovery-live.v2"
-PROMPT_VERSION = "arxiv-relevance-claims-zh-v4-verified"
+PROMPT_VERSION = "arxiv-relevance-claims-zh-v5-explicit-verification-schema"
 MAX_OUTPUT_TOKENS = 2_048
 MAX_SUMMARY_CHARS = 1_600
 MAX_SELECTED = 8
@@ -745,7 +745,13 @@ class FixedPaperDiscoveryWorkflow:
             raise
         verification = self.chat_adapter.complete(
             system_prompt=(
-                "Act as an independent arXiv metadata Claim verifier. Return JSON with assessments only. "
+                "Act as an independent arXiv metadata Claim verifier. Return exactly this JSON "
+                "object shape: {\"assessments\":[{\"claim_id\":\"paper-claim-0001\","
+                "\"evidence_ids\":[\"arxiv-paper-01\"],\"relation\":"
+                "\"supports|contradicts|context|insufficient\",\"verdict\":"
+                "\"accepted|rejected|uncertain\",\"rationale\":\"direct support rationale\"}]}. "
+                "The root must contain only assessments, and every assessment must contain only "
+                "claim_id, evidence_ids, relation, verdict, and rationale. Do not return claims. "
                 "Assess every supplied claim against only the quoted title and abstract Evidence. "
                 "Use relation supports|contradicts|context|insufficient and verdict accepted|rejected|uncertain. "
                 "Accept only direct support; reject stronger production, causal, evaluation, publication-status, "

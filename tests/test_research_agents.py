@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 import pytest
 
 from conflux_weave.core import DeliveryDisposition
@@ -12,9 +13,13 @@ from conflux_weave.retrieval import RetrievalDocument
 from conflux_weave.runtime import LocalArtifactStore
 
 
+FAILURE_FIXTURE = Path("tests/fixtures/s16c_contract_failures.json")
+
+
 class SequenceTransport:
-    def __init__(self, payloads): self.payloads = iter(payloads)
+    def __init__(self, payloads): self.payloads = iter(payloads); self.requests = []
     def post(self, *args, **kwargs):
+        self.requests.append(json.loads(kwargs["body"]))
         payload = next(self.payloads); return ProviderHttpResponse(200, json.dumps(payload).encode(), {"Content-Type": "application/json"})
 
 
@@ -233,6 +238,48 @@ def test_manager_plan_requires_grounded_and_fully_assigned_coverage():
         ManagedVerifiedResearchWorkflow._parse_plan(
             "Compare A and B", content, max_subquestions=2
         )
+
+
+@pytest.mark.parametrize("fixture_index", [0, 1])
+def test_manager_plan_replays_observed_s16c_schema_failure(fixture_index):
+    fixture = json.loads(FAILURE_FIXTURE.read_text(encoding="utf-8"))[
+        "manager_plan_responses"
+    ][fixture_index]
+
+    with pytest.raises(ValueError, match="coverage requirement has an invalid schema"):
+        ManagedVerifiedResearchWorkflow._parse_plan(
+            fixture["objective"], json.dumps(fixture["observed"]), max_subquestions=2
+        )
+
+    requirements, subquestions = ManagedVerifiedResearchWorkflow._parse_plan(
+        fixture["objective"], json.dumps(fixture["canonical"]), max_subquestions=2
+    )
+    assert requirements
+    assert len(subquestions) == 2
+
+
+def test_manager_plan_prompt_enumerates_exact_parser_schema(tmp_path):
+    fixture = json.loads(FAILURE_FIXTURE.read_text(encoding="utf-8"))[
+        "manager_plan_responses"
+    ][0]
+    store = LocalArtifactStore(tmp_path / "artifacts")
+    config = ProviderConfig("https://provider.example/v1", "secret", "chat")
+    transport = SequenceTransport(
+        [chat_response(fixture["observed"], "observed-invalid-plan")]
+    )
+    chat = OpenAICompatibleChatAdapter(store, config, transport=transport)
+    worker = type("UnusedWorker", (), {"execute": lambda self, question: None})()
+
+    with pytest.raises(ValueError, match="coverage requirement has an invalid schema"):
+        ManagedVerifiedResearchWorkflow(store, worker, chat).execute(
+            fixture["objective"], max_subquestions=2
+        )
+
+    prompt = transport.requests[0]["messages"][0]["content"]
+    assert "objective_quote" in prompt
+    assert '"question"' in prompt
+    assert '"coverage_ids"' in prompt
+    assert "Do not use text, subquestion_id, or mapped_coverage_ids" in prompt
 
 
 def test_manager_marks_missing_objective_coverage_partial(tmp_path):
