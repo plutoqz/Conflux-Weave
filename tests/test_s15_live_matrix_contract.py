@@ -14,6 +14,9 @@ from run_s15_live_matrix import _required_quote_matches_objective_span  # noqa: 
 DATASET = Path("datasets/regression/s15-live-research-v1")
 S16_DATASET = Path("datasets/regression/s16-post-remediation-live-v1")
 S16_CLOSEOUT = Path("datasets/regression/s16-contract-closeout-live-v1")
+S16_WORKER_VERIFIER_CLOSEOUT = Path(
+    "datasets/regression/s16-worker-verifier-closeout-live-v1"
+)
 
 
 def test_s15_live_matrix_is_frozen_and_balanced() -> None:
@@ -124,6 +127,7 @@ def test_s16_closeout_is_limited_to_the_three_failed_contracts() -> None:
     canary = Path("scripts/run_s16_schema_canary.py").read_text(encoding="utf-8")
     assert "MANAGER_PLAN_SYSTEM_PROMPT" in canary
     assert "DISCOVERY_VERIFICATION_SYSTEM_PROMPT" in canary
+    assert "_worker_verifier_canary" in canary
 
 
 def test_required_coverage_quote_matches_a_longer_objective_span() -> None:
@@ -142,3 +146,28 @@ def test_required_coverage_quote_does_not_match_unrelated_span() -> None:
         "external memory",
         "context pruning and automated summarization",
     )
+
+
+def test_s16_worker_verifier_closeout_reruns_only_the_affected_manager() -> None:
+    manifest = json.loads(
+        (S16_WORKER_VERIFIER_CLOSEOUT / "manifest.json").read_text(encoding="utf-8")
+    )
+    cases = [
+        json.loads(line)
+        for line in (S16_WORKER_VERIFIER_CLOSEOUT / "cases.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+
+    assert manifest["case_count"] == len(cases) == 2
+    assert manifest["affected_surface_only"] is True
+    assert cases[0]["mode"] == "discovery"
+    assert cases[1]["case_id"] == "s16f-mixed-manager-verifier"
+    assert cases[1]["mode"] == "managed"
+    assert "Repeat the successful local Manager closeout" in manifest["non_goals"]
+    wrapper = Path("scripts/run_s16_worker_verifier_closeout.py").read_text(
+        encoding="utf-8"
+    )
+    assert "s16f-closeout.sqlite3" in wrapper
+    assert '"s16f"' in wrapper

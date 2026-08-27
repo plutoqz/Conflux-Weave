@@ -56,6 +56,89 @@ class ResearchExecution:
     unmet_criteria: tuple[str, ...] = ()
 
 
+def _parse_verifier_assessments(
+    content: str,
+    claims: tuple[Claim, ...],
+    evidence: tuple[EvidenceRef, ...],
+    response_artifact_id: str,
+    store: LocalArtifactStore,
+    producer_step_id: str,
+):
+    payload = json.loads(content)
+    if not isinstance(payload, dict) or set(payload) != {"assessments"}:
+        raise ValueError("Verifier output must contain only assessments")
+    raw_assessments = payload["assessments"]
+    if not isinstance(raw_assessments, list):
+        raise ValueError("Verifier assessments must be a list")
+
+    known_claims = {item.claim_id for item in claims}
+    known_evidence = {item.evidence_id for item in evidence}
+    assessments = []
+    normalization_warnings = []
+    required_fields = {
+        "claim_id",
+        "evidence_ids",
+        "relation",
+        "verdict",
+        "rationale",
+    }
+    for item in raw_assessments:
+        if not isinstance(item, dict) or set(item) != required_fields:
+            raise ValueError("Verifier assessment has an invalid schema")
+        claim_id = item["claim_id"]
+        if claim_id not in known_claims:
+            raise ValueError("Verifier returned an unknown Claim ID")
+        raw_evidence_ids = item["evidence_ids"]
+        if not isinstance(raw_evidence_ids, list) or not raw_evidence_ids:
+            raise ValueError("Verifier assessment must cite Evidence")
+        if any(not isinstance(value, str) for value in raw_evidence_ids):
+            raise ValueError("Verifier Evidence IDs must be strings")
+        evidence_ids = tuple(
+            dict.fromkeys(
+                value for value in raw_evidence_ids if value in known_evidence
+            )
+        )
+        if not evidence_ids:
+            raise ValueError("Verifier assessment has no known Evidence ID")
+        unknown_evidence_ids = tuple(
+            dict.fromkeys(
+                value for value in raw_evidence_ids if value not in known_evidence
+            )
+        )
+        if unknown_evidence_ids:
+            normalization_warnings.append(
+                {
+                    "claim_id": claim_id,
+                    "ignored_unknown_evidence_ids": list(unknown_evidence_ids),
+                }
+            )
+        rationale = item["rationale"]
+        if not isinstance(rationale, str) or not rationale.strip():
+            raise ValueError("Verifier assessment must include a rationale")
+        assessments.append(
+            ClaimAssessment(
+                claim_id,
+                evidence_ids,
+                EvidenceRelation(item["relation"]),
+                AssessmentVerdict(item["verdict"]),
+                rationale.strip(),
+                response_artifact_id,
+            )
+        )
+    assessed_claims = [item.claim_id for item in assessments]
+    if len(assessed_claims) != len(known_claims) or set(assessed_claims) != known_claims:
+        raise ValueError("Verifier must assess every Claim exactly once")
+    assessment_ref = store.put_json(
+        {
+            "assessments": [asdict(item) for item in assessments],
+            "normalization_warnings": normalization_warnings,
+        },
+        producer_step_id=producer_step_id,
+        schema_version="conflux-weave.claim-assessments.v1",
+    )
+    return tuple(assessments), assessment_ref
+
+
 class VerifiedResearchWorkflow:
     def __init__(self, store: LocalArtifactStore, retrieval: HybridRetrievalPipeline, chat: OpenAICompatibleChatAdapter, *, corpus_scope: str = "configured paper corpus") -> None:
         if not corpus_scope.strip():
@@ -189,13 +272,15 @@ class VerifiedResearchWorkflow:
 
     def _verify(self, claims: tuple[Claim, ...], evidence: tuple[EvidenceRef, ...], *, round_number: int):
         prompt={"claims":[asdict(item) for item in claims],"evidence":[asdict(item) for item in evidence],"instruction":"Return assessments for every claim with claim_id,evidence_ids,relation supports|contradicts|context|insufficient,verdict accepted|rejected|uncertain,rationale."}
-        completion=self.chat.complete(system_prompt="Act as an independent evidence verifier. Accept only claims directly supported by the quoted evidence. Return JSON {assessments:[...]}.",user_prompt=json.dumps(prompt,ensure_ascii=False),max_output_tokens=1800,temperature=0,json_object=True,enable_thinking=False,producer_step_id=f"s1-verifier-{round_number}")
-        payload=json.loads(completion.content); known_claims={item.claim_id for item in claims}; known_evidence={item.evidence_id for item in evidence}; assessments=[]
-        for item in payload.get("assessments",[]):
-            if item.get("claim_id") not in known_claims or not item.get("evidence_ids") or any(value not in known_evidence for value in item["evidence_ids"]): raise ValueError("Verifier returned unknown Claim/Evidence ID")
-            assessments.append(ClaimAssessment(item["claim_id"],tuple(item["evidence_ids"]),EvidenceRelation(item["relation"]),AssessmentVerdict(item["verdict"]),str(item["rationale"]),completion.response_artifact.artifact_id))
-        if {item.claim_id for item in assessments} != known_claims: raise ValueError("Verifier must assess every Claim exactly once")
-        assessment_ref=self.store.put_json({"assessments":[asdict(item) for item in assessments]},producer_step_id=f"s1-verifier-{round_number}",schema_version="conflux-weave.claim-assessments.v1")
+        completion=self.chat.complete(system_prompt="Act as an independent evidence verifier. Accept only claims directly supported by the quoted evidence. Return JSON {assessments:[...]}. Every evidence_id must exactly match an evidence_id supplied by the user.",user_prompt=json.dumps(prompt,ensure_ascii=False),max_output_tokens=1800,temperature=0,json_object=True,enable_thinking=False,producer_step_id=f"s1-verifier-{round_number}")
+        assessments, assessment_ref = _parse_verifier_assessments(
+            completion.content,
+            claims,
+            evidence,
+            completion.response_artifact.artifact_id,
+            self.store,
+            f"s1-verifier-{round_number}",
+        )
         return tuple(assessments), [completion.request_artifact.artifact_id,completion.response_artifact.artifact_id,assessment_ref.artifact_id]
 
     @staticmethod

@@ -18,6 +18,7 @@ from conflux_weave.paper_discovery import (
     _parse_claim_assessments,
 )
 from conflux_weave.provider import OpenAICompatibleChatAdapter, ProviderConfig
+from conflux_weave.research_agents import VerifiedResearchWorkflow
 from conflux_weave.runtime import LocalArtifactStore
 
 
@@ -82,16 +83,17 @@ def main() -> None:
             }
         )
 
+    results.append(_worker_verifier_canary(chat, store))
     results.append(_discovery_canary(chat, store))
     payload = {
-        "schema_version": "conflux-weave.s16e-schema-canary.v1",
+        "schema_version": "conflux-weave.s16-schema-canary.v2",
         "created_at": _now(),
         "source_revision": revision,
         "source_dirty_at_start": dirty,
         "provider_automatic_retry": False,
         "status": "validated_live",
         "checks": results,
-        "evidence_boundary": "Three schema calls using the production prompts and parsers; no retrieval, research Delivery, or quality claim.",
+        "evidence_boundary": "Four schema and referential-integrity calls using the production prompts and parsers; no retrieval, research Delivery, or quality claim.",
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -155,8 +157,46 @@ def _discovery_canary(chat, store):
     }
 
 
+def _worker_verifier_canary(chat, store):
+    claim = Claim(
+        "claim-0001",
+        "The method reduces context pressure.",
+        "research_finding",
+        "primary",
+        "s16-worker-verifier-canary",
+    )
+    evidence = EvidenceRef(
+        "evidence-0001",
+        "s16-worker-verifier-canary-source",
+        {"type": "pdf_page", "page": 1},
+        "The method reduces context pressure.",
+        "s16-worker-verifier-canary",
+    )
+    started = perf_counter()
+    workflow = VerifiedResearchWorkflow(store, None, chat)
+    assessments, artifact_refs = workflow._verify(
+        (claim,), (evidence,), round_number=0
+    )
+    assessment_payload = _read_artifact(store, artifact_refs[2])
+    return {
+        "case_id": "s16-worker-verifier-canary",
+        "status": "validated_live",
+        "request_artifact": artifact_refs[0],
+        "response_artifact": artifact_refs[1],
+        "assessment_artifact": artifact_refs[2],
+        "elapsed_ms": round((perf_counter() - started) * 1000, 1),
+        "assessments": [asdict(item) for item in assessments],
+        "normalization_warnings": assessment_payload["normalization_warnings"],
+    }
+
+
 def _read_jsonl(path):
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def _read_artifact(store, artifact_id):
+    digest = artifact_id.removeprefix("artifact-sha256-")
+    return json.loads(store.path_for_digest(digest).read_text(encoding="utf-8"))
 
 
 def _revision():

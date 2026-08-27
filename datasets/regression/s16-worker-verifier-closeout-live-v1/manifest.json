@@ -1,0 +1,39 @@
+{
+  "schema_version": "conflux-weave.s16-worker-verifier-closeout-live-dataset.v1",
+  "dataset_id": "s16-worker-verifier-closeout-live-v1",
+  "created_at": "2026-08-27",
+  "case_count": 2,
+  "live_execution_requires_explicit_flag": true,
+  "affected_surface_only": true,
+  "source_failure_run": "run-18d1c0f436df443095e84a85c488e762",
+  "provider_models": {
+    "chat": "qwen3.7-flash",
+    "embedding": "text-embedding-v4",
+    "reranker": "qwen3-rerank"
+  },
+  "corpora": {
+    "mixed": {
+      "manifest": "var/acceptance/v0.3-s1/s15c-corpora/mixed-import-manifest.json",
+      "manifest_sha256": "6c341401380048ee4300a0b544f0f86967fc9b72146999ab100a3e509ca91734",
+      "lancedb_root": "var/acceptance/v0.3-s1/s15c-corpora/mixed-lancedb"
+    }
+  },
+  "acceptance": {
+    "worker_verifier_canary_required_before_run": true,
+    "manager_run_status": "succeeded",
+    "manager_delivery_disposition": "complete",
+    "manager_required_coverage_status": "covered",
+    "manager_citation_closure": 1.0,
+    "unknown_evidence_ids_must_be_audited": true,
+    "provider_failures_are_not_retried_automatically": true,
+    "manager_quality_gain_claimed": false
+  },
+  "non_goals": [
+    "Execute a new discovery Run",
+    "Repeat the successful local Manager closeout",
+    "Repeat single-Agent or no-answer acceptance",
+    "Claim Manager quality, cost or latency benefit",
+    "Modify or resume the sealed s16e mixed Manager Run"
+  ],
+  "evidence_boundary": "The discovery record is a sealed reference required by the matrix format. Only the mixed Manager case is newly executed to close the worker Verifier referential-integrity failure."
+}

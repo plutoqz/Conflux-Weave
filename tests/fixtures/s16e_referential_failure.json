@@ -1,0 +1,22 @@
+{
+  "schema_version": "conflux-weave.s16e-referential-failure-fixture.v1",
+  "source_run_id": "run-18d1c0f436df443095e84a85c488e762",
+  "failure_code": "research_batch_outcome_unknown",
+  "exception": "Verifier returned unknown Claim/Evidence ID",
+  "technical_detail_artifact": "artifact-sha256-8a9011e8adcba1b986e51d8341f23f9a57ff142aff46a89aa48f3bffad05df3d",
+  "provider_request_artifact": "artifact-sha256-c3ceb05e269b460e659d9cdbcae9f1c53cf9c72e467ba042c1983075d9d3c00e",
+  "provider_response_artifact": "artifact-sha256-bd2dd3090c00bd1aaa025153322561a9971a424db0345cbd1bb1b96a8b7caffd",
+  "known_claim_ids": ["claim-0003"],
+  "known_evidence_ids": ["evidence-0002", "evidence-0007", "evidence-0008"],
+  "observed": {
+    "assessments": [
+      {
+        "claim_id": "claim-0003",
+        "evidence_ids": ["evidence-0002", "evidence-0007", "evidence-0014"],
+        "relation": "supports",
+        "verdict": "accepted",
+        "rationale": "The supplied Evidence directly reports the compression and quality figures."
+      }
+    ]
+  }
+}

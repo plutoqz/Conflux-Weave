@@ -8,12 +8,18 @@ from conflux_weave.hybrid_retrieval import HybridRetrievalPipeline
 from conflux_weave.indexing import LanceDBDenseIndex
 from conflux_weave.managed_research import ManagedVerifiedResearchWorkflow
 from conflux_weave.provider import OpenAICompatibleChatAdapter, OpenAICompatibleEmbeddingAdapter, OpenAICompatibleRerankerAdapter, ProviderConfig, ProviderHttpResponse
-from conflux_weave.research_agents import CoverageReport, ResearchExecution, VerifiedResearchWorkflow
+from conflux_weave.research_agents import (
+    CoverageReport,
+    ResearchExecution,
+    VerifiedResearchWorkflow,
+    _parse_verifier_assessments,
+)
 from conflux_weave.retrieval import RetrievalDocument
 from conflux_weave.runtime import LocalArtifactStore
 
 
 FAILURE_FIXTURE = Path("tests/fixtures/s16c_contract_failures.json")
+REFERENTIAL_FAILURE_FIXTURE = Path("tests/fixtures/s16e_referential_failure.json")
 
 
 class SequenceTransport:
@@ -48,6 +54,68 @@ def test_verified_research_produces_closed_delivery(tmp_path):
     assert len(manifest["harness_artifacts"]) == 10
     assert manifest["corpus_scope"] == "fixture new-paper corpus"
     assert "fixture new-paper corpus" in report
+
+
+def test_verifier_ignores_only_extraneous_unknown_evidence_ids(tmp_path):
+    fixture = json.loads(REFERENTIAL_FAILURE_FIXTURE.read_text(encoding="utf-8"))
+    claim = Claim("claim-0003", "Reported result.", "finding", "primary", "fixture")
+    evidence = tuple(
+        EvidenceRef(evidence_id, "source", {"page": 1}, "Reported result.", "fixture")
+        for evidence_id in fixture["known_evidence_ids"]
+    )
+    store = LocalArtifactStore(tmp_path / "artifacts")
+
+    assessments, artifact = _parse_verifier_assessments(
+        json.dumps(fixture["observed"]),
+        (claim,),
+        evidence,
+        "artifact-sha256-" + "0" * 64,
+        store,
+        "fixture-verifier",
+    )
+
+    assert assessments[0].evidence_ids == ("evidence-0002", "evidence-0007")
+    payload = json.loads(
+        store.path_for_digest(
+            artifact.artifact_id.removeprefix("artifact-sha256-")
+        ).read_text(encoding="utf-8")
+    )
+    assert payload["normalization_warnings"] == [
+        {
+            "claim_id": "claim-0003",
+            "ignored_unknown_evidence_ids": ["evidence-0014"],
+        }
+    ]
+
+
+def test_verifier_fails_closed_when_no_known_evidence_remains(tmp_path):
+    claim = Claim("claim-0001", "Reported result.", "finding", "primary", "fixture")
+    evidence = EvidenceRef(
+        "evidence-0001", "source", {"page": 1}, "Reported result.", "fixture"
+    )
+    content = json.dumps(
+        {
+            "assessments": [
+                {
+                    "claim_id": "claim-0001",
+                    "evidence_ids": ["evidence-9999"],
+                    "relation": "supports",
+                    "verdict": "accepted",
+                    "rationale": "Unsupported reference.",
+                }
+            ]
+        }
+    )
+
+    with pytest.raises(ValueError, match="no known Evidence ID"):
+        _parse_verifier_assessments(
+            content,
+            (claim,),
+            (evidence,),
+            "artifact-sha256-" + "0" * 64,
+            LocalArtifactStore(tmp_path / "artifacts"),
+            "fixture-verifier",
+        )
 
 
 def test_verified_research_returns_explicit_no_answer_without_verifier_call(tmp_path):
