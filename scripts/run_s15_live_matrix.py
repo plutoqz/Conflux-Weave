@@ -307,6 +307,14 @@ def _discovery_failure_record(store, artifact_id, case):
     }
 
 
+def _required_quote_matches_objective_span(required_quote, objective_quote):
+    if not isinstance(required_quote, str) or not isinstance(objective_quote, str):
+        return False
+    normalized_required = " ".join(required_quote.casefold().split())
+    normalized_objective = " ".join(objective_quote.casefold().split())
+    return bool(normalized_required) and normalized_required in normalized_objective
+
+
 def _delivery_metrics(store, delivery, *, required_coverage_quotes):
     if delivery is None:
         return None
@@ -334,7 +342,10 @@ def _delivery_metrics(store, delivery, *, required_coverage_quotes):
             (
                 item
                 for item in requirements
-                if isinstance(item, dict) and item.get("objective_quote") == quote
+                if isinstance(item, dict)
+                and _required_quote_matches_objective_span(
+                    quote, item.get("objective_quote")
+                )
             ),
             None,
         )

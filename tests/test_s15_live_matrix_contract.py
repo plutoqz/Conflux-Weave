@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 import subprocess
 
+from scripts.run_s15_live_matrix import _required_quote_matches_objective_span
+
 
 DATASET = Path("datasets/regression/s15-live-research-v1")
 S16_DATASET = Path("datasets/regression/s16-post-remediation-live-v1")
@@ -118,3 +120,21 @@ def test_s16_closeout_is_limited_to_the_three_failed_contracts() -> None:
     canary = Path("scripts/run_s16_schema_canary.py").read_text(encoding="utf-8")
     assert "MANAGER_PLAN_SYSTEM_PROMPT" in canary
     assert "DISCOVERY_VERIFICATION_SYSTEM_PROMPT" in canary
+
+
+def test_required_coverage_quote_matches_a_longer_objective_span() -> None:
+    assert _required_quote_matches_objective_span(
+        "automated summarization",
+        "Compare context pruning,  automated summarization, and external memory",
+    )
+    assert _required_quote_matches_objective_span(
+        "REPORTED EVALUATION RESULTS",
+        "mechanisms and reported evaluation results",
+    )
+
+
+def test_required_coverage_quote_does_not_match_unrelated_span() -> None:
+    assert not _required_quote_matches_objective_span(
+        "external memory",
+        "context pruning and automated summarization",
+    )
