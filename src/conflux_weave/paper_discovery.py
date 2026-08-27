@@ -82,6 +82,21 @@ SYSTEM_PROMPT = """你是证据约束的论文发现助手。只能使用用户�
 {"claims":[{"text":"论文身份和与查询的直接关系","evidence_ids":["Evidence ID"]}]}
 每条 claim 必须只对应一篇论文的 Evidence，说明标题、年份和相关性，不得补充 Evidence 中没有的实验结论或来源质量判断。不要输出 limitations、Markdown 或代码围栏。"""
 
+DISCOVERY_VERIFICATION_SYSTEM_PROMPT = (
+    "Act as an independent arXiv metadata Claim verifier. Return exactly this JSON "
+    "object shape: {\"assessments\":[{\"claim_id\":\"paper-claim-0001\","
+    "\"evidence_ids\":[\"arxiv-paper-01\"],\"relation\":"
+    "\"supports|contradicts|context|insufficient\",\"verdict\":"
+    "\"accepted|rejected|uncertain\",\"rationale\":\"direct support rationale\"}]}. "
+    "The root must contain only assessments, and every assessment must contain only "
+    "claim_id, evidence_ids, relation, verdict, and rationale. Do not return claims. "
+    "Assess every supplied claim against only the quoted title and abstract Evidence. "
+    "Use relation supports|contradicts|context|insufficient and verdict "
+    "accepted|rejected|uncertain. Accept only direct support; reject stronger production, "
+    "causal, evaluation, publication-status, or source-quality statements not established "
+    "by the Evidence."
+)
+
 
 @dataclass(frozen=True, slots=True)
 class ArxivHttpResponse:
@@ -744,19 +759,7 @@ class FixedPaperDiscoveryWorkflow:
             exc.artifact_ref = failure_manifest.artifact_id
             raise
         verification = self.chat_adapter.complete(
-            system_prompt=(
-                "Act as an independent arXiv metadata Claim verifier. Return exactly this JSON "
-                "object shape: {\"assessments\":[{\"claim_id\":\"paper-claim-0001\","
-                "\"evidence_ids\":[\"arxiv-paper-01\"],\"relation\":"
-                "\"supports|contradicts|context|insufficient\",\"verdict\":"
-                "\"accepted|rejected|uncertain\",\"rationale\":\"direct support rationale\"}]}. "
-                "The root must contain only assessments, and every assessment must contain only "
-                "claim_id, evidence_ids, relation, verdict, and rationale. Do not return claims. "
-                "Assess every supplied claim against only the quoted title and abstract Evidence. "
-                "Use relation supports|contradicts|context|insufficient and verdict accepted|rejected|uncertain. "
-                "Accept only direct support; reject stronger production, causal, evaluation, publication-status, "
-                "or source-quality statements not established by the Evidence."
-            ),
+            system_prompt=DISCOVERY_VERIFICATION_SYSTEM_PROMPT,
             user_prompt=json.dumps(
                 {
                     "claims": [asdict(item) for item in candidate_claims],

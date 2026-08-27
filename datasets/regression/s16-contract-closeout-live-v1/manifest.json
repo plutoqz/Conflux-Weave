@@ -1,0 +1,44 @@
+{
+  "schema_version": "conflux-weave.s16-contract-closeout-live-dataset.v1",
+  "dataset_id": "s16-contract-closeout-live-v1",
+  "created_at": "2026-08-27",
+  "case_count": 3,
+  "live_execution_requires_explicit_flag": true,
+  "affected_surface_only": true,
+  "source_failure_matrix": "s16-post-remediation-live-v1",
+  "provider_models": {
+    "chat": "qwen3.7-flash",
+    "embedding": "text-embedding-v4",
+    "reranker": "qwen3-rerank"
+  },
+  "corpora": {
+    "local": {
+      "manifest": "var/acceptance/v0.3-s1/corpus-import-manifest.json",
+      "manifest_sha256": "3e6878296edc630116d9a17396913fda97d2815bd46118d2b6b411fc77e27a93",
+      "lancedb_root": "var/acceptance/v0.3-s1/lancedb"
+    },
+    "mixed": {
+      "manifest": "var/acceptance/v0.3-s1/s15c-corpora/mixed-import-manifest.json",
+      "manifest_sha256": "6c341401380048ee4300a0b544f0f86967fc9b72146999ab100a3e509ca91734",
+      "lancedb_root": "var/acceptance/v0.3-s1/s15c-corpora/mixed-lancedb"
+    }
+  },
+  "acceptance": {
+    "schema_canary_required_before_runs": true,
+    "discovery_status": "partial",
+    "discovery_citation_closure": 1.0,
+    "discovery_claims_require_manual_support": true,
+    "manager_run_status": "succeeded",
+    "manager_delivery_disposition": "complete",
+    "manager_required_coverage_status": "covered",
+    "manager_citation_closure": 1.0,
+    "provider_failures_are_not_retried_automatically": true,
+    "manager_quality_gain_claimed": false
+  },
+  "non_goals": [
+    "Repeat single-Agent or no-answer acceptance",
+    "Claim Manager quality, cost or latency benefit",
+    "Modify or resume sealed S1.6-C Runs"
+  ],
+  "evidence_boundary": "This is a three-case post-repair closeout for only the discovery and Manager schema failures. Existing single/no-answer evidence is not replayed."
+}

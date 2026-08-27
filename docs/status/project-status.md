@@ -275,3 +275,17 @@ both sdist and wheel successfully. This is offline implementation and replay evi
 no Provider was called, no sealed S1.6-C Run changed, and S1.6-C remains
 `blocked_unknown_outcome`. The next acceptance point is to freeze a fresh post-repair live
 protocol and idempotency namespace before creating any new immutable discovery/Manager Runs.
+
+S1.6-E adopts affected-surface closeout rather than another eight-case matrix. The current
+implementation plan now requires schema-specific canaries before paid workflows, focused
+reruns for only changed capabilities, one full regression per commit checkpoint, and a clear
+separation between engineering completion and research acceptance. Narrow Prompt/parser
+contract defects remain ordinary development work unless they change shared Runtime,
+retrieval or Evidence semantics.
+
+The frozen `s16-contract-closeout-live-v1` protocol contains only the failed surface from
+S1.6-C: one discovery and the two Manager objectives. It uses a new `s16e` idempotency
+namespace and SQLite database, pins the existing local/mixed corpus hashes, requires the
+production Prompt/parser schema canary before Runs, and explicitly excludes repeated
+single-Agent/no-answer/UI/retrieval acceptance. Focused protocol and contract tests passed
+(`34 passed`). No S1.6-E Provider call or Run has occurred at this checkpoint.

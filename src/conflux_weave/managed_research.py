@@ -32,6 +32,19 @@ MANAGER_COVERAGE_SCHEMA = (
     '{"assessments":[{"coverage_id":"coverage-1","status":"covered|missing",'
     '"claim_ids":["verified-claim-id"],"rationale":"direct coverage rationale"}]}'
 )
+MANAGER_PLAN_SYSTEM_PROMPT = (
+    "You are a research Manager. Return exactly this JSON object shape: "
+    f"{MANAGER_PLAN_SCHEMA} "
+    "The root must contain only coverage_requirements and subquestions. "
+    "Each coverage requirement must contain only coverage_id and objective_quote. "
+    "Each subquestion must contain only question and coverage_ids. "
+    "Do not use text, subquestion_id, or mapped_coverage_ids as field names. "
+    "Each coverage requirement must quote an exact, non-empty span from the objective. "
+    "Create 2 to the supplied maximum distinct evidence-seeking subquestions and map every "
+    "coverage_id to at least one subquestion. "
+    "Do not answer the question, state factual conclusions, or introduce dates, "
+    "source requirements, minimum counts, or other constraints absent from the objective."
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,19 +100,7 @@ class ManagedVerifiedResearchWorkflow:
         if not 2 <= max_subquestions <= 4:
             raise ValueError("max_subquestions must be between 2 and 4")
         plan_completion = self.manager_chat.complete(
-            system_prompt=(
-                "You are a research Manager. Return exactly this JSON object shape: "
-                f"{MANAGER_PLAN_SCHEMA} "
-                "The root must contain only coverage_requirements and subquestions. "
-                "Each coverage requirement must contain only coverage_id and objective_quote. "
-                "Each subquestion must contain only question and coverage_ids. "
-                "Do not use text, subquestion_id, or mapped_coverage_ids as field names. "
-                "Each coverage requirement must quote an exact, non-empty span from the objective. "
-                "Create 2 to the supplied maximum distinct evidence-seeking subquestions and map every "
-                "coverage_id to at least one subquestion. "
-                "Do not answer the question, state factual conclusions, or introduce dates, "
-                "source requirements, minimum counts, or other constraints absent from the objective."
-            ),
+            system_prompt=MANAGER_PLAN_SYSTEM_PROMPT,
             user_prompt=json.dumps({"objective": objective, "max_subquestions": max_subquestions}, ensure_ascii=False),
             max_output_tokens=800,
             temperature=0,

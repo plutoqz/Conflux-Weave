@@ -7,6 +7,7 @@ import subprocess
 
 DATASET = Path("datasets/regression/s15-live-research-v1")
 S16_DATASET = Path("datasets/regression/s16-post-remediation-live-v1")
+S16_CLOSEOUT = Path("datasets/regression/s16-contract-closeout-live-v1")
 
 
 def test_s15_live_matrix_is_frozen_and_balanced() -> None:
@@ -93,3 +94,27 @@ def test_s16_runner_accepts_a_frozen_discovery_failure() -> None:
     runner = Path("scripts/run_s15_live_matrix.py").read_text(encoding="utf-8")
     assert '"mechanical_acceptance": "failed_execution"' in runner
     assert 'else "failed_execution"' in runner
+
+
+def test_s16_closeout_is_limited_to_the_three_failed_contracts() -> None:
+    manifest = json.loads((S16_CLOSEOUT / "manifest.json").read_text(encoding="utf-8"))
+    cases = [
+        json.loads(line)
+        for line in (S16_CLOSEOUT / "cases.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+    assert manifest["case_count"] == len(cases) == 3
+    assert manifest["affected_surface_only"] is True
+    assert [item["mode"] for item in cases] == ["discovery", "managed", "managed"]
+    assert all(item["case_id"].startswith("s16e-") for item in cases)
+    assert manifest["acceptance"]["schema_canary_required_before_runs"] is True
+    assert manifest["acceptance"]["manager_quality_gain_claimed"] is False
+    assert "Repeat single-Agent or no-answer acceptance" in manifest["non_goals"]
+
+    wrapper = Path("scripts/run_s16_closeout_matrix.py").read_text(encoding="utf-8")
+    assert "s16e-closeout.sqlite3" in wrapper
+    assert '"s16e"' in wrapper
+    canary = Path("scripts/run_s16_schema_canary.py").read_text(encoding="utf-8")
+    assert "MANAGER_PLAN_SYSTEM_PROMPT" in canary
+    assert "DISCOVERY_VERIFICATION_SYSTEM_PROMPT" in canary
