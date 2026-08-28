@@ -6,8 +6,8 @@
     <meta name="color-scheme" content="light">
     <link rel="icon" href="data:,">
     <title>Conflux Weave</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=v0.3-s15b">
-    <script type="module" src="/assets/app.js?v=v0.3-s15b"></script>
+    <link rel="stylesheet" href="/assets/styles.css?v=v0.3-ux0">
+    <script type="module" src="/assets/app.js?v=v0.3-ux0"></script>
   </head>
   <body>
     <header class="topbar">
@@ -24,25 +24,51 @@
       </div>
     </header>
 
-    <div class="app-shell">
+    <div class="app-shell" data-sidebar="full" data-hud="collapsed">
       <aside class="run-sidebar" aria-label="研究历史">
         <div class="sidebar-heading">
-          <div>
+          <div class="sidebar-title">
             <span class="eyebrow">History</span>
             <h2>最近研究</h2>
           </div>
-          <button class="icon-button" id="new-task" type="button" title="新建研究" aria-label="新建研究">+</button>
+          <div class="sidebar-tools">
+            <button class="icon-button" id="new-task" type="button" title="新建研究" aria-label="新建研究">
+              <!-- Icon: plus (lucide-static v1.34.0, ISC License) -->
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+            </button>
+            <button class="icon-button" id="toggle-sidebar" type="button" title="折叠侧栏" aria-label="折叠侧栏" aria-expanded="true">
+              <!-- Icon: panel-left (lucide-static v1.34.0, ISC License) -->
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg>
+            </button>
+          </div>
         </div>
+
+        <section class="hud" id="hud" aria-label="系统状态">
+          <button class="hud-toggle" id="hud-toggle" type="button" aria-expanded="false" aria-controls="hud-body">
+            <span class="eyebrow">Systems</span>
+            <!-- Icon: chevron-down (lucide-static v1.34.0, ISC License) -->
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+          <div class="hud-body" id="hud-body" hidden>
+            <dl class="hud-grid">
+              <div><dt>Corpus</dt><dd id="hud-corpus">—</dd></div>
+              <div><dt>Provider</dt><dd id="hud-provider">—</dd></div>
+              <div><dt>Knowledge</dt><dd id="hud-knowledge">—</dd></div>
+              <div><dt>Projects</dt><dd id="hud-projects">—</dd></div>
+            </dl>
+            <p class="hud-foot">Last activity · <span id="hud-activity">—</span></p>
+          </div>
+        </section>
+
         <div id="run-list" class="run-list" aria-live="polite"></div>
         <button id="load-more" class="quiet-button full-width" type="button" hidden>加载更多</button>
       </aside>
 
       <main class="workspace">
         <section id="empty-view" class="empty-view">
-          <div class="empty-mark" aria-hidden="true">01</div>
-          <p class="eyebrow">Research query</p>
-          <h1>开始一次有证据边界的研究</h1>
-          <p>提交问题后，结果、引用、限制与恢复动作会保存在同一个 Run 中。</p>
+          <p class="eyebrow">Research query · 01</p>
+          <h1>提出一个研究问题</h1>
+          <p>结果、引用、限制与恢复动作会保存在同一个 Run 中。</p>
           <button class="primary-button" data-open-task type="button">新建研究</button>
         </section>
 
@@ -51,6 +77,7 @@
             <div class="run-title-block">
               <div class="run-kicker">
                 <span id="run-family">论文发现</span>
+                <span aria-hidden="true">·</span>
                 <span id="run-date"></span>
               </div>
               <h1 id="run-query"></h1>
@@ -58,7 +85,10 @@
             </div>
             <div class="run-actions">
               <span id="run-state" class="state-badge"></span>
-              <button id="refresh-run" class="icon-button compact-icon" type="button" title="刷新 Run" aria-label="刷新 Run">&#8635;</button>
+              <button id="refresh-run" class="icon-button compact-icon" type="button" title="刷新 Run" aria-label="刷新 Run">
+                <!-- Icon: refresh-cw (lucide-static v1.34.0, ISC License) -->
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
+              </button>
               <button id="cancel-run" class="danger-button" type="button" hidden>取消</button>
               <button id="follow-up-run" class="quiet-button" type="button" hidden>继续研究</button>
               <button id="rerun-run" class="primary-button" type="button" hidden>重新研究</button>
@@ -97,12 +127,16 @@
           </div>
 
           <div class="tabs" role="tablist" aria-label="Run 视图">
-            <button id="answer-tab" role="tab" aria-selected="true" aria-controls="answer-panel" type="button">结果</button>
-            <button id="activity-tab" role="tab" aria-selected="false" aria-controls="activity-panel" type="button">动态 <span id="event-count">0</span></button>
+            <button id="answer-tab" role="tab" aria-selected="true" aria-controls="answer-panel" tabindex="0" type="button">结果</button>
+            <button id="activity-tab" role="tab" aria-selected="false" aria-controls="activity-panel" tabindex="-1" type="button">动态 <span id="event-count">0</span></button>
           </div>
 
           <section id="answer-panel" role="tabpanel" aria-labelledby="answer-tab">
-            <div id="answer-loading" class="inline-status">正在读取交付结果...</div>
+            <div id="answer-loading" class="inline-status skeleton" role="status" aria-label="正在读取交付结果">
+              <span class="skeleton-line" style="width: 82%"></span>
+              <span class="skeleton-line" style="width: 96%"></span>
+              <span class="skeleton-line" style="width: 64%"></span>
+            </div>
             <article id="answer-content" class="answer-content" hidden></article>
             <div id="answer-empty" class="panel-empty" hidden>
               <strong>结果尚未生成</strong>
@@ -140,6 +174,30 @@
           </section>
         </section>
       </main>
+
+      <aside class="evidence-inspector" id="evidence-inspector" aria-label="证据检查器" hidden>
+        <header class="inspector-header">
+          <div>
+            <span class="eyebrow">Evidence</span>
+            <h2 id="insp-title">证据</h2>
+          </div>
+          <button class="icon-button" id="close-inspector" type="button" aria-label="关闭证据检查器" title="关闭">
+            <!-- Icon: x (lucide-static v1.34.0, ISC License) -->
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+          </button>
+        </header>
+        <blockquote id="insp-quote" class="inspector-quote"></blockquote>
+        <dl class="evidence-meta">
+          <div><dt>来源快照</dt><dd id="insp-source"></dd></div>
+          <div><dt>提取方式</dt><dd id="insp-method"></dd></div>
+          <div><dt>定位</dt><dd><pre id="insp-locator"></pre></dd></div>
+        </dl>
+        <footer class="inspector-nav">
+          <button id="insp-prev" class="quiet-button" type="button">上一条</button>
+          <span id="insp-position" class="count-label"></span>
+          <button id="insp-next" class="quiet-button" type="button">下一条</button>
+        </footer>
+      </aside>
     </div>
 
     <dialog id="task-dialog" class="task-dialog">
@@ -149,7 +207,10 @@
             <span class="eyebrow">New research</span>
             <h2>新建研究</h2>
           </div>
-          <button class="icon-button" value="cancel" formmethod="dialog" type="submit" aria-label="关闭" title="关闭">&times;</button>
+          <button class="icon-button" value="cancel" formmethod="dialog" type="submit" aria-label="关闭" title="关闭">
+            <!-- Icon: x (lucide-static v1.34.0, ISC License) -->
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+          </button>
         </header>
         <fieldset class="mode-fieldset">
           <legend class="field-label">任务类型</legend>
@@ -205,7 +266,10 @@
             <span class="eyebrow">Follow-up run</span>
             <h2>继续研究</h2>
           </div>
-          <button class="icon-button" value="cancel" formmethod="dialog" type="submit" aria-label="关闭" title="关闭">&times;</button>
+          <button class="icon-button" value="cancel" formmethod="dialog" type="submit" aria-label="关闭" title="关闭">
+            <!-- Icon: x (lucide-static v1.34.0, ISC License) -->
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+          </button>
         </header>
         <label class="field-label" for="follow-up-question">追问</label>
         <textarea id="follow-up-question" rows="5" maxlength="2000" required></textarea>
@@ -224,7 +288,10 @@
             <span class="eyebrow">Source evidence</span>
             <h2 id="evidence-title">证据</h2>
           </div>
-          <button class="icon-button" data-close-evidence type="button" aria-label="关闭" title="关闭">&times;</button>
+          <button class="icon-button" data-close-evidence type="button" aria-label="关闭" title="关闭">
+            <!-- Icon: x (lucide-static v1.34.0, ISC License) -->
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+          </button>
         </header>
         <blockquote id="evidence-quote"></blockquote>
         <dl class="evidence-meta">

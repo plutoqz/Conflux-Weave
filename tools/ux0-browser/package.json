@@ -1,0 +1,12 @@
+{
+  "name": "conflux-weave-ux0-browser-verification",
+  "private": true,
+  "version": "1.0.0",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "playwright": "1.62.1"
+  }
+}

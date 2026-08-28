@@ -147,6 +147,7 @@ def test_workbench_is_packaged_same_origin_without_external_assets(tmp_path) -> 
     workbench_root = index_response.path.parent
     styles = (workbench_root / "styles.css").read_text(encoding="utf-8")
     script = (workbench_root / "app.js").read_text(encoding="utf-8")
+    notices = (workbench_root / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
 
     assert index_response.media_type == "text/html"
     assert 'id="run-list"' in index
@@ -160,6 +161,9 @@ def test_workbench_is_packaged_same_origin_without_external_assets(tmp_path) -> 
     assert 'value="single" checked' in index
     assert 'value="managed"' in index
     assert 'id="follow-up-dialog"' in index
+    assert 'id="evidence-inspector"' in index
+    assert 'id="hud-toggle"' in index
+    assert 'id="activity-tab" role="tab" aria-selected="false" aria-controls="activity-panel" tabindex="-1"' in index
     assert "@media (max-width: 760px)" in styles
     assert "EventSource" in script
     assert "/api/v1/tasks/research" in script
@@ -173,6 +177,10 @@ def test_workbench_is_packaged_same_origin_without_external_assets(tmp_path) -> 
     assert "eventCursor" in script
     assert "events?after=${state.eventCursor}" in script
     assert "state.eventReconnectTimer" in script
+    assert "state.eventRunId !== payload.run_id" in script
+    assert "handleTabKeydown" in script
+    assert "state.inspectorTrigger" in script
+    assert '$("#hud-corpus").textContent = context.corpus_scope' in script
     assert "if (run.is_terminal) return" not in script
     assert "overflow-wrap: anywhere" in styles
     assert "grid-template-columns: 1fr" in styles
@@ -180,6 +188,8 @@ def test_workbench_is_packaged_same_origin_without_external_assets(tmp_path) -> 
     assert "repeat(4, minmax(0, 1fr))" in styles
     assert "http://" not in index + styles + script
     assert "https://" not in index + styles + script
+    assert "Lucide Static 1.34.0" in notices
+    assert "ISC License" in notices
 
 
 def test_workbench_w55_layout_and_keyboard_contracts_are_local_and_responsive() -> None:
@@ -194,10 +204,13 @@ def test_workbench_w55_layout_and_keyboard_contracts_are_local_and_responsive() 
     # 320px, 390px and 200% zoom; no external browser runtime is required here.
     assert 'aria-label="研究历史"' in index
     assert 'role="tablist"' in index
+    assert 'aria-label="证据检查器"' in index
     assert '<dialog id="task-dialog"' in index
     assert "calc(100vw - 32px)" in styles
     assert "overflow-wrap: anywhere" in styles
     assert "showModal()" in script
+    assert 'event.key === "ArrowRight"' in script
+    assert "trigger?.isConnected" in script
     assert "event.preventDefault()" in script
 
 

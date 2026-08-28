@@ -10,7 +10,14 @@ const state = {
   eventReconnectTimer: null,
   eventIds: new Set(),
   evidence: new Map(),
+  evidenceList: [],
+  inspectorIndex: -1,
+  inspectorTrigger: null,
+  mutating: false,
 };
+
+const INSPECTOR_MEDIA = "(min-width: 1024px)";
+const inspectorMedia = window.matchMedia(INSPECTOR_MEDIA);
 
 const stateLabels = {
   pending: "等待处理",
@@ -76,6 +83,7 @@ function makeRunItem(run) {
   button.dataset.runId = run.run_id;
   const title = document.createElement("strong");
   title.textContent = run.query || "未命名研究";
+  button.title = run.query || "未命名研究";
   const meta = document.createElement("span");
   meta.className = "item-meta";
   const runState = document.createElement("span");
@@ -101,6 +109,8 @@ async function loadRuns({ append = false } = {}) {
   state.runs = append ? [...state.runs, ...page.items] : page.items;
   state.nextCursor = page.next_cursor;
   renderRuns();
+  const latest = state.runs[0];
+  $("#hud-activity").textContent = latest ? formatDate(latest.updated_at, true) : "—";
   if (!append && !state.selected && state.runs.length) await selectRun(state.runs[0].run_id);
   if (!state.runs.length) {
     $("#empty-view").hidden = false;
@@ -108,7 +118,15 @@ async function loadRuns({ append = false } = {}) {
   }
 }
 
-function renderRun(run) {
+function flashIfChanged(selector, changed) {
+  if (!changed) return;
+  const el = $(selector);
+  el.classList.remove("flash");
+  void el.offsetWidth;
+  el.classList.add("flash");
+}
+
+function renderRun(run, prevRun = null) {
   $("#empty-view").hidden = true;
   $("#run-view").hidden = false;
   $("#run-family").textContent = familyLabels[run.task_family] || "研究任务";
@@ -119,6 +137,7 @@ function renderRun(run) {
   badge.textContent = stateLabels[run.state] || "状态更新";
   badge.className = `state-badge ${run.state}`;
 
+  const prevBudget = prevRun?.budget || {};
   const completed = run.progress?.completed_steps || 0;
   const total = run.progress?.total_steps || 0;
   $("#progress-value").textContent = `${completed} / ${total}`;
@@ -126,6 +145,7 @@ function renderRun(run) {
   const budget = run.budget || {};
   const context = run.research_context || {};
   const tokens = (budget.input_tokens_used || 0) + (budget.output_tokens_used || 0);
+  const prevTokens = (prevBudget.input_tokens_used || 0) + (prevBudget.output_tokens_used || 0);
   const tokenLimit = (budget.input_tokens_limit || 0) + (budget.output_tokens_limit || 0);
   $("#token-value").textContent = `${tokens.toLocaleString("zh-CN")} tokens`;
   $("#budget-state").textContent = tokenLimit ? `上限 ${tokenLimit.toLocaleString("zh-CN")}` : "未记录上限";
@@ -136,6 +156,8 @@ function renderRun(run) {
   $("#cost-state").textContent = budget.cost_enforcement === "unavailable" ? "未启用金额强制" : budget.cost_enforcement;
   $("#run-mode").textContent = modeLabels[context.mode] || "研究任务";
   $("#corpus-scope").textContent = context.corpus_scope || "未记录";
+  $("#hud-corpus").textContent = context.corpus_scope || "未记录";
+  $("#hud-corpus").title = context.corpus_scope || "未记录";
   const verified = ["verified_paper_research", "managed_verified_research"].includes(run.task_family);
   $("#confidence-value").textContent = verified && run.state === "complete"
     ? "引用核验完成"
@@ -145,6 +167,13 @@ function renderRun(run) {
         ? `${run.delivery.evidence_ids.length} 条证据`
         : "待生成";
 
+  if (prevRun && prevRun.run_id === run.run_id) {
+    flashIfChanged("#progress-value", completed !== (prevRun.progress?.completed_steps || 0));
+    flashIfChanged("#token-value", tokens !== prevTokens);
+    flashIfChanged("#retrieval-value",
+      (budget.retrieval_rounds_used || 0) !== (prevBudget.retrieval_rounds_used || 0));
+  }
+
   $("#cancel-run").hidden = run.is_terminal || run.state === "needs_attention" || run.state === "cancelling";
   $("#rerun-run").hidden = !run.is_terminal || run.state === "cancelled";
   $("#follow-up-run").hidden = !run.is_terminal || !verified || !run.delivery;
@@ -153,6 +182,14 @@ function renderRun(run) {
   renderBoundaries(run.delivery, run.error);
   renderRuns();
 }
+
+const boundaryKinds = {
+  限制: "limitation",
+  未满足: "unmet",
+  后续动作: "action",
+  错误: "error",
+  恢复动作: "recovery",
+};
 
 function renderBoundaries(delivery, error) {
   const section = $("#limitations-section");
@@ -166,6 +203,7 @@ function renderBoundaries(delivery, error) {
   list.replaceChildren(...items.map(([label, value]) => {
     const row = document.createElement("div");
     row.className = "boundary-item";
+    row.dataset.kind = boundaryKinds[label] || "limitation";
     row.textContent = `${label}：${value}`;
     return row;
   }));
@@ -227,7 +265,20 @@ function renderAnswer(node, content, mediaType) {
 
 async function loadEvidence(runId, evidenceIds) {
   const list = $("#evidence-list");
+  // 集合未变（典型：SSE 历史重放触发的重复 loadDelivery）：
+  // 跳过重建，保留打开的 Inspector 与现有 DOM。
+  const currentIds = state.evidenceList.map((item) => item.evidence_id);
+  const unchanged = currentIds.length === evidenceIds.length
+    && evidenceIds.every((id, index) => id === currentIds[index]);
+  if (unchanged) {
+    $("#evidence-count").textContent = state.evidenceList.length ? `${state.evidenceList.length} 条` : "";
+    $("#evidence-section").hidden = !state.evidenceList.length;
+    return;
+  }
   state.evidence.clear();
+  state.evidenceList = [];
+  state.inspectorIndex = -1;
+  closeInspector(false);
   if (!evidenceIds.length) {
     $("#evidence-section").hidden = true;
     list.replaceChildren();
@@ -241,6 +292,7 @@ async function loadEvidence(runId, evidenceIds) {
     } catch { return null; }
   }));
   const available = items.filter(Boolean);
+  state.evidenceList = available;
   list.replaceChildren(...available.map((item, index) => {
     const button = document.createElement("button");
     button.type = "button";
@@ -252,21 +304,61 @@ async function loadEvidence(runId, evidenceIds) {
     const source = document.createElement("small");
     const page = item.locator?.page ? ` · p.${item.locator.page}` : "";
     source.textContent = `${item.source_snapshot_id}${page}`;
+    source.title = item.source_snapshot_id;
     button.append(title, quote, source);
-    button.addEventListener("click", () => openEvidence(item, index + 1));
+    button.addEventListener("click", () => openEvidence(item, index, button));
     return button;
   }));
   $("#evidence-count").textContent = `${available.length} 条`;
   $("#evidence-section").hidden = !available.length;
 }
 
-function openEvidence(item, index) {
-  $("#evidence-title").textContent = `证据 ${index}`;
+function openEvidence(item, index, trigger) {
+  if (inspectorMedia.matches) {
+    openInspector(index, trigger);
+    return;
+  }
+  $("#evidence-title").textContent = `证据 ${index + 1}`;
   $("#evidence-quote").textContent = item.quote;
   $("#evidence-source").textContent = item.source_snapshot_id;
   $("#evidence-method").textContent = item.extraction_method;
   $("#evidence-locator").textContent = JSON.stringify(item.locator, null, 2);
   $("#evidence-dialog").showModal();
+}
+
+function openInspector(index, trigger = state.inspectorTrigger) {
+  state.inspectorIndex = index;
+  state.inspectorTrigger = trigger;
+  const item = state.evidenceList[index];
+  if (!item) return;
+  $("#insp-title").textContent = `证据 ${index + 1}`;
+  $("#insp-quote").textContent = item.quote;
+  $("#insp-source").textContent = item.source_snapshot_id;
+  $("#insp-method").textContent = item.extraction_method;
+  $("#insp-locator").textContent = JSON.stringify(item.locator, null, 2);
+  $("#insp-position").textContent = `${index + 1} / ${state.evidenceList.length}`;
+  $("#insp-prev").disabled = index <= 0;
+  $("#insp-next").disabled = index >= state.evidenceList.length - 1;
+  $("#evidence-inspector").hidden = false;
+  $(".app-shell").dataset.inspector = "open";
+  $("#close-inspector").focus();
+}
+
+function closeInspector(restoreFocus = true) {
+  const inspector = $("#evidence-inspector");
+  if (!inspector || inspector.hidden) return;
+  const trigger = state.inspectorTrigger;
+  inspector.hidden = true;
+  $(".app-shell").dataset.inspector = "closed";
+  state.inspectorIndex = -1;
+  state.inspectorTrigger = null;
+  if (restoreFocus && trigger?.isConnected) trigger.focus();
+}
+
+function stepInspector(delta) {
+  const next = state.inspectorIndex + delta;
+  if (next < 0 || next >= state.evidenceList.length) return;
+  openInspector(next);
 }
 
 function closeEvents() {
@@ -307,7 +399,8 @@ function connectEvents(run) {
     state.eventIds.add(payload.cursor);
     state.eventCursor = Math.max(state.eventCursor, Number(payload.cursor) || 0);
     const item = document.createElement("div");
-    item.className = "event-item";
+    item.className = "event-item enter";
+    item.addEventListener("animationend", () => item.classList.remove("enter"), { once: true });
     const message = document.createElement("strong");
     message.textContent = payload.message;
     const time = document.createElement("time");
@@ -318,8 +411,10 @@ function connectEvents(run) {
     $("#event-count").textContent = String(state.eventIds.size);
     try {
       const current = await api(`/api/v1/runs/${encodeURIComponent(payload.run_id)}`);
+      if (state.eventRunId !== payload.run_id || state.selected?.run_id !== payload.run_id) return;
+      const prev = state.selected;
       state.selected = current;
-      renderRun(current);
+      renderRun(current, prev);
       await loadDelivery(current);
       if (current.is_terminal) {
         await loadRuns();
@@ -341,18 +436,26 @@ async function selectRun(runId) {
 }
 
 async function mutateRun(decision = null) {
-  if (!state.selected) return;
+  if (!state.selected || state.mutating) return;
+  state.mutating = true;
   const action = decision === "cancel" ? "cancel" : "resume";
   const body = decision && decision !== "cancel" ? JSON.stringify({ decision }) : undefined;
+  const buttons = ["#cancel-run", "#retry-run", "#fail-run"].map((selector) => $(selector));
+  buttons.forEach((button) => { if (button) button.disabled = true; });
   try {
     const run = await api(`/api/v1/runs/${encodeURIComponent(state.selected.run_id)}/${action}`, {
       method: "POST", body,
     });
+    const prev = state.selected;
     state.selected = run;
-    renderRun(run);
+    renderRun(run, prev);
     await loadRuns();
     connectEvents(run);
   } catch (error) { showToast(error.recoveryAction || error.message); }
+  finally {
+    buttons.forEach((button) => { if (button) button.disabled = false; });
+    state.mutating = false;
+  }
 }
 
 async function rerunSelected() {
@@ -454,9 +557,25 @@ async function submitTask() {
 function setTab(name) {
   const answer = name === "answer";
   $("#answer-tab").setAttribute("aria-selected", String(answer));
+  $("#answer-tab").tabIndex = answer ? 0 : -1;
   $("#activity-tab").setAttribute("aria-selected", String(!answer));
+  $("#activity-tab").tabIndex = answer ? -1 : 0;
   $("#answer-panel").hidden = !answer;
   $("#activity-panel").hidden = answer;
+}
+
+function handleTabKeydown(event) {
+  const tabs = [$("#answer-tab"), $("#activity-tab")];
+  const current = tabs.indexOf(event.currentTarget);
+  let target = null;
+  if (event.key === "ArrowRight") target = tabs[(current + 1) % tabs.length];
+  if (event.key === "ArrowLeft") target = tabs[(current - 1 + tabs.length) % tabs.length];
+  if (event.key === "Home") target = tabs[0];
+  if (event.key === "End") target = tabs[tabs.length - 1];
+  if (!target) return;
+  event.preventDefault();
+  setTab(target.id === "answer-tab" ? "answer" : "activity");
+  target.focus();
 }
 
 async function checkHealth() {
@@ -465,10 +584,27 @@ async function checkHealth() {
     const health = await api("/api/v1/health/ready");
     node.className = `health ${health.status === "ready" ? "ready" : "not-ready"}`;
     node.lastElementChild.textContent = health.status === "ready" ? "服务就绪" : "配置待完善";
+    $("#hud-provider").textContent = health.status === "ready" ? "就绪" : "配置待完善";
   } catch {
     node.className = "health not-ready";
     node.lastElementChild.textContent = "服务不可用";
+    $("#hud-provider").textContent = "不可用";
   }
+}
+
+function toggleSidebar() {
+  const shell = $(".app-shell");
+  const narrow = shell.dataset.sidebar === "narrow";
+  shell.dataset.sidebar = narrow ? "full" : "narrow";
+  $("#toggle-sidebar").setAttribute("aria-expanded", String(narrow));
+}
+
+function toggleHud() {
+  const shell = $(".app-shell");
+  const expanded = shell.dataset.hud === "expanded";
+  shell.dataset.hud = expanded ? "collapsed" : "expanded";
+  $("#hud-toggle").setAttribute("aria-expanded", String(!expanded));
+  $("#hud-body").hidden = expanded;
 }
 
 function openTaskDialog() {
@@ -504,7 +640,20 @@ $("#retry-run").addEventListener("click", () => mutateRun("retry_unknown_externa
 $("#fail-run").addEventListener("click", () => mutateRun("fail_unknown_external"));
 $("#answer-tab").addEventListener("click", () => setTab("answer"));
 $("#activity-tab").addEventListener("click", () => setTab("activity"));
+$("#answer-tab").addEventListener("keydown", handleTabKeydown);
+$("#activity-tab").addEventListener("keydown", handleTabKeydown);
 $("[data-close-evidence]").addEventListener("click", () => $("#evidence-dialog").close());
+$("#toggle-sidebar").addEventListener("click", toggleSidebar);
+$("#hud-toggle").addEventListener("click", toggleHud);
+$("#close-inspector").addEventListener("click", closeInspector);
+$("#insp-prev").addEventListener("click", () => stepInspector(-1));
+$("#insp-next").addEventListener("click", () => stepInspector(1));
+inspectorMedia.addEventListener("change", (event) => {
+  if (!event.matches) closeInspector(false);
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !$("#evidence-inspector").hidden) closeInspector();
+});
 $("#task-form").addEventListener("submit", (event) => {
   if (event.submitter?.value !== "cancel") event.preventDefault();
 });
