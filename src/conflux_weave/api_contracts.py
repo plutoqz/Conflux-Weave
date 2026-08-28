@@ -231,6 +231,61 @@ class ReadinessResponse(_ApiModel):
     checks: tuple[ReadinessCheckResponse, ...]
 
 
+class ProviderConfigResponse(_ApiModel):
+    base_url: str
+    model: str
+    embedding_model: str
+    reranker_model: str
+    api_key_configured: bool
+    api_key_hint: str | None = None
+
+
+class ProviderConfigUpdateRequest(_ApiModel):
+    base_url: str = Field(min_length=1, max_length=2_000)
+    api_key: str | None = Field(default=None, min_length=1, max_length=1_000)
+    model: str = Field(min_length=1, max_length=200)
+    embedding_model: str | None = Field(default=None, max_length=200)
+    reranker_model: str | None = Field(default=None, max_length=200)
+
+    @field_validator("base_url")
+    @classmethod
+    def require_https_base_url(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("base_url must not be blank")
+        return value.strip()
+
+    @field_validator("model")
+    @classmethod
+    def require_nonblank_model(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("model must not be blank")
+        return value.strip()
+
+
+class ProviderConfigUpdateResponse(_ApiModel):
+    provider: ProviderConfigResponse
+    requires_restart: bool
+    message: str
+
+
+class ProviderConfigTestRequest(_ApiModel):
+    base_url: str | None = Field(default=None, min_length=1, max_length=2_000)
+    api_key: str | None = Field(default=None, min_length=1, max_length=1_000)
+    model: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+class ProviderConfigTestResponse(_ApiModel):
+    ok: bool
+    message: str
+    latency_ms: int | None = None
+
+
+class WorkbenchConfigResponse(_ApiModel):
+    provider: ProviderConfigResponse
+    provider_active: bool
+    paths: dict[str, str]
+
+
 class _RunCursorPayload(_ApiModel):
     version: Literal[1] = 1
     created_at: str = Field(min_length=1)
@@ -682,6 +737,11 @@ __all__ = [
     "FixtureResearchTaskRequest",
     "FollowUpResearchTaskRequest",
     "ProgressResponse",
+    "ProviderConfigResponse",
+    "ProviderConfigTestRequest",
+    "ProviderConfigTestResponse",
+    "ProviderConfigUpdateRequest",
+    "ProviderConfigUpdateResponse",
     "ReadinessCheckResponse",
     "ReadinessResponse",
     "ResearchTaskAcceptedResponse",
@@ -694,6 +754,7 @@ __all__ = [
     "RunPageResponse",
     "RunSummaryResponse",
     "UserRunState",
+    "WorkbenchConfigResponse",
     "WorkbenchQueryService",
     "VerifiedResearchTaskRequest",
     "decode_run_cursor",

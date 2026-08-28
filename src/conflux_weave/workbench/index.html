@@ -6,18 +6,24 @@
     <meta name="color-scheme" content="light">
     <link rel="icon" href="data:,">
     <title>Conflux Weave</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=v0.3-ux0">
-    <script type="module" src="/assets/app.js?v=v0.3-ux0"></script>
+    <link rel="stylesheet" href="/assets/styles.css?v=v0.3-ux1-6">
+    <script type="module" src="/assets/app.js?v=v0.3-ux1-6"></script>
   </head>
   <body>
     <header class="topbar">
-      <a class="brand" href="/" aria-label="Conflux Weave 工作台">
+      <a class="brand" href="#/overview" aria-label="Conflux Weave 工作台">
         <span class="brand-mark" aria-hidden="true">CW</span>
         <span>
           <strong>Conflux Weave</strong>
           <small>Research Workbench</small>
         </span>
       </a>
+      <nav class="section-nav" aria-label="工作台分区">
+        <a class="section-link" data-section-link="overview" href="#/overview">总览</a>
+        <a class="section-link" data-section-link="chat" href="#/chat">对话</a>
+        <a class="section-link" data-section-link="research" href="#/research">研究</a>
+        <a class="section-link" data-section-link="settings" href="#/settings">设置</a>
+      </nav>
       <div id="health" class="health" role="status">
         <span class="health-dot" aria-hidden="true"></span>
         <span>正在检查</span>
@@ -65,6 +71,172 @@
       </aside>
 
       <main class="workspace">
+        <section id="overview-view" class="overview-view" hidden>
+          <div id="overview-alert" class="settings-banner warn" role="alert" hidden>
+            <span id="overview-alert-text"></span>
+            <a href="#/settings">前往设置</a>
+          </div>
+
+          <header class="overview-hero">
+            <p class="eyebrow">Workbench · 01</p>
+            <h1>从一个问题开始</h1>
+            <p class="overview-lede">对话提问，或直接新建研究。</p>
+            <div class="overview-actions">
+              <button class="primary-button" data-open-task type="button">新建研究</button>
+              <a class="quiet-button overview-link" href="#/chat">去对话提问</a>
+            </div>
+          </header>
+
+          <div class="overview-grid">
+            <section class="overview-card" aria-label="系统状态">
+              <div class="section-heading">
+                <div>
+                  <span class="eyebrow">Systems</span>
+                  <h2>系统状态</h2>
+                </div>
+                <a class="count-label" href="#/settings">设置</a>
+              </div>
+              <div id="overview-checks" class="check-list"></div>
+              <dl class="overview-corpus-row">
+                <dt>当前语料</dt>
+                <dd id="overview-corpus">—</dd>
+              </dl>
+            </section>
+
+            <section class="overview-card" aria-label="最近研究">
+              <div class="section-heading">
+                <div>
+                  <span class="eyebrow">Recent</span>
+                  <h2>最近研究</h2>
+                </div>
+                <a class="count-label" href="#/research">全部</a>
+              </div>
+              <div id="overview-runs" class="overview-runs" hidden></div>
+              <p id="overview-runs-empty" class="panel-empty" hidden>
+                <strong>还没有研究记录</strong>
+                <span>从对话或新建研究开始第一次任务。</span>
+              </p>
+            </section>
+          </div>
+        </section>
+
+        <section id="chat-view" class="chat-view" hidden>
+          <div id="chat-thread-empty" class="chat-empty">
+            <p class="eyebrow">Ask · 01</p>
+            <h1>直接提问</h1>
+            <p>问题会创建为一次核验研究：结果带引用证据，运行过程实时可见。</p>
+          </div>
+          <div id="chat-thread" class="chat-thread" aria-live="polite"></div>
+          <form id="chat-form" class="chat-composer" aria-label="发送问题">
+            <div id="chat-follow-chip" class="chat-follow-chip" hidden>
+              <span id="chat-follow-label"></span>
+              <button type="button" id="chat-clear-follow" class="icon-button" aria-label="清除追问上下文" title="清除追问上下文">
+                <!-- Icon: x (lucide-static v1.34.0, ISC License) -->
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+              </button>
+            </div>
+            <p id="chat-error" class="form-error" role="alert" hidden></p>
+            <div class="chat-composer-row">
+              <fieldset id="chat-mode-fieldset" class="mode-fieldset">
+                <div class="mode-switch chat-mode-switch">
+                  <label>
+                    <input type="radio" name="chat_mode" value="single" checked>
+                    <span>单 Agent</span>
+                  </label>
+                  <label>
+                    <input type="radio" name="chat_mode" value="managed">
+                    <span>Manager</span>
+                  </label>
+                </div>
+              </fieldset>
+              <textarea id="chat-input" name="chat_input" rows="1" maxlength="4000" placeholder="输入你的研究问题，Enter 发送，Shift+Enter 换行" aria-label="输入你的研究问题"></textarea>
+              <button id="chat-send" class="primary-button" type="submit">发送</button>
+            </div>
+          </form>
+        </section>
+
+        <section id="settings-view" class="settings-view" hidden>
+          <div id="settings-banner" class="settings-banner" role="status" hidden></div>
+
+          <section class="settings-section">
+            <div class="section-heading">
+              <div>
+                <span class="eyebrow">Model</span>
+                <h2>模型服务</h2>
+              </div>
+              <span id="provider-active-note" class="count-label"></span>
+            </div>
+            <form id="provider-form" class="settings-form">
+              <label class="field-label" for="cfg-base-url">服务地址（HTTPS）</label>
+              <input id="cfg-base-url" name="base_url" type="url" placeholder="https 开头的服务地址" required>
+              <label class="field-label" for="cfg-api-key">API Key</label>
+              <input id="cfg-api-key" name="api_key" type="password" autocomplete="new-password" placeholder="未配置">
+              <p class="field-hint">密钥只写入本地配置文件，不会显示在页面或日志中；留空保持现有值不变。</p>
+              <div class="settings-model-grid">
+                <div>
+                  <label class="field-label" for="cfg-model">Chat 模型</label>
+                  <input id="cfg-model" name="model" type="text" placeholder="例如 qwen3.7-flash" required>
+                </div>
+                <div>
+                  <label class="field-label" for="cfg-embedding">Embedding 模型</label>
+                  <input id="cfg-embedding" name="embedding_model" type="text" placeholder="例如 text-embedding-v4">
+                </div>
+                <div>
+                  <label class="field-label" for="cfg-reranker">Reranker 模型</label>
+                  <input id="cfg-reranker" name="reranker_model" type="text" placeholder="例如 qwen3-rerank">
+                </div>
+              </div>
+              <p id="test-result" class="test-result" role="status"></p>
+              <p id="settings-error" class="form-error" role="alert" hidden></p>
+              <div class="dialog-actions settings-actions">
+                <button id="test-provider" class="quiet-button" type="button">测试连接</button>
+                <button id="save-provider" class="primary-button" type="submit">保存</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="settings-section">
+            <div class="section-heading">
+              <div>
+                <span class="eyebrow">Checks</span>
+                <h2>系统检查</h2>
+              </div>
+            </div>
+            <div id="settings-checks" class="check-list"></div>
+          </section>
+
+          <section class="settings-section">
+            <div class="section-heading">
+              <div>
+                <span class="eyebrow">Data</span>
+                <h2>数据目录</h2>
+              </div>
+            </div>
+            <dl id="settings-paths" class="settings-paths"></dl>
+          </section>
+
+          <section class="settings-section">
+            <div class="section-heading">
+              <div>
+                <span class="eyebrow">Budget</span>
+                <h2>运行预算</h2>
+              </div>
+            </div>
+            <p id="settings-budget" class="settings-note"></p>
+            <p class="field-hint">按 Run 记录 token、工具调用与检索轮次预算；统一预算中心随后续里程碑交付。</p>
+          </section>
+
+          <section class="settings-section">
+            <div class="section-heading">
+              <div>
+                <span class="eyebrow">About</span>
+                <h2>关于</h2>
+              </div>
+            </div>
+            <p class="settings-note">Conflux-Weave 本地研究工作台 · v0.3。修改模型配置后需重启 <code>conflux-weave serve</code> 生效；文档、项目、知识分区将随后续里程碑上线。</p>
+          </section>
+        </section>
+
         <section id="empty-view" class="empty-view">
           <p class="eyebrow">Research query · 01</p>
           <h1>提出一个研究问题</h1>
@@ -207,7 +379,7 @@
             <span class="eyebrow">New research</span>
             <h2>新建研究</h2>
           </div>
-          <button class="icon-button" value="cancel" formmethod="dialog" type="submit" aria-label="关闭" title="关闭">
+          <button class="icon-button" value="cancel" formmethod="dialog" formnovalidate type="submit" aria-label="关闭" title="关闭">
             <!-- Icon: x (lucide-static v1.34.0, ISC License) -->
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
           </button>
@@ -253,7 +425,7 @@
         </div>
         <p id="task-error" class="form-error" role="alert" hidden></p>
         <footer class="dialog-actions">
-          <button class="quiet-button" value="cancel" formmethod="dialog" type="submit">取消</button>
+          <button class="quiet-button" value="cancel" formmethod="dialog" formnovalidate type="submit">取消</button>
           <button id="submit-task" class="primary-button" type="button">创建 Run</button>
         </footer>
       </form>
@@ -266,7 +438,7 @@
             <span class="eyebrow">Follow-up run</span>
             <h2>继续研究</h2>
           </div>
-          <button class="icon-button" value="cancel" formmethod="dialog" type="submit" aria-label="关闭" title="关闭">
+          <button class="icon-button" value="cancel" formmethod="dialog" formnovalidate type="submit" aria-label="关闭" title="关闭">
             <!-- Icon: x (lucide-static v1.34.0, ISC License) -->
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
           </button>
@@ -275,7 +447,7 @@
         <textarea id="follow-up-question" rows="5" maxlength="2000" required></textarea>
         <p id="follow-up-error" class="form-error" role="alert" hidden></p>
         <footer class="dialog-actions">
-          <button class="quiet-button" value="cancel" formmethod="dialog" type="submit">取消</button>
+          <button class="quiet-button" value="cancel" formmethod="dialog" formnovalidate type="submit">取消</button>
           <button id="submit-follow-up" class="primary-button" type="button">创建新 Run</button>
         </footer>
       </form>

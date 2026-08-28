@@ -192,6 +192,51 @@ def test_workbench_is_packaged_same_origin_without_external_assets(tmp_path) -> 
     assert "ISC License" in notices
 
 
+def test_workbench_ux1_sections_are_local_and_wired(tmp_path) -> None:
+    from pathlib import Path
+
+    app, _, _ = build_completed_app(tmp_path)
+    index_response = asyncio.run(route(app, "/")())
+    index = index_response.path.read_text(encoding="utf-8")
+    workbench_root = index_response.path.parent
+    modules = (workbench_root / "modules")
+    module_sources = {
+        item.name: item.read_text(encoding="utf-8")
+        for item in sorted(modules.glob("*.js"))
+    }
+    shared = module_sources.get("shared.js", "")
+    router = module_sources.get("router.js", "")
+    overview = module_sources.get("overview.js", "")
+    chat = module_sources.get("chat.js", "")
+    settings = module_sources.get("settings.js", "")
+
+    assert {"shared.js", "router.js", "overview.js", "chat.js", "settings.js"} <= set(module_sources)
+    assert 'id="overview-view"' in index
+    assert 'id="chat-view"' in index
+    assert 'id="settings-view"' in index
+    assert 'data-section-link="overview"' in index
+    assert 'data-section-link="chat"' in index
+    assert 'data-section-link="research"' in index
+    assert 'data-section-link="settings"' in index
+    assert 'id="provider-form"' in index
+    assert 'id="cfg-api-key" name="api_key" type="password"' in index
+    assert 'id="chat-input"' in index
+    assert 'id="overview-checks"' in index
+
+    assert 'from "./modules/shared.js"' in (workbench_root / "app.js").read_text(encoding="utf-8")
+    assert "initRouter" in (workbench_root / "app.js").read_text(encoding="utf-8")
+    assert "registerView" in router and "hashchange" in router
+    assert "/api/v1/health/ready" in overview
+    assert "/api/v1/config" in settings and "/api/v1/config/provider" in settings
+    assert "/api/v1/tasks/verified-research" in chat
+    assert "/follow-up" in chat
+    assert "EventSource" in chat
+
+    combined = "".join(module_sources.values())
+    assert "http://" not in combined
+    assert "https://" not in combined
+
+
 def test_workbench_w55_layout_and_keyboard_contracts_are_local_and_responsive() -> None:
     from pathlib import Path
 

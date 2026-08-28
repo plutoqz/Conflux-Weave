@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import mimetypes
+import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -21,14 +22,26 @@ from conflux_weave.api_contracts import (
     ArtifactContentResponse,
     FixtureResearchTaskRequest,
     FollowUpResearchTaskRequest,
+    ProviderConfigResponse,
+    ProviderConfigTestRequest,
+    ProviderConfigTestResponse,
+    ProviderConfigUpdateRequest,
+    ProviderConfigUpdateResponse,
     ResearchTaskAcceptedResponse,
     ResearchTaskRequest,
     RunDetailResponse,
     RunEventPageResponse,
     RunPageResponse,
-    WorkbenchQueryService,
     VerifiedResearchTaskRequest,
+    WorkbenchConfigResponse,
+    WorkbenchQueryService,
     map_exception,
+)
+from conflux_weave.config_store import (
+    ConfigValidationError,
+    ProviderConfigView,
+    _read_values,
+    update_provider,
 )
 from conflux_weave.harness.contracts import TaskSubmission
 from conflux_weave.harness.fixture_runtime import ResearchFixtureRuntime
@@ -106,6 +119,8 @@ def create_app(
     provider_configured: bool = False,
     worker: WorkerLoop | None = None,
     poll_interval_seconds: float = 0.25,
+    dotenv_path: Path | None = None,
+    config_paths: dict[str, str] | None = None,
 ) -> FastAPI:
     """Build the one ASGI application around injected authoritative components."""
 
@@ -374,6 +389,113 @@ def create_app(
     async def live_health() -> dict[str, str]:
         return {"status": "ok"}
 
+    def _provider_view() -> ProviderConfigResponse:
+        view = ProviderConfigView.from_env(dotenv_path) if dotenv_path else None
+        if view is None:
+            return ProviderConfigResponse(
+                base_url="", model="", embedding_model="", reranker_model="",
+                api_key_configured=False, api_key_hint=None,
+            )
+        return ProviderConfigResponse(
+            base_url=view.base_url,
+            model=view.model,
+            embedding_model=view.embedding_model,
+            reranker_model=view.reranker_model,
+            api_key_configured=view.api_key_configured,
+            api_key_hint=view.api_key_hint,
+        )
+
+    @app.get("/api/v1/config", response_model=WorkbenchConfigResponse)
+    async def get_config():
+        try:
+            return WorkbenchConfigResponse(
+                provider=_provider_view(),
+                provider_active=provider_configured,
+                paths=config_paths or {},
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.put(
+        "/api/v1/config/provider",
+        response_model=ProviderConfigUpdateResponse,
+    )
+    async def put_provider_config(request: ProviderConfigUpdateRequest):
+        try:
+            if dotenv_path is None:
+                raise ConfigValidationError("此实例未启用配置持久化，无法保存。")
+            view = update_provider(
+                dotenv_path,
+                base_url=request.base_url,
+                api_key=request.api_key,
+                model=request.model,
+                embedding_model=request.embedding_model,
+                reranker_model=request.reranker_model,
+            )
+            return ProviderConfigUpdateResponse(
+                provider=ProviderConfigResponse(
+                    base_url=view.base_url,
+                    model=view.model,
+                    embedding_model=view.embedding_model,
+                    reranker_model=view.reranker_model,
+                    api_key_configured=view.api_key_configured,
+                    api_key_hint=view.api_key_hint,
+                ),
+                requires_restart=True,
+                message="Provider 配置已保存。",
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post(
+        "/api/v1/config/provider/test",
+        response_model=ProviderConfigTestResponse,
+    )
+    async def test_provider_config(request: ProviderConfigTestRequest):
+        stored = _read_values(dotenv_path) if dotenv_path else {}
+        base_url = request.base_url or stored.get("CONFLUX_WEAVE_PROVIDER_BASE_URL", "")
+        api_key = request.api_key or stored.get("CONFLUX_WEAVE_PROVIDER_API_KEY", "")
+        model = request.model or stored.get("CONFLUX_WEAVE_PROVIDER_MODEL", "")
+        missing = [
+            name for name, value in (
+                ("服务地址", base_url), ("API Key", api_key), ("Chat 模型", model),
+            ) if not value.strip()
+        ]
+        if missing:
+            return ProviderConfigTestResponse(
+                ok=False,
+                message="请先完整填写：" + "、".join(missing) + "。",
+            )
+        try:
+            from conflux_weave.provider import OpenAICompatibleChatAdapter, ProviderConfig
+
+            config = ProviderConfig(
+                base_url=base_url.strip().rstrip("/"),
+                api_key=api_key.strip(),
+                model=model.strip(),
+            )
+            adapter = OpenAICompatibleChatAdapter(
+                repository.artifact_store,
+                config,
+                timeout_seconds=20.0,
+            )
+            started = time.monotonic()
+            await asyncio.to_thread(
+                adapter.complete,
+                system_prompt="You are a connection test for the Conflux-Weave workbench.",
+                user_prompt="Reply with the single word: ok",
+                max_output_tokens=8,
+                producer_step_id="step-provider-config-test",
+            )
+            latency_ms = int((time.monotonic() - started) * 1000)
+            return ProviderConfigTestResponse(
+                ok=True,
+                message="模型服务可连通。",
+                latency_ms=latency_ms,
+            )
+        except Exception as exc:
+            return ProviderConfigTestResponse(ok=False, message=str(exc) or "连接失败。")
+
     @app.get("/api/v1/health/ready")
     async def ready_health():
         return query_service.readiness(provider_configured=provider_configured)
@@ -481,6 +603,15 @@ def build_local_app(
         repository,
         orchestrator,
         provider_configured=provider_configured,
+        dotenv_path=dotenv_path,
+        config_paths={
+            "database": str(database),
+            "artifact_root": str(artifact_root),
+            "workspace_root": str(workspace_root),
+            "corpus_manifest": str(corpus_manifest),
+            "lancedb_root": str(lancedb_root),
+            "dotenv": str(dotenv_path) if dotenv_path else "",
+        },
     )
 
 

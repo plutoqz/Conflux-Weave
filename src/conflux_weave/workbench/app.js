@@ -1,6 +1,20 @@
-const $ = (selector) => document.querySelector(selector);
+import {
+  $,
+  api,
+  familyLabels,
+  formatDate,
+  modeLabels,
+  renderAnswer,
+  showToast,
+  stateLabels,
+} from "./modules/shared.js";
+import { initRouter, navigate, registerView, replaceHash } from "./modules/router.js";
+import "./modules/overview.js";
+import "./modules/chat.js";
+import "./modules/settings.js";
 
 const state = {
+  bootstrapped: false,
   runs: [],
   nextCursor: null,
   selected: null,
@@ -18,63 +32,6 @@ const state = {
 
 const INSPECTOR_MEDIA = "(min-width: 1024px)";
 const inspectorMedia = window.matchMedia(INSPECTOR_MEDIA);
-
-const stateLabels = {
-  pending: "等待处理",
-  working: "研究中",
-  needs_attention: "需要决定",
-  cancelling: "正在取消",
-  complete: "已完成",
-  partial: "部分完成",
-  failed: "未完成",
-  cancelled: "已取消",
-  expired: "已过期",
-};
-
-const familyLabels = {
-  paper_discovery: "论文发现",
-  research_fixture: "离线研究验证",
-  verified_paper_research: "核验研究",
-  managed_verified_research: "Manager 研究",
-};
-
-const modeLabels = {
-  discovery: "论文获取",
-  single: "单 Agent",
-  managed: "Manager 协作",
-  fixture: "离线验证",
-};
-
-async function api(path, options = {}) {
-  const response = await fetch(path, {
-    ...options,
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-  });
-  const payload = await response.json().catch(() => null);
-  if (!response.ok) {
-    const error = new Error(payload?.message || "请求未能完成。");
-    error.recoveryAction = payload?.recovery_action;
-    throw error;
-  }
-  return payload;
-}
-
-function formatDate(value, detailed = false) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("zh-CN", detailed
-    ? { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }
-    : { month: "numeric", day: "numeric" }).format(date);
-}
-
-function showToast(message) {
-  const toast = $("#toast");
-  toast.textContent = message;
-  toast.hidden = false;
-  clearTimeout(showToast.timer);
-  showToast.timer = setTimeout(() => { toast.hidden = true; }, 4200);
-}
 
 function makeRunItem(run) {
   const button = document.createElement("button");
@@ -112,7 +69,7 @@ async function loadRuns({ append = false } = {}) {
   const latest = state.runs[0];
   $("#hud-activity").textContent = latest ? formatDate(latest.updated_at, true) : "—";
   if (!append && !state.selected && state.runs.length) await selectRun(state.runs[0].run_id);
-  if (!state.runs.length) {
+  if (!state.runs.length && $(".app-shell").dataset.section === "research") {
     $("#empty-view").hidden = false;
     $("#run-view").hidden = true;
   }
@@ -241,25 +198,6 @@ async function loadDelivery(run) {
     $("#answer-empty span").textContent = error.message;
   } finally {
     $("#answer-loading").hidden = true;
-  }
-}
-
-function renderAnswer(node, content, mediaType) {
-  node.replaceChildren();
-  if (mediaType.startsWith("text/markdown")) {
-    const [firstLine, ...remaining] = content.split("\n");
-    if (firstLine.startsWith("# ")) {
-      const heading = document.createElement("h2");
-      heading.textContent = firstLine.slice(2).trim();
-      node.append(heading);
-      content = remaining.join("\n").trim();
-    }
-  }
-  if (content) {
-    const body = document.createElement("div");
-    body.className = "answer-body";
-    body.textContent = content;
-    node.append(body);
   }
 }
 
@@ -432,6 +370,7 @@ async function selectRun(runId) {
     renderRun(run);
     await loadDelivery(run);
     connectEvents(run);
+    replaceHash(`#/research/${encodeURIComponent(runId)}`);
   } catch (error) { showToast(error.message); }
 }
 
@@ -545,6 +484,9 @@ async function submitTask() {
     errorNode.hidden = true;
     await loadRuns();
     await selectRun(accepted.run_id);
+    if ($(".app-shell").dataset.section !== "research") {
+      navigate(`#/research/${encodeURIComponent(accepted.run_id)}`);
+    }
   } catch (error) {
     errorNode.textContent = error.recoveryAction || error.message;
     errorNode.hidden = false;
@@ -625,7 +567,9 @@ function updateTaskMode() {
 }
 
 $("#new-task").addEventListener("click", openTaskDialog);
-$("[data-open-task]").addEventListener("click", openTaskDialog);
+document.querySelectorAll("[data-open-task]").forEach((button) => {
+  button.addEventListener("click", openTaskDialog);
+});
 $("#load-more").addEventListener("click", () => loadRuns({ append: true }));
 $("#submit-task").addEventListener("click", submitTask);
 document.querySelectorAll('input[name="task_mode"]').forEach((input) => {
@@ -661,4 +605,29 @@ $("#follow-up-form").addEventListener("submit", (event) => {
   if (event.submitter?.value !== "cancel") event.preventDefault();
 });
 
-await Promise.all([checkHealth(), loadRuns()]).catch((error) => showToast(error.message));
+async function mountResearch(param) {
+  if (!state.bootstrapped) {
+    state.bootstrapped = true;
+    if (param) await selectRun(param);
+    await loadRuns();
+  } else if (state.selected) {
+    await selectRun(state.selected.run_id);
+  } else {
+    await loadRuns();
+  }
+  if (param && param !== state.selected?.run_id) await selectRun(param);
+}
+
+registerView("research", {
+  mount: mountResearch,
+  onParam: async (param) => {
+    if (param && param !== state.selected?.run_id) await selectRun(param);
+  },
+  unmount: async () => {
+    closeEvents();
+    closeInspector(false);
+  },
+});
+
+checkHealth().catch((error) => showToast(error.message));
+initRouter();

@@ -407,3 +407,60 @@ UX-0 is archived under
 `docs/plans/completed/v0.3/`. Firefox/WebKit and native screen-reader validation remain
 uncovered; image extraction, OCR, image embedding and multimodal retrieval remain P2 work.
 The next acceptance point is P2.0 image-asset and lineage scope freeze.
+
+UX-1 (workbench overview, unified conversation entry and configuration center) is
+`implemented_and_validated_browser_and_regression` as of 2026-08-28. The user approved
+three decisions up front: top-bar section navigation (overview/chat/research/settings,
+non-research sections hide the left column), a usable conversation prototype rather than
+a placeholder (a question creates a real verified-research Run with SSE progress and
+delivery rendering in the chat stream), and future sections (documents/projects/knowledge)
+stay hidden until they ship. New hash routes are `#/overview` (default), `#/chat`,
+`#/research`, `#/research/<run_id>` and `#/settings`; selecting a Run syncs the address
+and refresh/share restores the view. The overview shows the three real readiness checks
+with recovery guidance, a not-ready configuration alert linking to settings, usage steps
+and the five most recent Runs; Knowledge/Projects stay absent rather than faked. The
+settings view edits Provider base URL, API key (write-only, masked hint, blank keeps the
+current value) and Chat/Embedding/Reranker model IDs, offers a connection test, and
+states explicitly that a restart of `conflux-weave serve` is required because Provider
+configuration is read once at process start.
+
+The backend gains `src/conflux_weave/config_store.py` plus three additive routes:
+`GET /api/v1/config` (sanitized provider view, `provider_active`, read-only data paths),
+`PUT /api/v1/config/provider` (HTTPS validation, atomic dotenv write preserving
+comments/unrelated lines, `requires_restart: true`) and `POST /api/v1/config/provider/test`
+(one small chat call reusing the existing adapter; the response never contains the API
+key). The existing 16 endpoints, SSE protocol, RunStatus enums, SQLite schema and
+Agent/Provider/Orchestrator paths are unchanged. The workbench frontend is now split into
+local ES modules (`modules/shared|router|overview|chat|settings.js`) with `app.js`
+remaining the research view and entry; all prior DOM IDs and test anchors are preserved
+and the frozen Moss design tokens/print details are reused. No framework, component
+library or CDN was introduced.
+
+Focused tests (`test_workbench` 4, `test_config_api` 8, plus `test_api_contracts` and
+`test_server`) passed, followed by the full regression (`345 passed in 35.82s`; only the
+existing Windows cache/temporary-directory warnings). Browser verification
+(`scripts/verify_ux1_workbench.mjs` against the offline fixture server
+`scripts/serve_ux1_fixture.py`) covered all four sections at five viewports with zero
+horizontal overflow and zero console errors, 200% zoom, the not-ready alert, a full
+offline fixture conversation flow (submit → SSE → delivery text and boundary summary →
+deep link into the research view), settings masked echo/save-restart banner and
+deep-link refresh restore. The UX-0 regression script and DOM layout audit were re-run
+green after adapting their entry points to `#/research` (the default landing is now the
+overview). Evidence is under `var/acceptance/v0.3-ux1/final/`. UX-1 remains a mechanism
+delivery: it does not add the P4 unified conversation router, config hot reload,
+Memory, Skill/MCP or multimodal capabilities, and Firefox/WebKit plus native
+screen-reader validation remain uncovered. The next acceptance point is P2.0
+image-asset and lineage scope freeze.
+
+First user feedback on the live system (2026-08-28, same day) produced three fixes,
+re-verified with the full regression plus the ux1/ux0/audit browser scripts:
+overview guidance copy was reduced to one line and the three-step text guide card was
+removed (usability must come from layout, not explanatory paragraphs; the overview now
+pairs two action buttons with the systems/recent-cards grid), the chat composer mode
+switch no longer collapses (the base `.mode-switch` block later in the stylesheet
+overrode the chat variant; the override now uses a higher-specificity selector, a fixed
+two-column width and a non-shrinking fieldset), and the new-research/follow-up dialogs'
+close and cancel buttons submit with `formnovalidate` so a required empty field no
+longer blocks closing. A startup health check now runs on every landing view instead of
+only on first research mount, so the topbar status is correct on the overview default
+route. Asset cache strings were bumped accordingly (`?v=v0.3-ux1-6`).

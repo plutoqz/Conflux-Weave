@@ -1,0 +1,384 @@
+/* 统一对话入口（v1 雏形）：提问即创建核验研究 Run，事件流与交付以对话形式呈现。
+   P4 统一对话路由就绪后仅替换提交入口，UI 合同不变。 */
+
+import { api, familyLabels, formatDate, modeLabels, renderAnswer, showToast, stateLabels } from "./shared.js";
+import { registerView } from "./router.js";
+
+const TERMINAL_STATES = new Set(["complete", "partial", "failed", "cancelled", "expired"]);
+const VERIFIED_FAMILIES = new Set(["verified_paper_research", "managed_verified_research"]);
+const HISTORY_LIMIT = 6;
+const DEFAULT_PLACEHOLDER = "输入你的研究问题，Enter 发送，Shift+Enter 换行";
+
+const thread = document.getElementById("chat-thread");
+const threadEmpty = document.getElementById("chat-thread-empty");
+const input = document.getElementById("chat-input");
+const errorNode = document.getElementById("chat-error");
+const sendButton = document.getElementById("chat-send");
+
+const watches = new Map();
+let followParent = null;
+
+function autoGrow(node) {
+  node.style.height = "auto";
+  node.style.height = `${Math.min(node.scrollHeight, 160)}px`;
+}
+
+function scrollThread() {
+  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  window.scrollTo({ top: document.documentElement.scrollHeight, behavior: reduced ? "auto" : "smooth" });
+}
+
+function showChatError(message) {
+  errorNode.textContent = message;
+  errorNode.hidden = false;
+}
+
+function appendUserMessage(text, time) {
+  const article = document.createElement("article");
+  article.className = "chat-msg user";
+  const header = document.createElement("header");
+  const label = document.createElement("span");
+  label.className = "chat-msg-label";
+  label.textContent = "你";
+  const stamp = document.createElement("time");
+  stamp.textContent = formatDate(time, true);
+  header.append(label, stamp);
+  const body = document.createElement("div");
+  body.className = "chat-msg-body";
+  body.textContent = text;
+  article.append(header, body);
+  thread.append(article);
+  return article;
+}
+
+function createAgentArticle(runId) {
+  const article = document.createElement("article");
+  article.className = "chat-msg agent";
+  article.dataset.runId = runId;
+  const header = document.createElement("header");
+  const label = document.createElement("span");
+  label.className = "chat-msg-label";
+  label.textContent = "研究 Run";
+  const time = document.createElement("time");
+  header.append(label, time);
+  const status = document.createElement("div");
+  status.className = "chat-status";
+  status.setAttribute("role", "status");
+  const body = document.createElement("div");
+  body.className = "chat-msg-body";
+  const foot = document.createElement("footer");
+  foot.className = "chat-msg-foot";
+  foot.hidden = true;
+  article.append(header, status, body, foot);
+  return { article, label, time, status, body, foot };
+}
+
+async function fetchAnswerText(detail) {
+  const artifactIds = detail.delivery?.artifact_ids || [];
+  if (!artifactIds.length) return null;
+  const artifacts = await Promise.all(artifactIds.map((artifactId) =>
+    api(`/api/v1/runs/${encodeURIComponent(detail.run_id)}/artifacts/${encodeURIComponent(artifactId)}/content`)
+  ));
+  const report = artifacts.find((item) => item.artifact.media_type.startsWith("text/")) || artifacts[0];
+  let content = report.content;
+  if (report.artifact.media_type.includes("json")) {
+    const parsed = JSON.parse(content);
+    content = parsed.answer || parsed.report || JSON.stringify(parsed, null, 2);
+  }
+  return { content, mediaType: report.artifact.media_type };
+}
+
+function detailProgress(detail) {
+  const completed = detail.progress?.completed_steps || 0;
+  const total = detail.progress?.total_steps || 0;
+  const budget = detail.budget || {};
+  const tokens = (budget.input_tokens_used || 0) + (budget.output_tokens_used || 0);
+  return `第 ${completed} / ${total} 步 · ${tokens.toLocaleString("zh-CN")} tokens`;
+}
+
+function renderFinal(agent, detail) {
+  agent.status.hidden = true;
+  agent.label.textContent = `${familyLabels[detail.task_family] || "研究任务"} · ${detail.run_id}`;
+  agent.label.title = detail.run_id;
+  agent.time.textContent = formatDate(detail.updated_at, true);
+
+  if (detail.delivery?.disposition === "no_answer") {
+    agent.body.textContent = "本次研究没有返回可用答案（NO_ANSWER）。这仍是一次成功的 Run：空结果是明确的交付结论。";
+  } else if (detail.state === "failed" && detail.error) {
+    agent.body.textContent = "";
+  }
+
+  const badge = document.createElement("span");
+  badge.className = `mini-state ${detail.state}`;
+  badge.textContent = stateLabels[detail.state] || "状态更新";
+  const meta = document.createElement("span");
+  meta.className = "chat-msg-meta";
+  const delivery = detail.delivery;
+  if (delivery) {
+    const parts = [];
+    if (delivery.evidence_ids.length) parts.push(`${delivery.evidence_ids.length} 条证据`);
+    if (delivery.limitations.length) parts.push(`${delivery.limitations.length} 条限制`);
+    if (delivery.unmet_criteria.length) parts.push(`${delivery.unmet_criteria.length} 条未满足标准`);
+    meta.textContent = parts.join(" · ") || "无证据记录";
+  } else if (detail.error) {
+    meta.textContent = `${detail.error.message}${detail.error.recovery_action ? ` · 建议：${detail.error.recovery_action}` : ""}`;
+  } else {
+    meta.textContent = detail.status_message;
+  }
+  const actions = document.createElement("div");
+  actions.className = "chat-msg-actions";
+  const openRun = document.createElement("button");
+  openRun.type = "button";
+  openRun.className = "quiet-button";
+  openRun.textContent = "在研究中打开";
+  openRun.addEventListener("click", () => {
+    window.location.hash = `#/research/${encodeURIComponent(detail.run_id)}`;
+  });
+  actions.append(openRun);
+  if (delivery && VERIFIED_FAMILIES.has(detail.task_family)) {
+    const follow = document.createElement("button");
+    follow.type = "button";
+    follow.className = "quiet-button";
+    follow.textContent = "继续追问";
+    follow.addEventListener("click", () => setFollow(detail.run_id));
+    actions.append(follow);
+  }
+  agent.foot.replaceChildren(badge, meta, actions);
+  agent.foot.hidden = false;
+}
+
+function makeHandle(agent, detail) {
+  const setEvent = (payload) => {
+    agent.time.textContent = formatDate(payload.created_at, true);
+    agent.status.textContent = payload.message;
+  };
+  const setDetail = (current) => {
+    if (current.state === "needs_attention") {
+      agent.status.textContent = "付费外部调用结果未知，需要你的恢复决定——请前往研究视图处理。";
+      return;
+    }
+    agent.status.textContent = `${stateLabels[current.state] || "状态更新"} · ${detailProgress(current)}`;
+  };
+  return { setEvent, setDetail };
+}
+
+async function renderRunInto(agent, runId) {
+  const detail = await api(`/api/v1/runs/${encodeURIComponent(runId)}`);
+  if (TERMINAL_STATES.has(detail.state)) {
+    renderFinal(agent, detail);
+    if (detail.delivery) {
+      try {
+        const answer = await fetchAnswerText(detail);
+        if (answer) renderAnswer(agent.body, answer.content, answer.mediaType);
+      } catch {
+        agent.body.textContent = "交付结果暂时不可读。";
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
+function closeWatch(runId) {
+  watches.get(runId)?.close();
+}
+
+function watchRun(runId, agent, handle) {
+  closeWatch(runId);
+  let cursor = 0;
+  let source = null;
+  let timer = null;
+  let closed = false;
+  const seen = new Set();
+  const cleanup = () => {
+    closed = true;
+    if (timer) clearTimeout(timer);
+    source?.close();
+    watches.delete(runId);
+  };
+  watches.set(runId, { close: cleanup });
+  const open = () => {
+    if (closed) return;
+    source = new EventSource(`/api/v1/runs/${encodeURIComponent(runId)}/events?after=${cursor}`);
+    for (const kind of ["progress", "status", "recovery"]) {
+      source.addEventListener(kind, receive);
+    }
+    source.onerror = () => {
+      source.close();
+      if (closed) return;
+      timer = setTimeout(open, 500);
+    };
+  };
+  const receive = async (event) => {
+    let payload;
+    try { payload = JSON.parse(event.data); } catch { return; }
+    if (seen.has(payload.cursor)) return;
+    seen.add(payload.cursor);
+    cursor = Math.max(cursor, Number(payload.cursor) || 0);
+    handle.setEvent(payload);
+    try {
+      const detail = await api(`/api/v1/runs/${encodeURIComponent(runId)}`);
+      if (TERMINAL_STATES.has(detail.state)) {
+        await renderFinalInto(agent, detail);
+        cleanup();
+      } else {
+        handle.setDetail(detail);
+      }
+    } catch {
+      /* 状态读取失败时保留事件行，等待下一条事件重试。 */
+    }
+  };
+  open();
+}
+
+async function renderFinalInto(agent, detail) {
+  renderFinal(agent, detail);
+  if (detail.delivery) {
+    try {
+      const answer = await fetchAnswerText(detail);
+      if (answer) renderAnswer(agent.body, answer.content, answer.mediaType);
+    } catch {
+      agent.body.textContent = "交付结果暂时不可读。";
+    }
+  }
+}
+
+async function loadHistory() {
+  thread.replaceChildren();
+  threadEmpty.hidden = true;
+  const loading = document.createElement("div");
+  loading.className = "skeleton";
+  for (const width of ["46%", "88%", "64%"]) {
+    const line = document.createElement("span");
+    line.className = "skeleton-line";
+    line.style.width = width;
+    loading.append(line);
+  }
+  thread.append(loading);
+  try {
+    const page = await api("/api/v1/runs?limit=20");
+    const items = (page.items || [])
+      .filter((item) => VERIFIED_FAMILIES.has(item.task_family))
+      .slice(0, HISTORY_LIMIT)
+      .reverse();
+    if (!items.length) {
+      thread.replaceChildren();
+      threadEmpty.hidden = false;
+      return;
+    }
+    for (const item of items) {
+      let detail = null;
+      try {
+        detail = await api(`/api/v1/runs/${encodeURIComponent(item.run_id)}`);
+      } catch { continue; }
+      const question = detail.research_context?.follow_up_question || detail.query || "未命名研究";
+      appendUserMessage(question, detail.created_at);
+      const agent = createAgentArticle(item.run_id);
+      agent.label.textContent = `${familyLabels[detail.task_family] || "研究任务"} · ${detail.run_id}`;
+      agent.label.title = detail.run_id;
+      agent.time.textContent = formatDate(detail.updated_at, true);
+      if (detail.research_context?.mode) {
+        const mode = document.createElement("span");
+        mode.className = "chat-msg-mode";
+        mode.textContent = modeLabels[detail.research_context.mode] || "";
+        agent.label.before(mode);
+      }
+      thread.append(agent.article);
+      if (TERMINAL_STATES.has(detail.state)) {
+        await renderFinalInto(agent, detail);
+      } else {
+        agent.status.textContent = detail.status_message;
+        watchRun(item.run_id, agent, makeHandle(agent, detail));
+      }
+    }
+    scrollThread();
+  } catch (error) {
+    thread.replaceChildren();
+    threadEmpty.hidden = false;
+    showToast(error.message);
+  } finally {
+    loading.remove();
+  }
+}
+
+function setFollow(runId) {
+  followParent = runId;
+  document.getElementById("chat-follow-chip").hidden = false;
+  document.getElementById("chat-follow-label").textContent = `追问上下文 · ${runId}`;
+  document.getElementById("chat-mode-fieldset").hidden = true;
+  input.placeholder = "继续追问（将创建一个新的独立 Run，不继承父 Run 结论）";
+  autoGrow(input);
+  input.focus();
+}
+
+function clearFollow() {
+  followParent = null;
+  document.getElementById("chat-follow-chip").hidden = true;
+  document.getElementById("chat-mode-fieldset").hidden = false;
+  input.placeholder = DEFAULT_PLACEHOLDER;
+}
+
+async function submit() {
+  const question = input.value.trim();
+  if (!question) {
+    showChatError("请输入你的问题。");
+    return;
+  }
+  errorNode.hidden = true;
+  sendButton.disabled = true;
+  try {
+    let accepted;
+    if (followParent) {
+      accepted = await api(`/api/v1/runs/${encodeURIComponent(followParent)}/follow-up`, {
+        method: "POST",
+        body: JSON.stringify({ question }),
+      });
+      clearFollow();
+    } else {
+      const mode = document.querySelector('input[name="chat_mode"]:checked')?.value || "single";
+      accepted = await api("/api/v1/tasks/verified-research", {
+        method: "POST",
+        body: JSON.stringify({ objective: question, mode }),
+      });
+    }
+    input.value = "";
+    autoGrow(input);
+    appendUserMessage(question, new Date().toISOString());
+    const agent = createAgentArticle(accepted.run_id);
+    agent.label.textContent = `研究 Run · ${accepted.run_id}`;
+    agent.label.title = accepted.run_id;
+    agent.status.textContent = "任务已保存，正在等待处理。";
+    thread.append(agent.article);
+    threadEmpty.hidden = true;
+    scrollThread();
+    watchRun(accepted.run_id, agent, makeHandle(agent, null));
+  } catch (error) {
+    showChatError(error.recoveryAction || error.message);
+  } finally {
+    sendButton.disabled = false;
+  }
+}
+
+document.getElementById("chat-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  submit();
+});
+input.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    submit();
+  }
+});
+input.addEventListener("input", () => {
+  errorNode.hidden = true;
+  autoGrow(input);
+});
+document.getElementById("chat-clear-follow").addEventListener("click", clearFollow);
+
+registerView("chat", {
+  mount: loadHistory,
+  unmount: async () => {
+    for (const { close } of [...watches.values()]) close();
+    watches.clear();
+  },
+});

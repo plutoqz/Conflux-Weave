@@ -19,7 +19,8 @@ page.on("console", (message) => {
 });
 page.on("pageerror", (error) => consoleErrors.push(error.message));
 
-await page.goto(baseUrl, { waitUntil: "networkidle" });
+// UX-1 起默认落地为总览；本脚本继续验证研究视图契约，显式进入研究分区。
+await page.goto(`${baseUrl}/#/research`, { waitUntil: "networkidle" });
 await page.locator("#run-state").waitFor({ state: "visible" });
 
 const runPage = await (await fetch(`${baseUrl}/api/v1/runs?limit=100`)).json();

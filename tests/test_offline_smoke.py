@@ -40,7 +40,13 @@ def test_offline_smoke_closes_run_delivery_citation_and_workbench(tmp_path) -> N
     assert result["answer_contains_citation"] is True
     assert result["citation_count"] == result["evidence_count"] == 2
     assert result["artifact_media_type"] == "application/json"
-    assert result["workbench_assets"] == ["app.js", "index.html", "styles.css"]
+    assert result["workbench_assets"] == [
+        "THIRD_PARTY_NOTICES.md",
+        "app.js",
+        "index.html",
+        "modules/",
+        "styles.css",
+    ]
 
 
 def test_offline_smoke_output_is_json_serializable(tmp_path, capsys) -> None:

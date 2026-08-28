@@ -148,7 +148,10 @@ def run_smoke(data_root: Path) -> dict[str, Any]:
     metadata, content = service.read_delivery_artifact(run.run_id, report.artifact_id)
     evidence = tuple(service.get_evidence(run.run_id, item["evidence_id"]) for item in payload["evidence"])
     workbench_root = importlib.resources.files("conflux_weave").joinpath("workbench")
-    assets = tuple(path.name for path in workbench_root.iterdir())
+    assets = sorted(
+        path.name if path.is_file() else f"{path.name}/"
+        for path in workbench_root.iterdir()
+    )
     content_payload = json.loads(content)
     if content_payload["label"] != SMOKE_LABEL:
         raise RuntimeError("offline smoke delivery label mismatch")

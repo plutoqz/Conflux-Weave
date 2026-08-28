@@ -103,8 +103,10 @@ def test_w5_server_uses_one_lifespan_worker_and_one_packaged_workbench() -> None
     assert "EventSourceResponse" not in server
     workbench = PACKAGE_ROOT / "workbench"
     assert sorted(path.name for path in workbench.iterdir()) == [
+        "THIRD_PARTY_NOTICES.md",
         "app.js",
         "index.html",
+        "modules",
         "styles.css",
     ]
     assert "StaticFiles" in server

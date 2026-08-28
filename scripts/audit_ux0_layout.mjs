@@ -13,7 +13,8 @@ await fs.mkdir(outputRoot, { recursive: true });
 
 const browser = await chromium.launch({ headless: true, executablePath });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-await page.goto(baseUrl, { waitUntil: "networkidle" });
+// UX-1 起默认落地为总览；本审计针对研究视图布局，显式进入研究分区。
+await page.goto(`${baseUrl}/#/research`, { waitUntil: "networkidle" });
 await page.locator("#run-state").waitFor({ state: "visible" });
 
 const audit = await page.evaluate(() => {
