@@ -381,4 +381,29 @@ information hierarchy, complete Run-state coverage, evidence inspection, respons
 keyboard accessibility and browser verification. It explicitly excludes API/Runtime changes,
 image extraction, OCR, image embedding and multimodal retrieval. S1 is archived under
 `docs/plans/completed/v0.3/`; the next single acceptance point is UX-0.0 baseline and design
-freeze, not visual implementation. UX-0 execution still requires an explicit user entry instruction.
+freeze, not visual implementation. At that checkpoint UX-0 execution still required an explicit
+user entry instruction; it was subsequently authorized and completed as recorded below.
+
+UX-0 completed on 2026-08-28 with status `validated_browser_and_regression` at implementation
+revision `2cac2fe`. The Workbench now provides the frozen compact information hierarchy,
+complete Run action matrix, desktop Evidence inspector and mobile dialog, responsive history,
+HUD, local Lucide icon subset, mutation protection, keyboard tab navigation and focus return.
+An asynchronous SSE guard prevents an old Run detail response from replacing a newly selected
+Run. Runtime, API, SQLite and Agent/Evidence authority contracts are unchanged.
+
+Focused Workbench/API contracts passed (`18 passed`), followed by the full regression
+(`336 passed in 174.20s`). Deterministic browser acceptance covered nine Run states, a real
+fixture cancellation transition, four keyboard paths, 200% zoom and five viewports. Persisted
+S1.6-C history replay verified both an evidence-backed complete Run
+`run-cfe157759ab24bea9c1efb28f0e30899` and no-answer Run
+`run-cdc8cdc1ca3c4ac6b379e5716c5aecad` without creating, replaying or resuming a Provider Run.
+Horizontal overflow, console errors and DOM occlusions were all zero. The wheel/sdist SHA-256
+values are `cdc3b532abb164a3f5648b12dddb9a6c96d6bff17a002073aa99180b8f64c861` and
+`5e74f49b2a72761e900b6ee6983ea55b53f82d4938d518e9d0fab556ef1c3c83`.
+
+The ignored machine-readable record is `var/acceptance/v0.3-ux0/ux0-final-closure.json`;
+its SHA-256 is `524cc7b815a4539fffcb28ffd8a6b4d01c38de29b912987f9a282f587b6a3049`.
+UX-0 is archived under
+`docs/plans/completed/v0.3/`. Firefox/WebKit and native screen-reader validation remain
+uncovered; image extraction, OCR, image embedding and multimodal retrieval remain P2 work.
+The next acceptance point is P2.0 image-asset and lineage scope freeze.
