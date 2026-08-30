@@ -1,0 +1,748 @@
+"""Verified-claim report Writer with independent faithfulness audit (spec W1/W2a).
+
+The Writer reorganizes accepted Claims into a readable report document. It may
+connect and summarize but never add facts: paragraph-level claim closure, digit
+drift check (C5) and an independent audit gate every cited paragraph, and any
+failure degrades the delivery back to the v1 atomic-claim report. W2a adds a
+Chinese fact-card distillation pass so the Writer reads digested Chinese cards
+instead of raw English quotes, decoupling comprehension from expression.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import asdict, dataclass, replace
+
+from conflux_weave.evidence import (
+    Citation,
+    Claim,
+    EvidenceRef,
+    ReportBackground,
+    ReportDocument,
+    ReportParagraph,
+    ReportSection,
+    unreferenced_claim_ids,
+)
+from conflux_weave.provider import OpenAICompatibleChatAdapter
+from conflux_weave.runtime import LocalArtifactStore
+
+
+REPORT_DOCUMENT_SCHEMA = "conflux-weave.research-report-document.v3"
+EVIDENCE_CARDS_SCHEMA = "conflux-weave.evidence-cards.v1"
+PARAGRAPH_AUDITS_SCHEMA = "conflux-weave.writer-paragraph-audits.v1"
+WRITER_PROMPT_VERSION = "writer-zh-cards-v1"
+
+WRITER_MAX_OUTPUT_TOKENS = 4096
+AUDIT_MAX_OUTPUT_TOKENS = 2000
+DISTILL_MAX_OUTPUT_TOKENS = 4096
+WRITER_TEMPERATURE = 0.2
+MAX_SECTIONS = 8
+MAX_PARAGRAPHS_PER_SECTION = 8
+MAX_CLAIMS_PER_PARAGRAPH = 10
+MAX_OPEN_QUESTIONS = 8
+MAX_BACKGROUND_ITEMS = 6
+MAX_BACKGROUND_HEADING_CHARS = 200
+MAX_TEXT_CHARS = 4000
+MAX_HEADING_CHARS = 200
+MAX_QUESTION_CHARS = 500
+MAX_CARDS = 16
+MAX_CARD_SUMMARY_CHARS = 2000
+MAX_CARD_KEY_POINTS = 8
+MAX_CARD_KEY_POINT_CHARS = 500
+MAX_CARD_TERMS = 12
+MAX_CARD_TERM_CHARS = 100
+MAX_CARD_SCOPE_CHARS = 500
+
+DISTILL_SYSTEM_PROMPT = (
+    "You are a bilingual research distiller. You receive verified Claims and their "
+    "Evidence quotes (usually English academic text). For every Evidence quote "
+    "produce exactly one structured Chinese fact card. Return exactly this JSON "
+    "object shape: "
+    '{"cards":[{"evidence_id":"evidence-0001","zh_summary":"中文要点总结",'
+    '"zh_key_points":["中文要点"],"terms":[{"en":"term","zh":"术语"}],'
+    '"scope_limits":"适用范围与局限"}]} '
+    "The root must contain only cards, and there must be exactly one card per "
+    "supplied evidence_id. Summarize in your own natural Chinese; never translate "
+    "sentence by sentence and never mirror the original word order. Preserve every "
+    "qualification, condition, scope and limitation from the original. Copy "
+    "numbers and identifiers verbatim. terms lists the English terms that need a "
+    "standard Chinese translation with your recommended translation, so the report "
+    "uses one consistent Chinese term per concept. scope_limits states what the "
+    "evidence does not cover. Cards must not add facts absent from the quote. "
+    "Do not output Markdown."
+)
+
+WRITER_STYLE_RULES = (
+    "Style and formatting rules (mandatory): "
+    "State the judgment first, then support it; every section must end with a "
+    "conclusion, never stop abruptly. Use clear Chinese subjects; avoid passive-"
+    "voice chains and paper-abstract phrasing. Keep paragraphs to three to five "
+    "sentences and mix short narrative paragraphs with concise lists; never "
+    "alternate text walls with bullet dumps. Attribution must be specific to the "
+    "cited claim (which method or paper shows it), never vague phrasing like "
+    "“研究表明”. Preserve every condition, scope and uncertainty stated in the "
+    "claims; do not drop qualifiers. Terminology: on first mention use the "
+    "standard Chinese term from the terminology table followed by the English in "
+    "parentheses, 中文（English）. Short Markdown lists are allowed; fenced code "
+    "blocks are allowed only for concrete examples that exist in the supplied "
+    "material. Markdown tables are forbidden. Do not write citation markers "
+    "yourself; the renderer appends them."
+)
+
+WRITER_TRANSLATION_ESE_BANS = (
+    "Forbidden translation-ese patterns: sentence-by-sentence mirroring of the "
+    "source order; abstract-style framing such as “本文提出了一种…用于解决…”; stacked "
+    "“的”-chains such as “基于…的…的…”; three or more consecutive passive sentences."
+)
+
+WRITER_CARD_INSTRUCTIONS = (
+    "Your input contains Chinese evidence cards distilled from the source quotes "
+    "plus the authoritative verified Claims. Write from the Chinese cards so the "
+    "report reads as native analysis, not translation; the cited paragraphs remain "
+    "bound to the Claims. If a card seems to conflict with a Claim, follow the "
+    "Claim. Copy numbers verbatim; every digit you write in a cited paragraph must "
+    "literally appear in the cited Claim or its source quote."
+)
+
+WRITER_QUOTE_INSTRUCTIONS = (
+    "Your input contains the verified Claims and their source quotes. Every "
+    "factual statement in a cited paragraph must be entailed by the Claims it "
+    "cites and their Evidence. Copy numbers verbatim; every digit you write in a "
+    "cited paragraph must literally appear in the cited Claim or its source quote."
+)
+
+AUDIT_SYSTEM_PROMPT = (
+    "You are an independent report faithfulness auditor. You receive the objective, "
+    "the verified Claims, their Evidence quotes, closed Citations, and every report "
+    "paragraph flattened with the Claim IDs it cites. For every paragraph return "
+    "exactly this JSON object shape: "
+    '{"audits":[{"section_index":0,"paragraph_index":0,'
+    '"verdict":"supported|unsupported","rationale":"why"}]} '
+    "The root must contain only audits. Audit the summary as section_index 0, "
+    "paragraph_index 0. Use supported only when every factual statement in the "
+    "paragraph is entailed by the cited Claims and their Evidence quotes; use "
+    "unsupported when the paragraph introduces any fact, number, date, name, "
+    "comparison, or causal claim beyond them. Cover every paragraph exactly once "
+    "and provide a non-empty rationale for each verdict."
+)
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceCard:
+    evidence_id: str
+    zh_summary: str
+    zh_key_points: tuple[str, ...]
+    terms: tuple[tuple[str, str], ...]
+    scope_limits: str
+
+
+@dataclass(frozen=True, slots=True)
+class DistillOutcome:
+    cards: tuple[EvidenceCard, ...]
+    status: str  # "ok" | "failed"
+    reason: str | None = None
+    cards_artifact_id: str | None = None
+    request_artifact_id: str | None = None
+    response_artifact_id: str | None = None
+
+
+def distill_evidence_cards(
+    store: LocalArtifactStore,
+    chat: OpenAICompatibleChatAdapter,
+    claims: tuple[Claim, ...],
+    evidence: tuple[EvidenceRef, ...],
+    citations: tuple[Citation, ...],
+    *,
+    step_id: str = "s1-research-distill",
+) -> DistillOutcome:
+    """Distill Chinese fact cards; every failure degrades to quote-fed writing."""
+
+    completion = None
+    try:
+        completion = chat.complete(
+            system_prompt=DISTILL_SYSTEM_PROMPT,
+            user_prompt=json.dumps(
+                {
+                    "claims": [
+                        {"claim_id": item.claim_id, "text": item.text} for item in claims
+                    ],
+                    "evidence": [
+                        {"evidence_id": item.evidence_id, "quote": item.quote}
+                        for item in evidence
+                    ],
+                    "citations": [
+                        {
+                            "display_index": item.display_index,
+                            "claim_id": item.claim_id,
+                            "evidence_id": item.evidence_id,
+                        }
+                        for item in citations
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            max_output_tokens=DISTILL_MAX_OUTPUT_TOKENS,
+            temperature=0.0,
+            json_object=True,
+            enable_thinking=False,
+            producer_step_id=step_id,
+        )
+        cards = _parse_cards(completion.content, evidence)
+        cards_ref = store.put_json(
+            {
+                "schema_version": EVIDENCE_CARDS_SCHEMA,
+                "cards": [
+                    {
+                        "evidence_id": card.evidence_id,
+                        "zh_summary": card.zh_summary,
+                        "zh_key_points": list(card.zh_key_points),
+                        "terms": [{"en": en, "zh": zh} for en, zh in card.terms],
+                        "scope_limits": card.scope_limits,
+                    }
+                    for card in cards
+                ],
+            },
+            producer_step_id=step_id,
+            schema_version=EVIDENCE_CARDS_SCHEMA,
+        )
+        return DistillOutcome(
+            cards=cards,
+            status="ok",
+            cards_artifact_id=cards_ref.artifact_id,
+            request_artifact_id=completion.request_artifact.artifact_id,
+            response_artifact_id=completion.response_artifact.artifact_id,
+        )
+    except Exception as exc:  # noqa: BLE001 - 卡片失败回退引文直读，不阻断交付
+        outcome = DistillOutcome(cards=(), status="failed", reason=f"evidence card distillation failed: {exc}")
+        if completion is not None:
+            outcome = replace(
+                outcome,
+                request_artifact_id=completion.request_artifact.artifact_id,
+                response_artifact_id=completion.response_artifact.artifact_id,
+            )
+        return outcome
+
+
+def _parse_cards(content: str, evidence: tuple[EvidenceRef, ...]) -> tuple[EvidenceCard, ...]:
+    payload = json.loads(content)
+    if not isinstance(payload, dict) or set(payload) != {"cards"} or not isinstance(payload["cards"], list):
+        raise ValueError("distiller output must contain only cards")
+    known = {item.evidence_id for item in evidence}
+    if len(payload["cards"]) != len(known):
+        raise ValueError(f"distiller must return exactly one card per evidence ({len(known)})")
+    seen = set()
+    cards = []
+    for index, raw in enumerate(payload["cards"]):
+        if not isinstance(raw, dict) or set(raw) != {
+            "evidence_id",
+            "zh_summary",
+            "zh_key_points",
+            "terms",
+            "scope_limits",
+        }:
+            raise ValueError(f"card {index} has an invalid schema")
+        evidence_id = raw["evidence_id"]
+        if evidence_id not in known or evidence_id in seen:
+            raise ValueError(f"card {index} must reference each evidence exactly once")
+        seen.add(evidence_id)
+        zh_summary = raw["zh_summary"]
+        if not isinstance(zh_summary, str) or not zh_summary.strip() or len(zh_summary) > MAX_CARD_SUMMARY_CHARS:
+            raise ValueError(f"card {index} zh_summary must be a bounded non-empty string")
+        key_points = raw["zh_key_points"]
+        if not isinstance(key_points, list) or len(key_points) > MAX_CARD_KEY_POINTS:
+            raise ValueError(f"card {index} must have at most {MAX_CARD_KEY_POINTS} key points")
+        points = []
+        for point in key_points:
+            if not isinstance(point, str) or not point.strip() or len(point) > MAX_CARD_KEY_POINT_CHARS:
+                raise ValueError(f"card {index} key point must be a bounded non-empty string")
+            points.append(point.strip())
+        raw_terms = raw["terms"]
+        if not isinstance(raw_terms, list) or len(raw_terms) > MAX_CARD_TERMS:
+            raise ValueError(f"card {index} must have at most {MAX_CARD_TERMS} terms")
+        terms = []
+        for term in raw_terms:
+            if not isinstance(term, dict) or set(term) != {"en", "zh"}:
+                raise ValueError(f"card {index} term has an invalid schema")
+            en, zh = term["en"], term["zh"]
+            if (
+                not isinstance(en, str) or not en.strip() or len(en) > MAX_CARD_TERM_CHARS
+                or not isinstance(zh, str) or not zh.strip() or len(zh) > MAX_CARD_TERM_CHARS
+            ):
+                raise ValueError(f"card {index} term must be bounded non-empty strings")
+            terms.append((en.strip(), zh.strip()))
+        scope = raw["scope_limits"]
+        if not isinstance(scope, str) or len(scope) > MAX_CARD_SCOPE_CHARS:
+            raise ValueError(f"card {index} scope_limits must be a bounded string")
+        cards.append(EvidenceCard(evidence_id, zh_summary.strip(), tuple(points), tuple(terms), scope.strip()))
+    return tuple(cards)
+
+
+def _writer_system_prompt(with_cards: bool) -> str:
+    return (
+        "You are a research report Writer. You receive an objective, Verifier-accepted "
+        "Claims and report material. Compose a readable, rich research report. "
+        "Write every text field in the same language as the objective. Quality bar: the "
+        "summary answers the objective directly in two to five sentences; organize the "
+        "body into two to six thematic sections (mechanisms, comparisons, workflows, "
+        "examples); each paragraph synthesizes several related Claims and prefers "
+        "concrete details and examples from the supplied material over abstraction. "
+        "Every claim_ids list must be non-empty, duplicate-free, and reference only "
+        "supplied Claim IDs. background is explicitly model-knowledge supplementation "
+        "for concepts the material does not fully cover: definitions, terminology, "
+        "common mechanisms, and typical workflows only. Background items must be "
+        "conceptual explanations without specific statistics, dates, prices, or "
+        "benchmark numbers, must not contradict the cited content, and are never "
+        "evidence. Summarize every supplied Claim somewhere in the cited sections. "
+        "open_questions lists what the corpus could not answer. "
+        + (WRITER_CARD_INSTRUCTIONS if with_cards else WRITER_QUOTE_INSTRUCTIONS)
+        + " "
+        + WRITER_STYLE_RULES
+        + " "
+        + WRITER_TRANSLATION_ESE_BANS
+        + " Return EXACTLY this JSON object shape and nothing else: "
+        '{"summary":{"text":"direct answer summary","claim_ids":["claim-0001"]},'
+        '"sections":[{"heading":"section heading",'
+        '"paragraphs":[{"text":"paragraph text","claim_ids":["claim-0001"]}]}],'
+        '"background":[{"heading":"background heading","text":"model-knowledge explanation"}],'
+        '"open_questions":["open question"]} '
+        "The root must contain exactly summary, sections, background, and open_questions; "
+        "every section is {\"heading\": string, \"paragraphs\": list} and every paragraph "
+        "is {\"text\": string, \"claim_ids\": list of 1-10 Claim IDs}; no extra keys anywhere."
+    )
+
+
+DIGIT_PATTERN = re.compile(r"\d+(?:\.\d+)?")
+LIST_MARKER_PATTERN = re.compile(r"^\s*(?:[-*+]|\d+\.)\s+")
+CITATION_MARKER_PATTERN = re.compile(r"\[\d+\]")
+
+
+def _digit_runs(text: str) -> list[str]:
+    lines = []
+    for line in text.splitlines():
+        while True:
+            stripped = LIST_MARKER_PATTERN.sub("", line)
+            if stripped == line:
+                break
+            line = stripped
+        lines.append(line)
+    cleaned = CITATION_MARKER_PATTERN.sub(" ", "\n".join(lines))
+    return DIGIT_PATTERN.findall(cleaned)
+
+
+def _require_no_digit_drift(
+    document: ReportDocument,
+    claims: tuple[Claim, ...],
+    evidence: tuple[EvidenceRef, ...],
+    citations: tuple[Citation, ...],
+) -> None:
+    """C5: every digit in a cited paragraph must exist in its sources verbatim."""
+
+    claim_by_id = {claim.claim_id: claim for claim in claims}
+    evidence_by_id = {item.evidence_id: item for item in evidence}
+    evidence_by_claim: dict[str, set[str]] = {}
+    for citation in citations:
+        evidence_by_claim.setdefault(citation.claim_id, set()).add(citation.evidence_id)
+    paragraphs = [(0, 0, document.summary)]
+    for section_index, section in enumerate(document.sections, 1):
+        for paragraph_index, paragraph in enumerate(section.paragraphs):
+            paragraphs.append((section_index, paragraph_index, paragraph))
+    for section_index, paragraph_index, paragraph in paragraphs:
+        allowed: set[str] = set()
+        for claim_id in paragraph.claim_ids:
+            allowed.update(DIGIT_PATTERN.findall(claim_by_id[claim_id].text))
+            for evidence_id in evidence_by_claim.get(claim_id, ()):
+                allowed.update(DIGIT_PATTERN.findall(evidence_by_id[evidence_id].quote))
+        drift = [digit for digit in _digit_runs(paragraph.text) if digit not in allowed]
+        if drift:
+            raise ValueError(
+                f"digit drift in section {section_index} paragraph {paragraph_index}: {drift[:5]}"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class WriterOutcome:
+    document: ReportDocument | None
+    status: str
+    reason: str | None
+    warnings: tuple[str, ...]
+    document_artifact_id: str | None = None
+    audit_artifact_id: str | None = None
+    writer_request_artifact_id: str | None = None
+    writer_response_artifact_id: str | None = None
+    audit_request_artifact_id: str | None = None
+    audit_response_artifact_id: str | None = None
+
+
+def compose_report_document(
+    store: LocalArtifactStore,
+    chat: OpenAICompatibleChatAdapter,
+    objective: str,
+    claims: tuple[Claim, ...],
+    evidence: tuple[EvidenceRef, ...],
+    citations: tuple[Citation, ...],
+    *,
+    cards: tuple[EvidenceCard, ...] = (),
+    writer_step_id: str = "s1-research-write",
+    audit_step_id: str = "s1-research-write-audit",
+) -> WriterOutcome:
+    """Compose the verified-claim report; every failure degrades, none raises."""
+
+    writer_completion = None
+    audit_completion = None
+    try:
+        writer_material = (
+            {
+                "objective": objective,
+                "claims": [
+                    {"claim_id": item.claim_id, "text": item.text} for item in claims
+                ],
+                "cards": [
+                    {
+                        "evidence_id": card.evidence_id,
+                        "zh_summary": card.zh_summary,
+                        "zh_key_points": list(card.zh_key_points),
+                        "terms": [{"en": en, "zh": zh} for en, zh in card.terms],
+                        "scope_limits": card.scope_limits,
+                    }
+                    for card in cards
+                ],
+                "citations": [
+                    {
+                        "display_index": item.display_index,
+                        "claim_id": item.claim_id,
+                        "evidence_id": item.evidence_id,
+                    }
+                    for item in citations
+                ],
+            }
+            if cards
+            else {
+                "objective": objective,
+                "claims": [
+                    {"claim_id": item.claim_id, "text": item.text} for item in claims
+                ],
+                "evidence": [
+                    {"evidence_id": item.evidence_id, "quote": item.quote}
+                    for item in evidence
+                ],
+                "citations": [
+                    {
+                        "display_index": item.display_index,
+                        "claim_id": item.claim_id,
+                        "evidence_id": item.evidence_id,
+                    }
+                    for item in citations
+                ],
+            }
+        )
+        writer_completion = chat.complete(
+            system_prompt=_writer_system_prompt(with_cards=bool(cards)),
+            user_prompt=json.dumps(writer_material, ensure_ascii=False),
+            max_output_tokens=WRITER_MAX_OUTPUT_TOKENS,
+            temperature=WRITER_TEMPERATURE,
+            json_object=True,
+            enable_thinking=False,
+            producer_step_id=writer_step_id,
+        )
+        try:
+            document = _parse_writer_payload(writer_completion.content, claims, objective)
+        except ValueError as schema_error:
+            # 一次 schema 规范化重试：只修格式，全部质量门照旧把关（W2a 冻结）。
+            repair_instruction = (
+                "Your previous output violated the report schema. Return ONLY the exact "
+                f"JSON object with no extra keys. The violation was: {schema_error}. "
+                "Remember: root keys exactly summary, sections, background, open_questions; "
+                'every section is {"heading": string, "paragraphs": list of '
+                '{"text": string, "claim_ids": list}}; every paragraph cites 1-10 Claims.'
+            )
+            writer_completion = chat.complete(
+                system_prompt=_writer_system_prompt(with_cards=bool(cards)) + " " + repair_instruction,
+                user_prompt=json.dumps(
+                    {**writer_material, "previous_invalid_output": writer_completion.content[:2000]},
+                    ensure_ascii=False,
+                ),
+                max_output_tokens=WRITER_MAX_OUTPUT_TOKENS,
+                temperature=WRITER_TEMPERATURE,
+                json_object=True,
+                enable_thinking=False,
+                producer_step_id=f"{writer_step_id}-repair",
+            )
+            document = _parse_writer_payload(writer_completion.content, claims, objective)
+        _require_no_digit_drift(document, claims, evidence, citations)
+        omitted = unreferenced_claim_ids(document, claims)
+        if 2 * len(omitted) > len(claims):
+            return _degraded(
+                f"writer omitted {len(omitted)} of {len(claims)} verified Claims",
+                writer_completion=writer_completion,
+            )
+        warnings: tuple[str, ...] = ()
+        if omitted:
+            warnings = (
+                f"Writer 未引用 {len(omitted)} 条已验证 Claim，已由确定性代码汇总到「补充发现」。",
+            )
+        document = replace(
+            document, unreferenced_claim_ids=omitted, warnings=warnings
+        )
+        paragraphs = _flatten_paragraphs(document)
+        audit_completion = chat.complete(
+            system_prompt=AUDIT_SYSTEM_PROMPT,
+            user_prompt=json.dumps(
+                {
+                    "objective": objective,
+                    "claims": [
+                        {"claim_id": item.claim_id, "text": item.text} for item in claims
+                    ],
+                    "evidence": [
+                        {"evidence_id": item.evidence_id, "quote": item.quote}
+                        for item in evidence
+                    ],
+                    "citations": [
+                        {
+                            "display_index": item.display_index,
+                            "claim_id": item.claim_id,
+                            "evidence_id": item.evidence_id,
+                        }
+                        for item in citations
+                    ],
+                    "paragraphs": [
+                        {
+                            "section_index": section_index,
+                            "paragraph_index": paragraph_index,
+                            "text": paragraph.text,
+                            "claim_ids": list(paragraph.claim_ids),
+                        }
+                        for section_index, paragraph_index, paragraph in paragraphs
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            max_output_tokens=AUDIT_MAX_OUTPUT_TOKENS,
+            temperature=0.0,
+            json_object=True,
+            enable_thinking=False,
+            producer_step_id=audit_step_id,
+        )
+        _parse_audit_payload(audit_completion.content, paragraphs)
+        document_ref = store.put_json(
+            {
+                "schema_version": REPORT_DOCUMENT_SCHEMA,
+                "writer_prompt_version": WRITER_PROMPT_VERSION,
+                "objective": document.objective,
+                "summary": asdict(document.summary),
+                "sections": [
+                    {
+                        "heading": section.heading,
+                        "paragraphs": [asdict(item) for item in section.paragraphs],
+                    }
+                    for section in document.sections
+                ],
+                "background": [asdict(item) for item in document.background],
+                "open_questions": list(document.open_questions),
+                "unreferenced_claim_ids": list(document.unreferenced_claim_ids),
+                "warnings": list(document.warnings),
+            },
+            producer_step_id=writer_step_id,
+            schema_version=REPORT_DOCUMENT_SCHEMA,
+        )
+        audits_ref = store.put_json(
+            {
+                "schema_version": PARAGRAPH_AUDITS_SCHEMA,
+                "paragraph_count": len(paragraphs),
+                "content": audit_completion.content,
+            },
+            producer_step_id=audit_step_id,
+            schema_version=PARAGRAPH_AUDITS_SCHEMA,
+        )
+        return WriterOutcome(
+            document=document,
+            status="ok",
+            reason=None,
+            warnings=warnings,
+            document_artifact_id=document_ref.artifact_id,
+            audit_artifact_id=audits_ref.artifact_id,
+            writer_request_artifact_id=writer_completion.request_artifact.artifact_id,
+            writer_response_artifact_id=writer_completion.response_artifact.artifact_id,
+            audit_request_artifact_id=audit_completion.request_artifact.artifact_id,
+            audit_response_artifact_id=audit_completion.response_artifact.artifact_id,
+        )
+    except Exception as exc:  # noqa: BLE001 - degrade, never abort delivery
+        return _degraded(
+            f"report writer failed: {exc}",
+            writer_completion=writer_completion,
+            audit_completion=audit_completion,
+        )
+
+
+def _degraded(
+    reason: str,
+    *,
+    writer_completion=None,
+    audit_completion=None,
+) -> WriterOutcome:
+    outcome = WriterOutcome(document=None, status="degraded", reason=reason, warnings=())
+    if writer_completion is not None:
+        outcome = replace(
+            outcome,
+            writer_request_artifact_id=writer_completion.request_artifact.artifact_id,
+            writer_response_artifact_id=writer_completion.response_artifact.artifact_id,
+        )
+    if audit_completion is not None:
+        outcome = replace(
+            outcome,
+            audit_request_artifact_id=audit_completion.request_artifact.artifact_id,
+            audit_response_artifact_id=audit_completion.response_artifact.artifact_id,
+        )
+    return outcome
+
+
+def _parse_writer_payload(
+    content: str, claims: tuple[Claim, ...], objective: str
+) -> ReportDocument:
+    payload = json.loads(content)
+    if not isinstance(payload, dict) or set(payload) != {
+        "summary",
+        "sections",
+        "background",
+        "open_questions",
+    }:
+        raise ValueError(
+            "writer output must contain exactly summary, sections, background, and open_questions"
+        )
+    summary = _parse_paragraph(payload["summary"], claims, "summary")
+    raw_sections = payload["sections"]
+    if not isinstance(raw_sections, list) or not 1 <= len(raw_sections) <= MAX_SECTIONS:
+        raise ValueError(f"writer sections must contain between 1 and {MAX_SECTIONS} items")
+    sections = []
+    for index, raw_section in enumerate(raw_sections):
+        if not isinstance(raw_section, dict) or set(raw_section) != {"heading", "paragraphs"}:
+            raise ValueError(f"writer section {index} has an invalid schema")
+        heading = raw_section["heading"]
+        if not isinstance(heading, str) or not heading.strip() or len(heading) > MAX_HEADING_CHARS:
+            raise ValueError(f"writer section {index} heading must be a bounded non-empty string")
+        raw_paragraphs = raw_section["paragraphs"]
+        if (
+            not isinstance(raw_paragraphs, list)
+            or not 1 <= len(raw_paragraphs) <= MAX_PARAGRAPHS_PER_SECTION
+        ):
+            raise ValueError(
+                f"writer section {index} must contain between 1 and {MAX_PARAGRAPHS_PER_SECTION} paragraphs"
+            )
+        paragraphs = tuple(
+            _parse_paragraph(raw_paragraph, claims, f"section {index} paragraph {paragraph_index}")
+            for paragraph_index, raw_paragraph in enumerate(raw_paragraphs)
+        )
+        sections.append(ReportSection(heading.strip(), paragraphs))
+    raw_questions = payload["open_questions"]
+    if not isinstance(raw_questions, list) or len(raw_questions) > MAX_OPEN_QUESTIONS:
+        raise ValueError(f"writer open_questions must be a list of at most {MAX_OPEN_QUESTIONS} items")
+    questions = []
+    for index, question in enumerate(raw_questions):
+        if not isinstance(question, str) or not question.strip() or len(question) > MAX_QUESTION_CHARS:
+            raise ValueError(f"writer open question {index} must be a bounded non-empty string")
+        questions.append(question.strip())
+    background = _parse_background(payload["background"])
+    return ReportDocument(
+        objective=objective,
+        summary=summary,
+        sections=tuple(sections),
+        open_questions=tuple(questions),
+        background=background,
+    )
+
+
+def _parse_background(raw: object) -> tuple[ReportBackground, ...]:
+    if not isinstance(raw, list) or len(raw) > MAX_BACKGROUND_ITEMS:
+        raise ValueError(f"writer background must be a list of at most {MAX_BACKGROUND_ITEMS} items")
+    items = []
+    for index, raw_item in enumerate(raw):
+        if not isinstance(raw_item, dict) or set(raw_item) != {"heading", "text"}:
+            raise ValueError(f"writer background item {index} has an invalid schema")
+        heading = raw_item["heading"]
+        text = raw_item["text"]
+        if (
+            not isinstance(heading, str)
+            or not heading.strip()
+            or len(heading) > MAX_BACKGROUND_HEADING_CHARS
+        ):
+            raise ValueError(f"writer background item {index} heading must be a bounded non-empty string")
+        if not isinstance(text, str) or not text.strip() or len(text) > MAX_TEXT_CHARS:
+            raise ValueError(f"writer background item {index} text must be a bounded non-empty string")
+        items.append(ReportBackground(heading.strip(), text.strip()))
+    return tuple(items)
+
+
+def _parse_paragraph(
+    raw: object, claims: tuple[Claim, ...], label: str
+) -> ReportParagraph:
+    if not isinstance(raw, dict) or set(raw) != {"text", "claim_ids"}:
+        raise ValueError(f"writer {label} has an invalid schema")
+    text = raw["text"]
+    if not isinstance(text, str) or not text.strip() or len(text) > MAX_TEXT_CHARS:
+        raise ValueError(f"writer {label} text must be a bounded non-empty string")
+    raw_claim_ids = raw["claim_ids"]
+    if not isinstance(raw_claim_ids, list) or not 1 <= len(raw_claim_ids) <= MAX_CLAIMS_PER_PARAGRAPH:
+        raise ValueError(f"writer {label} must cite between 1 and {MAX_CLAIMS_PER_PARAGRAPH} Claims")
+    claim_ids = tuple(str(value) for value in raw_claim_ids)
+    known = {item.claim_id for item in claims}
+    if len(claim_ids) != len(set(claim_ids)):
+        raise ValueError(f"writer {label} repeats a Claim reference")
+    unknown = [value for value in claim_ids if value not in known]
+    if unknown:
+        raise ValueError(f"writer {label} references unknown Claims: {', '.join(unknown)}")
+    return ReportParagraph(text.strip(), claim_ids)
+
+
+def _flatten_paragraphs(
+    document: ReportDocument,
+) -> list[tuple[int, int, ReportParagraph]]:
+    flattened = [(0, 0, document.summary)]
+    for section_index, section in enumerate(document.sections, 1):
+        for paragraph_index, paragraph in enumerate(section.paragraphs):
+            flattened.append((section_index, paragraph_index, paragraph))
+    return flattened
+
+
+def _parse_audit_payload(
+    content: str, paragraphs: list[tuple[int, int, ReportParagraph]]
+) -> None:
+    payload = json.loads(content)
+    if not isinstance(payload, dict) or set(payload) != {"audits"}:
+        raise ValueError("audit output must contain only audits")
+    raw_audits = payload["audits"]
+    if not isinstance(raw_audits, list):
+        raise ValueError("audit output must contain only audits")
+    expected = {(section_index, paragraph_index) for section_index, paragraph_index, _ in paragraphs}
+    seen = set()
+    unsupported = []
+    for raw in raw_audits:
+        if not isinstance(raw, dict) or set(raw) != {
+            "section_index",
+            "paragraph_index",
+            "verdict",
+            "rationale",
+        }:
+            raise ValueError("audit item has an invalid schema")
+        section_index = raw["section_index"]
+        paragraph_index = raw["paragraph_index"]
+        verdict = raw["verdict"]
+        rationale = raw["rationale"]
+        if not isinstance(section_index, int) or not isinstance(paragraph_index, int):
+            raise ValueError("audit indices must be integers")
+        if (section_index, paragraph_index) in seen:
+            raise ValueError("audit must cover every paragraph exactly once")
+        seen.add((section_index, paragraph_index))
+        if verdict not in {"supported", "unsupported"}:
+            raise ValueError("audit verdict must be supported or unsupported")
+        if not isinstance(rationale, str) or not rationale.strip():
+            raise ValueError("audit rationale must be a non-empty string")
+        if verdict == "unsupported":
+            unsupported.append((section_index, paragraph_index, rationale.strip()))
+    if seen != expected:
+        raise ValueError("audit must cover every paragraph exactly once")
+    if unsupported:
+        section_index, paragraph_index, rationale = unsupported[0]
+        raise ValueError(
+            "audit rejected paragraph "
+            f"section {section_index} paragraph {paragraph_index}: {rationale}"
+        )

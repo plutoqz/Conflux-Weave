@@ -72,3 +72,34 @@ class Citation:
     claim_id: str
     evidence_id: str
     display_index: int
+
+
+@dataclass(frozen=True, slots=True)
+class ReportParagraph:
+    text: str
+    claim_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ReportBackground:
+    """Model-knowledge supplement; never claim-linked and never audited (W1.5)."""
+
+    heading: str
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class ReportSection:
+    heading: str
+    paragraphs: tuple[ReportParagraph, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ReportDocument:
+    objective: str
+    summary: ReportParagraph
+    sections: tuple[ReportSection, ...]
+    open_questions: tuple[str, ...] = ()
+    background: tuple[ReportBackground, ...] = ()
+    unreferenced_claim_ids: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()

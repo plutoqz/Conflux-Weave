@@ -319,7 +319,7 @@ def test_verified_workflow_adapter_collects_traceable_provider_usage(tmp_path):
             ),
         ),
     )
-    workflow = SimpleNamespace(execute=lambda objective: result)
+    workflow = SimpleNamespace(execute=lambda objective, **kwargs: result)
 
     execution = VerifiedWorkflowExecutorAdapter(store, workflow)(
         "verified_paper_research", "objective", 4
@@ -338,7 +338,7 @@ def test_verified_workflow_adapter_collects_traceable_provider_usage(tmp_path):
         unmet_criteria=(),
     )
     no_answer_execution = VerifiedWorkflowExecutorAdapter(
-        store, SimpleNamespace(execute=lambda objective: no_answer_result)
+        store, SimpleNamespace(execute=lambda objective, **kwargs: no_answer_result)
     )("verified_paper_research", "objective", 4)
 
     assert no_answer_execution.disposition is DeliveryDisposition.NO_ANSWER

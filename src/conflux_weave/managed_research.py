@@ -132,7 +132,9 @@ class ManagedVerifiedResearchWorkflow:
         requirement_by_id = {item.coverage_id: item for item in requirements}
         subruns = tuple(
             self.worker.execute(
-                self._worker_objective(objective, item, requirement_by_id)
+                self._worker_objective(objective, item, requirement_by_id),
+                enable_writer=False,
+                max_queries=1,
             )
             for item in subquestions
         )

@@ -7,8 +7,16 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Mapping
 
-from conflux_weave.evidence.contracts import Citation, Claim, EvidenceRef
-from conflux_weave.evidence.validation import require_closed_citations
+from conflux_weave.evidence.contracts import (
+    Citation,
+    Claim,
+    EvidenceRef,
+    ReportDocument,
+)
+from conflux_weave.evidence.validation import (
+    require_closed_citations,
+    require_closed_report_document,
+)
 
 
 class EvidenceSupportStatus(StrEnum):
@@ -127,6 +135,17 @@ def render_evidence_report(
     evidence_by_id = {item.evidence_id: item for item in evidence}
     claim_by_id = {claim.claim_id: claim for claim in claims}
     lines.extend(("## Evidence 汇总", ""))
+    lines.extend(_evidence_summary_lines(citations, evidence_by_id, claim_by_id, evidence_trust))
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _evidence_summary_lines(
+    citations: tuple[Citation, ...],
+    evidence_by_id: dict[str, EvidenceRef],
+    claim_by_id: dict[str, Claim],
+    evidence_trust: Mapping[str, SourceTrustLevel],
+) -> list[str]:
+    lines = []
     for citation in citations:
         item = evidence_by_id[citation.evidence_id]
         trust = evidence_trust[item.evidence_id]
@@ -136,4 +155,87 @@ def render_evidence_report(
             f"`{item.evidence_id}`；来源 {TRUST_MARKERS[trust]}；SourceSnapshot "
             f"`{item.source_snapshot_id}`；locator `{locator}`。"
         )
+    return lines
+
+
+REPORT_LEGEND_LINES = (
+    "> 图例：● 有声明级证据；◐ 部分支持；○ 一般背景；! 证据冲突；? 待核验。",
+    "> 来源：A 官方/一手；C 可信二手；G 一般来源；? 来源身份未核验。",
+)
+
+
+def render_report_document(
+    *,
+    title: str,
+    document: ReportDocument,
+    claims: tuple[Claim, ...],
+    evidence: tuple[EvidenceRef, ...],
+    citations: tuple[Citation, ...],
+    evidence_trust: Mapping[str, SourceTrustLevel],
+    limitations: tuple[str, ...] = (),
+) -> str:
+    """Render a Writer-produced report document with inline citation markers."""
+
+    if not title.strip():
+        raise ValueError("report title must not be empty")
+    require_closed_citations(claims, evidence, citations)
+    require_closed_report_document(document, claims)
+    evidence_ids = {item.evidence_id for item in evidence}
+    if set(evidence_trust) != evidence_ids:
+        raise ValueError("evidence_trust must classify every and only known Evidence")
+
+    display_by_claim: dict[str, list[int]] = {}
+    for citation in citations:
+        display_by_claim.setdefault(citation.claim_id, []).append(citation.display_index)
+
+    def markers(claim_ids: tuple[str, ...]) -> str:
+        indexes = sorted(
+            index for claim_id in claim_ids for index in display_by_claim[claim_id]
+        )
+        return "".join(f"[{index}]" for index in indexes)
+
+    lines = [f"# {title}", ""]
+    lines.extend(REPORT_LEGEND_LINES)
+    lines.extend(("", "## 回答摘要", ""))
+    lines.append(f"{document.summary.text} {markers(document.summary.claim_ids)}".rstrip())
+    lines.append("")
+    for section in document.sections:
+        lines.extend((f"## {section.heading}", ""))
+        for paragraph in section.paragraphs:
+            lines.append(f"{paragraph.text} {markers(paragraph.claim_ids)}".rstrip())
+        lines.append("")
+    if document.background:
+        lines.extend(("## 背景补充（模型知识 · 未经证据核验）", ""))
+        for item in document.background:
+            lines.extend((f"### ○ {item.heading}", "", item.text, ""))
+    if document.unreferenced_claim_ids:
+        claim_by_id = {claim.claim_id: claim for claim in claims}
+        lines.extend(("## 补充发现", ""))
+        lines.extend(
+            f"- {claim_by_id[claim_id].text} {markers((claim_id,))}".rstrip()
+            for claim_id in document.unreferenced_claim_ids
+        )
+        lines.append("")
+    if document.open_questions:
+        lines.extend(("## 开放问题", ""))
+        lines.extend(f"- {question}" for question in document.open_questions)
+        lines.append("")
+    if limitations:
+        lines.extend(("## 限制", ""))
+        lines.extend(f"- {item}" for item in limitations)
+        lines.append("")
+    evidence_by_id = {item.evidence_id: item for item in evidence}
+    lines.extend(("## 来源", ""))
+    for citation in citations:
+        item = evidence_by_id[citation.evidence_id]
+        trust = evidence_trust[item.evidence_id]
+        locator = json.dumps(item.locator, ensure_ascii=False, sort_keys=True)
+        lines.append(
+            f"[{citation.display_index}] 来源 {TRUST_MARKERS[trust]} · "
+            f"SourceSnapshot `{item.source_snapshot_id}` · 定位 `{locator}`"
+        )
+    lines.append("")
+    claim_by_id = {claim.claim_id: claim for claim in claims}
+    lines.extend(("### 审计附录（Evidence 汇总）", ""))
+    lines.extend(_evidence_summary_lines(citations, evidence_by_id, claim_by_id, evidence_trust))
     return "\n".join(lines).rstrip() + "\n"

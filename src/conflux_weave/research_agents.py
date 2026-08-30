@@ -10,7 +10,7 @@ from conflux_weave.core import BudgetLedger, DeliveryDisposition
 from conflux_weave.evidence import (
     AnswerBlock, AssessmentVerdict, Citation, Claim, ClaimAssessment,
     EvidenceRef, EvidenceRelation, EvidenceSupportStatus, SourceTrustLevel,
-    render_evidence_report, require_closed_citations,
+    render_evidence_report, render_report_document, require_closed_citations,
 )
 from conflux_weave.harness import (
     AgentProfile, AgentResult, AgentResultStatus, AgentTask, ContextBundle,
@@ -18,9 +18,27 @@ from conflux_weave.harness import (
 )
 from conflux_weave.hybrid_retrieval import HybridRetrievalPipeline, HybridRetrievalRun
 from conflux_weave.provider import OpenAICompatibleChatAdapter
+from conflux_weave.report_writer import WriterOutcome, compose_report_document, distill_evidence_cards
 from conflux_weave.runtime import LocalArtifactStore
 
 RESEARCH_TOOL_ID = "hybrid_paper_retrieval"
+
+# W1.5 frozen quality budgets for the single-Agent path.
+EVIDENCE_LIMIT = 16
+EVIDENCE_QUOTE_CHARS = 3600
+MAX_CANDIDATE_CLAIMS = 12
+MAX_SEARCH_QUERIES = 4
+QUERY_PLAN_TOKENS = 800
+
+QUERY_PLANNER_SYSTEM_PROMPT = (
+    "You plan keyword queries for a hybrid BM25 + dense academic paper retrieval "
+    "system. Return exactly this JSON object shape: {\"queries\":[\"keyword phrase\"]}. "
+    "Provide 1 to max_queries short keyword phrases (each under 200 characters) that "
+    "cover the objective from distinct angles: core mechanism, comparisons, "
+    "evaluation, representative systems. Prefer the field's dominant corpus language "
+    "(English for academic corpora) unless the objective itself is in another "
+    "language. No boolean operators, no facts, no answers to the objective."
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,13 +166,16 @@ class VerifiedResearchWorkflow:
         self.research_profile = AgentProfile("research_agent", "v1", "Evidence-bound paper ResearchAgent", ("verified_paper_research",), (RESEARCH_TOOL_ID,), BudgetLedger(180, 30000, 5000, "provider-price-not-frozen", 3, 1, 1))
         self.verifier_profile = AgentProfile("verifier", "v1", "Independent Claim/Evidence verifier", ("verify_research_claims",), (), BudgetLedger(120, 30000, 4000, "provider-price-not-frozen", 2, 0, 1))
 
-    def execute(self, objective: str) -> ResearchExecution:
+    def execute(self, objective: str, *, enable_writer: bool = True, max_queries: int = 1) -> ResearchExecution:
         if not objective.strip(): raise ValueError("objective must not be empty")
-        plan = ResearchPlan(objective.strip(), (objective.strip(),), 1, 1, "all delivered claims accepted by Verifier")
+        if not 1 <= max_queries <= MAX_SEARCH_QUERIES: raise ValueError(f"max_queries must be between 1 and {MAX_SEARCH_QUERIES}")
+        plan = ResearchPlan(objective.strip(), (objective.strip(),), max_queries, 1, "all delivered claims accepted by Verifier")
         plan_ref = self.store.put_json(asdict(plan), producer_step_id="s1-research-plan", schema_version="conflux-weave.research-plan.v1")
-        run = self.retrieval.search(objective)
-        evidence = self._evidence(run)
-        retrieval_ref = self.store.put_json(self._retrieval_payload(run), producer_step_id="s1-research-retrieval", schema_version="conflux-weave.retrieval-tool-result.v1")
+        queries, query_refs, query_warning = self._plan_queries(objective, max_queries=max_queries)
+        runs = tuple(self.retrieval.search(query) for query in queries)
+        merged_hits = self._merge_hits(runs)
+        evidence = self._evidence(merged_hits)
+        retrieval_ref = self.store.put_json(self._retrieval_payload(queries, runs, merged_hits), producer_step_id="s1-research-retrieval", schema_version="conflux-weave.retrieval-tool-result.v2")
         claims, research_refs = self._draft(objective, evidence, repair=False)
         if not claims:
             return self._no_answer(
@@ -191,11 +212,25 @@ class VerifiedResearchWorkflow:
         citations = tuple(Citation(f"citation-{index:04d}", claim.claim_id, evidence_id, index) for index, (claim, evidence_id) in enumerate(((claim, evidence_id) for claim in accepted_claims for evidence_id in next(item.evidence_ids for item in accepted_assessments if item.claim_id == claim.claim_id)), 1))
         require_closed_citations(accepted_claims, accepted_evidence, citations)
         limitations = self._limitations()
-        report = render_evidence_report(title="Verified paper research", intro_lines=(f"> Objective: {objective}", f"> Plan Artifact: `{plan_ref.artifact_id}`", f"> Retrieval Artifact: `{retrieval_ref.artifact_id}`"), blocks=tuple(AnswerBlock(f"Claim {index}", claim.text, EvidenceSupportStatus.CITED, (claim.claim_id,)) for index, claim in enumerate(accepted_claims, 1)), claims=accepted_claims, evidence=accepted_evidence, citations=citations, evidence_trust={item.evidence_id: SourceTrustLevel.GENERAL_SOURCE for item in accepted_evidence}, limitations=limitations)
-        report_ref = self.store.put_bytes(report.encode("utf-8"), media_type="text/markdown; charset=utf-8", producer_step_id="s1-research-deliver", schema_version="conflux-weave.verified-research-report.v1")
+        distill = distill_evidence_cards(self.store, self.chat, accepted_claims, accepted_evidence, citations) if enable_writer else None
+        writer: WriterOutcome | None = (
+            compose_report_document(self.store, self.chat, objective, accepted_claims, accepted_evidence, citations, cards=distill.cards if distill is not None and distill.status == "ok" else ())
+            if enable_writer
+            else None
+        )
+        report_schema_version = "conflux-weave.verified-research-report.v1"
+        if writer is not None and writer.status == "ok":
+            report = render_report_document(title=objective, document=writer.document, claims=accepted_claims, evidence=accepted_evidence, citations=citations, evidence_trust={item.evidence_id: SourceTrustLevel.GENERAL_SOURCE for item in accepted_evidence}, limitations=limitations)
+            report_schema_version = "conflux-weave.verified-research-report.v2"
+        else:
+            if writer is not None:
+                limitations += ("报告写作未通过校验，已降级为证据清单视图。",)
+            report = render_evidence_report(title="Verified paper research", intro_lines=(f"> Objective: {objective}", f"> Plan Artifact: `{plan_ref.artifact_id}`", f"> Retrieval Artifact: `{retrieval_ref.artifact_id}`"), blocks=tuple(AnswerBlock(f"Claim {index}", claim.text, EvidenceSupportStatus.CITED, (claim.claim_id,)) for index, claim in enumerate(accepted_claims, 1)), claims=accepted_claims, evidence=accepted_evidence, citations=citations, evidence_trust={item.evidence_id: SourceTrustLevel.GENERAL_SOURCE for item in accepted_evidence}, limitations=limitations)
+        report_ref = self.store.put_bytes(report.encode("utf-8"), media_type="text/markdown; charset=utf-8", producer_step_id="s1-research-deliver", schema_version=report_schema_version)
         coverage = CoverageReport(len(accepted_evidence), len(claims), len(accepted_claims), len(claims) - len(accepted_claims), repair_rounds, "verified_delivery" if accepted_claims else "no_supported_claim")
         harness_refs = self._harness_trace(objective, plan_ref.artifact_id, retrieval_ref, report_ref, accepted_evidence, coverage)
-        manifest = {"schema_version": "conflux-weave.verified-research-manifest.v1", "objective": objective, "corpus_scope": self.corpus_scope, "disposition": DeliveryDisposition.COMPLETE.value, "profiles": {"research": asdict(self.research_profile), "verifier": asdict(self.verifier_profile)}, "plan_artifact": plan_ref.artifact_id, "retrieval_artifact": retrieval_ref.artifact_id, "model_artifacts": research_refs + verify_refs, "harness_artifacts": harness_refs, "report_artifact": report_ref.artifact_id, "coverage": asdict(coverage), "citation_closure": 1.0, "repair_rounds": repair_rounds, "limitations": list(limitations)}
+        writer_status = writer.status if writer is not None else "disabled"
+        manifest = {"schema_version": "conflux-weave.verified-research-manifest.v1", "objective": objective, "corpus_scope": self.corpus_scope, "disposition": DeliveryDisposition.COMPLETE.value, "profiles": {"research": asdict(self.research_profile), "verifier": asdict(self.verifier_profile)}, "plan_artifact": plan_ref.artifact_id, "retrieval_artifact": retrieval_ref.artifact_id, "model_artifacts": query_refs + research_refs + verify_refs, "harness_artifacts": harness_refs, "report_artifact": report_ref.artifact_id, "coverage": asdict(coverage), "citation_closure": 1.0, "repair_rounds": repair_rounds, "search_queries": list(queries), "query_planning_warning": query_warning, "limitations": list(limitations), "report_contract": "v2" if writer_status == "ok" else "v1", "writer_status": writer_status, "writer_degrade_reason": writer.reason if writer is not None else None, "writer_document_artifact": writer.document_artifact_id if writer_status == "ok" else None, "writer_audit_artifact": writer.audit_artifact_id if writer_status == "ok" else None, "writer_request_artifact": writer.writer_request_artifact_id if writer is not None else None, "writer_response_artifact": writer.writer_response_artifact_id if writer is not None else None, "writer_audit_request_artifact": writer.audit_request_artifact_id if writer is not None else None, "writer_audit_response_artifact": writer.audit_response_artifact_id if writer is not None else None, "writer_warnings": list(writer.warnings) if writer_status == "ok" else [], "unreferenced_claim_ids": list(writer.document.unreferenced_claim_ids) if writer_status == "ok" else [], "distill_status": distill.status if distill is not None else "skipped", "distill_artifact": distill.cards_artifact_id if distill is not None and distill.status == "ok" else None, "distill_request_artifact": distill.request_artifact_id if distill is not None else None, "distill_response_artifact": distill.response_artifact_id if distill is not None else None, "distill_degrade_reason": distill.reason if distill is not None and distill.status == "failed" else None}
         manifest_ref = self.store.put_json(manifest, producer_step_id="s1-research-deliver", schema_version=manifest["schema_version"])
         return ResearchExecution(report_ref.artifact_id, manifest_ref.artifact_id, accepted_claims, accepted_evidence, citations, assessments, coverage, DeliveryDisposition.COMPLETE, limitations)
 
@@ -251,19 +286,65 @@ class VerifiedResearchWorkflow:
             "AcademyHunter metadata is not used as Claim evidence.",
         )
 
-    def _evidence(self, run: HybridRetrievalRun) -> tuple[EvidenceRef, ...]:
+    def _plan_queries(self, objective: str, *, max_queries: int):
+        queries, refs, warning = (objective,), [], None
+        if max_queries <= 1:
+            return queries, refs, warning
+        try:
+            completion = self.chat.complete(
+                system_prompt=QUERY_PLANNER_SYSTEM_PROMPT,
+                user_prompt=json.dumps({"objective": objective, "max_queries": max_queries}, ensure_ascii=False),
+                max_output_tokens=QUERY_PLAN_TOKENS,
+                temperature=0,
+                json_object=True,
+                enable_thinking=False,
+                producer_step_id="s1-research-plan-queries",
+            )
+            payload = json.loads(completion.content)
+            if not isinstance(payload, dict) or set(payload) != {"queries"} or not isinstance(payload["queries"], list):
+                raise ValueError("query planner must return {queries: [...] }")
+            planned = []
+            for item in payload["queries"]:
+                if not isinstance(item, str) or not item.strip() or len(item.strip()) > 200:
+                    raise ValueError("planned queries must be bounded non-empty strings")
+                planned.append(item.strip())
+            merged = [objective]
+            for item in planned:
+                if len(merged) >= max_queries:
+                    break
+                if all(item.casefold() != existing.casefold() for existing in merged):
+                    merged.append(item)
+            queries, refs = tuple(merged), [completion.request_artifact.artifact_id, completion.response_artifact.artifact_id]
+        except Exception as exc:  # 检索规划是免费前置，失败回退单查询，不影响交付底线
+            warning = f"query planning failed; fell back to the objective-only query: {exc}"
+        return queries, refs, warning
+
+    @staticmethod
+    def _merge_hits(runs: tuple[HybridRetrievalRun, ...]):
+        merged: dict[str, object] = {}
+        for run in runs:
+            for hit in run.final.hits:
+                existing = merged.get(hit.document_id)
+                if existing is None or hit.score > existing.score:
+                    merged[hit.document_id] = hit
+        return tuple(sorted(merged.values(), key=lambda hit: hit.score, reverse=True))
+
+    def _evidence(self, merged_hits) -> tuple[EvidenceRef, ...]:
         evidence = []
-        for index, hit in enumerate(run.final.hits[:8], 1):
+        for index, hit in enumerate(merged_hits[:EVIDENCE_LIMIT], 1):
             document = self.retrieval.document_by_id[hit.document_id]
-            evidence.append(EvidenceRef(f"evidence-{index:04d}", hit.source_snapshot_id or "", hit.locator or {}, document.text[:2400], "hybrid-lancedb-rerank-page-chunk-v1"))
+            evidence.append(EvidenceRef(f"evidence-{index:04d}", hit.source_snapshot_id or "", hit.locator or {}, document.text[:EVIDENCE_QUOTE_CHARS], "hybrid-lancedb-rerank-page-chunk-v2"))
         return tuple(evidence)
 
     def _draft(self, objective: str, evidence: tuple[EvidenceRef, ...], *, repair: bool, prior_claims=(), assessments=()):
         context = {"objective": objective, "evidence": [{"evidence_id": item.evidence_id, "quote": item.quote} for item in evidence]}
         if repair: context.update({"prior_claims": [asdict(item) for item in prior_claims], "assessments": [asdict(item) for item in assessments]})
-        completion = self.chat.complete(system_prompt="Return JSON {claims:[{text,evidence_ids}]}. Every claim must be directly entailed by cited evidence. Do not use model knowledge. Keep at most 5 claims." if not repair else "Repair the claims once. Return JSON {claims:[{text,evidence_ids}]}; remove or narrow every rejected/uncertain claim using only supplied evidence.", user_prompt=json.dumps(context, ensure_ascii=False), max_output_tokens=1800, temperature=0, json_object=True, enable_thinking=False, producer_step_id="s1-research-repair" if repair else "s1-research-draft")
+        completion = self.chat.complete(system_prompt="Return JSON {claims:[{text,evidence_ids}]}. Every claim must be directly entailed by cited evidence. Do not use model knowledge. Extract every distinct supportable finding, mechanism, comparison, and example. Keep at most 10 claims." if not repair else "Repair the claims once. Return JSON {claims:[{text,evidence_ids}]}; remove or narrow every rejected/uncertain claim using only supplied evidence.", user_prompt=json.dumps(context, ensure_ascii=False), max_output_tokens=4096, temperature=0, json_object=True, enable_thinking=False, producer_step_id="s1-research-repair" if repair else "s1-research-draft")
         payload = json.loads(completion.content); allowed = {item.evidence_id for item in evidence}; claims=[]
-        for index, item in enumerate(payload.get("claims", []), 1):
+        raw_claims = payload.get("claims", [])
+        if not isinstance(raw_claims, list) or len(raw_claims) > MAX_CANDIDATE_CLAIMS:
+            raise ValueError(f"ResearchAgent must return at most {MAX_CANDIDATE_CLAIMS} claims")
+        for index, item in enumerate(raw_claims, 1):
             ids=item.get("evidence_ids"); text=item.get("text")
             if not isinstance(text,str) or not text.strip() or not isinstance(ids,list) or not ids or any(value not in allowed for value in ids): raise ValueError("ResearchAgent returned invalid Claim/Evidence mapping")
             claims.append(Claim(f"claim-{index:04d}", text.strip(), "research_finding", "primary", "s1-research-repair" if repair else "s1-research-draft"))
@@ -284,9 +365,11 @@ class VerifiedResearchWorkflow:
         return tuple(assessments), [completion.request_artifact.artifact_id,completion.response_artifact.artifact_id,assessment_ref.artifact_id]
 
     @staticmethod
-    def _retrieval_payload(run: HybridRetrievalRun):
+    def _retrieval_payload(queries, runs, merged_hits):
         def rows(result): return [{"chunk_id":hit.document_id,"score":hit.score,"rank":hit.rank,"source_snapshot_id":hit.source_snapshot_id,"locator":hit.locator} for hit in result.hits]
-        return {"query":run.query,"rerank_status":run.rerank_status,"bm25":rows(run.bm25),"dense":rows(run.dense),"hybrid":rows(run.hybrid),"final":rows(run.final),"embedding_request":run.embedding_request_artifact,"embedding_response":run.embedding_response_artifact,"rerank_request":run.rerank_request_artifact,"rerank_response":run.rerank_response_artifact}
+        def run_payload(run): return {"query":run.query,"rerank_status":run.rerank_status,"bm25":rows(run.bm25),"dense":rows(run.dense),"hybrid":rows(run.hybrid),"final":rows(run.final),"embedding_request":run.embedding_request_artifact,"embedding_response":run.embedding_response_artifact,"rerank_request":run.rerank_request_artifact,"rerank_response":run.rerank_response_artifact}
+        merged_rows = [{"chunk_id":hit.document_id,"score":hit.score,"rank":hit.rank,"source_snapshot_id":hit.source_snapshot_id,"locator":hit.locator} for hit in merged_hits]
+        return {"queries":list(queries),"runs":[run_payload(run) for run in runs],"final":merged_rows}
 
     def _harness_trace(self, objective, plan_ref, retrieval_ref, report_ref, evidence, coverage):
         digest = hashlib.sha256(objective.encode()).hexdigest()[:16]; run_id=f"research-run-{digest}"; created_at=datetime.now(UTC).isoformat().replace("+00:00","Z"); refs=[]

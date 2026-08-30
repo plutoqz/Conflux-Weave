@@ -93,7 +93,7 @@ class VerifiedWorkflowExecutorAdapter:
         max_subquestions: int,
     ) -> DurableResearchExecution:
         if task_kind == VERIFIED_RESEARCH_TASK:
-            result = self.verified_workflow.execute(objective)
+            result = self.verified_workflow.execute(objective, max_queries=4)
             evidence_refs = tuple(item.evidence_id for item in result.evidence)
             evidence_records = tuple(asdict(item) for item in result.evidence)
             retrieval_rounds = 1
@@ -259,11 +259,14 @@ class DurableResearchRuntime:
         ):
             raise ValueError("follow_up_question must not be blank")
 
-        provider_call_limit = 6 if task_kind == VERIFIED_RESEARCH_TASK else 2 + 6 * max_subquestions
-        retrieval_round_limit = 1 if task_kind == VERIFIED_RESEARCH_TASK else max_subquestions
+        # Single agent worst case (W2a): query planning 1 + 3 queries × (embedding +
+        # rerank) 6 + draft + verify + repair + re-verify + distill + writer +
+        # writer-schema-repair + audit = 15 calls.
+        provider_call_limit = 15 if task_kind == VERIFIED_RESEARCH_TASK else 2 + 6 * max_subquestions
+        retrieval_round_limit = 3 if task_kind == VERIFIED_RESEARCH_TASK else max_subquestions
         frozen_budget = budget or BudgetLedger(
             900,
-            160_000,
+            320_000,
             32_000,
             "provider-price-not-frozen",
             provider_call_limit,

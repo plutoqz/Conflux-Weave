@@ -1,0 +1,214 @@
+{
+  "schema_version": "conflux-weave.writer-stage-fixtures.v3",
+  "description": "W1/W1.5/W2a 报告写作阶段验收 fixture：canonical 输出（含模型知识背景层）、中文事实卡片、独立审计输出与各类失败样本。claim/evidence 编号对应单文档语料的 VerifiedResearchWorkflow 执行序列。",
+  "distill_payloads": {
+    "canonical": {
+      "cards": [
+        {
+          "evidence_id": "evidence-0001",
+          "zh_summary": "该框架在工具动作执行之前先完成证据选择，以此降低上下文压力。",
+          "zh_key_points": ["证据选择先于工具动作执行。", "该机制的目标是降低上下文压力。"],
+          "terms": [
+            {"en": "evidence selection", "zh": "证据选择"},
+            {"en": "tool actions", "zh": "工具动作"}
+          ],
+          "scope_limits": "仅覆盖机制描述，不含评估数据与适用范围对比。"
+        }
+      ]
+    },
+    "two_cards": {
+      "cards": [
+        {
+          "evidence_id": "evidence-0001",
+          "zh_summary": "写入按内容哈希去重。",
+          "zh_key_points": ["去重发生在检索索引更新之前。"],
+          "terms": [{"en": "deduplication", "zh": "去重"}],
+          "scope_limits": "仅描述写入路径。"
+        },
+        {
+          "evidence_id": "evidence-0002",
+          "zh_summary": "固化完成后刷新检索索引。",
+          "zh_key_points": ["索引刷新以记忆固化为前提。"],
+          "terms": [{"en": "consolidation", "zh": "记忆固化"}],
+          "scope_limits": "仅描述索引路径。"
+        }
+      ]
+    }
+  },
+  "writer_payloads": {
+    "canonical": {
+      "summary": {
+        "text": "该框架在工具动作之前先选择证据，从而降低上下文压力。",
+        "claim_ids": ["claim-0001"]
+      },
+      "sections": [
+        {
+          "heading": "机制与评估",
+          "paragraphs": [
+            {
+              "text": "证据选择发生在工具动作之前，这一机制同时被后续评估所度量。",
+              "claim_ids": ["claim-0001", "claim-0002"]
+            }
+          ]
+        }
+      ],
+      "background": [
+        {
+          "heading": "背景：证据绑定研究范式",
+          "text": "在证据绑定（evidence-bound）研究系统中，模型生成的内容必须能够回溯到可验证的原始材料；这一范式用于约束模型幻觉，是检索增强生成的延伸。"
+        }
+      ],
+      "open_questions": ["该机制在更大规模语料上的收益仍待验证。"]
+    },
+    "partial_coverage": {
+      "summary": {
+        "text": "该框架在工具动作之前先选择证据。",
+        "claim_ids": ["claim-0001"]
+      },
+      "sections": [
+        {
+          "heading": "机制",
+          "paragraphs": [
+            {
+              "text": "证据选择发生在工具动作之前。",
+              "claim_ids": ["claim-0001"]
+            }
+          ]
+        }
+      ],
+      "background": [],
+      "open_questions": []
+    },
+    "over_omission": {
+      "summary": {
+        "text": "只复述第一条声明。",
+        "claim_ids": ["claim-0001"]
+      },
+      "sections": [
+        {
+          "heading": "机制",
+          "paragraphs": [
+            {
+              "text": "仍然是第一条声明的复述。",
+              "claim_ids": ["claim-0001"]
+            }
+          ]
+        }
+      ],
+      "background": [],
+      "open_questions": []
+    },
+    "unknown_claim": {
+      "summary": {
+        "text": "摘要引用了不存在的声明。",
+        "claim_ids": ["claim-9999"]
+      },
+      "sections": [
+        {
+          "heading": "机制",
+          "paragraphs": [
+            {"text": "正文。", "claim_ids": ["claim-0001"]}
+          ]
+        }
+      ],
+      "background": [],
+      "open_questions": []
+    },
+    "empty_claim_ids": {
+      "summary": {
+        "text": "摘要。",
+        "claim_ids": ["claim-0001"]
+      },
+      "sections": [
+        {
+          "heading": "机制",
+          "paragraphs": [
+            {"text": "正文没有引用任何声明。", "claim_ids": []}
+          ]
+        }
+      ],
+      "background": [],
+      "open_questions": []
+    },
+    "background_invalid": {
+      "summary": {
+        "text": "摘要。",
+        "claim_ids": ["claim-0001"]
+      },
+      "sections": [
+        {
+          "heading": "机制",
+          "paragraphs": [
+            {"text": "正文。", "claim_ids": ["claim-0001"]}
+          ]
+        }
+      ],
+      "background": [
+        {"text": "缺少标题的背景条目。"}
+      ],
+      "open_questions": []
+    },
+    "invalid_root": {
+      "summary": {
+        "text": "摘要。",
+        "claim_ids": ["claim-0001"]
+      },
+      "sections": [
+        {
+          "heading": "机制",
+          "paragraphs": [
+            {"text": "正文。", "claim_ids": ["claim-0001"]}
+          ]
+        }
+      ],
+      "background": [],
+      "open_questions": [],
+      "extra_field": true
+    }
+  },
+  "audit_payloads": {
+    "canonical": {
+      "audits": [
+        {
+          "section_index": 0,
+          "paragraph_index": 0,
+          "verdict": "supported",
+          "rationale": "Summary restates the cited claim only."
+        },
+        {
+          "section_index": 1,
+          "paragraph_index": 0,
+          "verdict": "supported",
+          "rationale": "Paragraph is entailed by the two cited claims."
+        }
+      ]
+    },
+    "unsupported": {
+      "audits": [
+        {
+          "section_index": 0,
+          "paragraph_index": 0,
+          "verdict": "supported",
+          "rationale": "Summary restates the cited claim only."
+        },
+        {
+          "section_index": 1,
+          "paragraph_index": 0,
+          "verdict": "unsupported",
+          "rationale": "Paragraph asserts a comparison absent from the cited claims."
+        }
+      ]
+    },
+    "incomplete": {
+      "audits": [
+        {
+          "section_index": 0,
+          "paragraph_index": 0,
+          "verdict": "supported",
+          "rationale": "Summary restates the cited claim only."
+        }
+      ]
+    }
+  },
+  "writer_invalid_content": "not-json"
+}
