@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from conflux_weave.api_contracts import ChatMessageRequest
+from conflux_weave.runtime import LocalArtifactStore as _Store
 from conflux_weave.chat import ChatService
 from conflux_weave.provider import (
     OpenAICompatibleChatAdapter,
@@ -100,3 +101,66 @@ def test_chat_endpoint_without_service_returns_503(tmp_path):
     assert response.status_code == 503
     body = json.loads(response.body)
     assert body["code"] == "provider_not_configured"
+
+
+class FakeHit:
+    def __init__(self, document_id, score, snapshot):
+        self.document_id = document_id
+        self.score = score
+        self.rank = 1
+        self.source_snapshot_id = snapshot
+        self.locator = {"page": 3}
+
+
+class FakeRetrieval:
+    def __init__(self, texts):
+        self.document_by_id = {
+            f"chunk-{index}": SimpleNamespace(text=text)
+            for index, text in enumerate(texts, 1)
+        }
+        self.searched = None
+
+    def search(self, query):
+        self.searched = query
+        hits = [
+            FakeHit(f"chunk-{index}", 0.9 - index * 0.1, f"snap-{index}")
+            for index in range(1, len(self.document_by_id) + 1)
+        ]
+        run = SimpleNamespace(final=SimpleNamespace(hits=hits))
+        return run
+
+
+def build_rag_service(tmp_path, payloads, texts=("Agents use skills to act.", "Memory dedup by hash.")):
+    service, transport = build_service(tmp_path, payloads)
+    retrieval = FakeRetrieval(texts)
+    service._retrieval = retrieval
+    service._store = LocalArtifactStore(tmp_path / "ctx")
+    return service, transport, retrieval
+
+
+def test_rag_answer_cites_snippets_and_stores_context(tmp_path):
+    service, transport, retrieval = build_rag_service(
+        tmp_path, [chat_response("智能体用技能执行动作 [1]。", "r9")]
+    )
+
+    result = service.rag_answer("智能体怎么用技能？", None)
+
+    assert retrieval.searched == "智能体怎么用技能？"
+    assert result["mode"] == "rag"
+    assert "[1]" in result["content"] and "未核验聚合" in result["content"]
+    assert len(result["citations"]) == 2
+    assert result["citations"][0]["chunk_id"] == "chunk-1"
+    history = service.history(limit=5)
+    assert [m.role for m in history] == ["user", "assistant"]
+    assert history[1].mode == "rag" and history[1].context_artifact_id
+    prompt = transport.requests[0]["messages"][1]["content"]
+    assert "[1] chunk `chunk-1`" in prompt and "Agents use skills to act." in prompt
+
+
+def test_rag_unavailable_without_retrieval(tmp_path):
+    service, _ = build_service(tmp_path, [])
+    try:
+        service.rag_answer("问题", None)
+        raise AssertionError("expected RuntimeError")
+    except RuntimeError as exc:
+        assert "corpus" in str(exc)

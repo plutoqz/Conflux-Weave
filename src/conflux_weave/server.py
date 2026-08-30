@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict
 from conflux_weave.chat import ChatService
 from conflux_weave.api_contracts import (
     ChatAnswerResponse,
+    ChatCitationRecord,
     ChatHistoryResponse,
     ChatMessageRecord,
     ChatMessageRequest,
@@ -239,12 +240,24 @@ def create_app(
                 status_code=503,
                 content={
                     "code": "provider_not_configured",
-                    "message": "模型服务未配置，直接问答不可用。",
+                    "message": "模型服务未配置，对话不可用。",
                     "recovery_action": "在设置中完成模型服务配置后重试。",
                 },
             )
+        if request.mode == "rag" and not chat_service.has_rag:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "code": "corpus_not_ready",
+                    "message": "本地知识库未就绪，知识库问答不可用。",
+                    "recovery_action": "先在研究视图导入语料，或改用直接问答。",
+                },
+            )
         try:
-            result = chat_service.direct_answer(request.question, request.conversation_id)
+            if request.mode == "rag":
+                result = chat_service.rag_answer(request.question, request.conversation_id)
+            else:
+                result = chat_service.direct_answer(request.question, request.conversation_id)
         except Exception as exc:
             return error_response(exc)
         return ChatAnswerResponse(
@@ -255,6 +268,15 @@ def create_app(
             content=result["content"],
             created_at=result["created_at"],
             provider_response_id=result["provider_response_id"],
+            citations=tuple(
+                ChatCitationRecord(
+                    index=item["index"],
+                    chunk_id=item["chunk_id"],
+                    source_snapshot_id=item["source_snapshot_id"],
+                    locator=item["locator"],
+                )
+                for item in result.get("citations", ())
+            ),
         )
 
     @app.get("/api/v1/chat/messages", response_model=ChatHistoryResponse)
@@ -629,7 +651,7 @@ def build_local_app(
             )
         )
         provider_configured = True
-        chat_service = ChatService(OpenAICompatibleChatAdapter(store, config), database)
+        retrieval_pipeline = None
         try:
             from conflux_weave.hybrid_retrieval import HybridRetrievalPipeline
             from conflux_weave.indexing import LanceDBDenseIndex, load_chunks
@@ -658,6 +680,7 @@ def build_local_app(
                 verified,
                 OpenAICompatibleChatAdapter(store, config),
             )
+            retrieval_pipeline = retrieval
             research_runtime = DurableResearchRuntimeAdapter(
                 DurableResearchRuntime(
                     repository,
@@ -673,6 +696,12 @@ def build_local_app(
                 task_kinds=("verified_paper_research", "managed_verified_research"),
                 message=f"Research corpus or LanceDB is unavailable: {exc}",
             )
+        chat_service = ChatService(
+            OpenAICompatibleChatAdapter(store, config),
+            database,
+            retrieval=retrieval_pipeline,
+            artifact_store=store,
+        )
     orchestrator = CompositeOrchestrator(
         repository,
         (fixture_runtime, paper_runtime, research_runtime),

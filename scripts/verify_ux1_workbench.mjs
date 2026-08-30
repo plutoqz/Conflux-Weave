@@ -70,8 +70,10 @@ await page.screenshot({ path: path.join(outputRoot, "desktop-1440-settings.png")
 // ---- 对话：UX-1.1 只读线程历史（根 Run → 追问链；父 Run 缺失时标记截断） ----
 await gotoSection("chat");
 await page.locator("#chat-view").waitFor({ state: "visible" });
-// W3.0 三模式：深度研究走既有 verified-research 流程，需显式选择。
-await page.locator('input[name="chat_mode"][value="deep"]').check();
+// W3.0 三模式：深度研究走既有 verified-research 流程，需经向上弹出列表选择。
+await page.locator("#chat-mode-button").click();
+await page.locator('#chat-mode-list li[data-mode="deep"]').click();
+assert.equal((await page.locator("#chat-mode-label").innerText()).trim(), "深度研究");
 await page.locator("#chat-history").waitFor({ state: "visible" });
 await page.locator(".chat-thread-item").first().waitFor({ state: "visible" });
 assert.equal(await page.locator(".chat-thread-item").count(), 2, "two seeded history threads");

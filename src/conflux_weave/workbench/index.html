@@ -147,22 +147,27 @@
             </div>
             <p id="chat-error" class="form-error" role="alert" hidden></p>
             <div class="chat-composer-row">
-              <fieldset id="chat-mode-fieldset" class="mode-fieldset">
-                <div class="mode-switch chat-mode-switch">
-                  <label>
-                    <input type="radio" name="chat_mode" value="direct" checked>
-                    <span>直接问答</span>
-                  </label>
-                  <label class="mode-option-disabled" title="W3.1 即将上线">
-                    <input type="radio" name="chat_mode" value="rag" disabled>
-                    <span>知识库问答</span>
-                  </label>
-                  <label>
-                    <input type="radio" name="chat_mode" value="deep">
-                    <span>深度研究</span>
-                  </label>
-                </div>
-              </fieldset>
+              <div id="chat-mode-select" class="mode-select">
+                <button type="button" id="chat-mode-button" class="mode-select-button" aria-haspopup="listbox" aria-expanded="false" title="选择回答模式">
+                  <span id="chat-mode-label">直接问答</span>
+                  <!-- Icon: chevron-up (lucide-static v1.34.0, ISC License) -->
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18 15-6-6-6 6"/></svg>
+                </button>
+                <ul id="chat-mode-list" class="mode-select-list" role="listbox" aria-label="回答模式" hidden>
+                  <li role="option" data-mode="direct" aria-selected="true">
+                    <strong>直接问答</strong>
+                    <span>模型直接回答 · 无引用（模型知识）</span>
+                  </li>
+                  <li role="option" data-mode="rag" aria-selected="false">
+                    <strong>知识库问答</strong>
+                    <span>本地语料检索 · 片段引用（未核验聚合）</span>
+                  </li>
+                  <li role="option" data-mode="deep" aria-selected="false">
+                    <strong>深度研究</strong>
+                    <span>核验研究 Run · 完整报告</span>
+                  </li>
+                </ul>
+              </div>
               <textarea id="chat-input" name="chat_input" rows="1" maxlength="4000" placeholder="输入你的研究问题，Enter 发送，Shift+Enter 换行" aria-label="输入你的研究问题"></textarea>
               <button id="chat-send" class="primary-button" type="submit">发送</button>
             </div>

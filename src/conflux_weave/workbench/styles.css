@@ -1354,7 +1354,53 @@ textarea:hover, input:hover { border-color: var(--muted); }
   #answer-panel { display: block !important; }
 }
 
-/* —— W3.0 三模式对话：直接问答 / 知识库问答（未上线）/ 深度研究 —— */
-.mode-switch label.mode-option-disabled { opacity: 0.45; cursor: not-allowed; }
-.mode-switch label.mode-option-disabled span { pointer-events: none; }
+/* —— W3.0/W3.1 三模式对话：向上弹出的模式选择器 —— */
+.mode-select { position: relative; }
+.mode-select-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  background: var(--chalk);
+  color: var(--ink);
+  font-weight: 650;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.mode-select-button:hover { border-color: var(--muted); }
+.mode-select-button .icon { width: 14px; height: 14px; color: var(--muted); transition: transform 120ms ease; }
+.mode-select-button[aria-expanded="true"] .icon { transform: rotate(180deg); }
+.mode-select-list {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  min-width: 250px;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--chalk);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--ink) 14%, transparent);
+  display: grid;
+  gap: 2px;
+  z-index: 40;
+}
+.mode-select-list li {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.mode-select-list li:hover { background: var(--hud-bg); }
+.mode-select-list li[aria-selected="true"] {
+  background: color-mix(in srgb, var(--moss) 10%, var(--chalk));
+}
+.mode-select-list li strong { font-size: 13px; font-weight: 650; }
+.mode-select-list li span { font-size: 11px; color: var(--muted); line-height: 1.5; }
 .chat-msg.direct .chat-msg-body { color: var(--ink); }

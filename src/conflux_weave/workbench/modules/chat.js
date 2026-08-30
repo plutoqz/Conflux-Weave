@@ -22,6 +22,46 @@ const sendButton = document.getElementById("chat-send");
 const watches = new Map();
 let followParent = null;
 let directConversationId = null;
+let chatMode = "direct";
+const modeSelect = document.getElementById("chat-mode-select");
+const modeButton = document.getElementById("chat-mode-button");
+const modeLabel = document.getElementById("chat-mode-label");
+const modeList = document.getElementById("chat-mode-list");
+
+function closeModeList() {
+  modeList.hidden = true;
+  modeButton.setAttribute("aria-expanded", "false");
+}
+
+function setChatMode(mode) {
+  const option = modeList.querySelector(`li[data-mode="${mode}"]`);
+  if (!option) return;
+  chatMode = mode;
+  modeLabel.textContent = option.querySelector("strong").textContent;
+  for (const item of modeList.querySelectorAll("li")) {
+    item.setAttribute("aria-selected", item.dataset.mode === mode ? "true" : "false");
+  }
+  closeModeList();
+}
+
+modeButton.addEventListener("click", () => {
+  const open = modeList.hidden;
+  modeList.hidden = !open;
+  modeButton.setAttribute("aria-expanded", open ? "true" : "false");
+});
+
+modeList.addEventListener("click", (event) => {
+  const item = event.target.closest("li[data-mode]");
+  if (item) setChatMode(item.dataset.mode);
+});
+
+document.addEventListener("click", (event) => {
+  if (!modeSelect.contains(event.target)) closeModeList();
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !modeList.hidden) closeModeList();
+});
 
 function autoGrow(node) {
   node.style.height = "auto";
@@ -56,13 +96,13 @@ function appendUserMessage(text, time, label = "你", parent = thread) {
   return article;
 }
 
-function appendAssistantMessage(content) {
+function appendAssistantMessage(content, mode = "direct") {
   const article = document.createElement("article");
-  article.className = "chat-msg agent direct";
+  article.className = `chat-msg agent direct ${mode}`;
   const header = document.createElement("header");
   const label = document.createElement("span");
   label.className = "chat-msg-label";
-  label.textContent = "直接问答 · 模型知识（未核验）";
+  label.textContent = mode === "rag" ? "知识库问答 · 未核验聚合" : "直接问答 · 模型知识（未核验）";
   const stamp = document.createElement("time");
   stamp.textContent = formatDate(new Date().toISOString(), true);
   header.append(label, stamp);
@@ -328,7 +368,7 @@ async function loadHistory() {
       if (message.role === "user") {
         appendUserMessage(message.content, message.created_at);
       } else {
-        appendAssistantMessage(message.content);
+        appendAssistantMessage(message.content, message.mode);
       }
     }
     if ((chatPage.items || []).length) threadEmpty.hidden = true;
@@ -436,7 +476,7 @@ function setFollow(runId) {
   followParent = runId;
   document.getElementById("chat-follow-chip").hidden = false;
   document.getElementById("chat-follow-label").textContent = `追问上下文 · ${runId}`;
-  document.getElementById("chat-mode-fieldset").hidden = true;
+  modeSelect.hidden = true;
   input.placeholder = "继续追问（将创建一个新的独立 Run，不继承父 Run 结论）";
   autoGrow(input);
   input.focus();
@@ -445,7 +485,7 @@ function setFollow(runId) {
 function clearFollow() {
   followParent = null;
   document.getElementById("chat-follow-chip").hidden = true;
-  document.getElementById("chat-mode-fieldset").hidden = false;
+  modeSelect.hidden = false;
   input.placeholder = DEFAULT_PLACEHOLDER;
 }
 
@@ -457,14 +497,9 @@ async function submit() {
   }
   errorNode.hidden = true;
   sendButton.disabled = true;
-  const mode = document.querySelector('input[name="chat_mode"]:checked')?.value || "direct";
-  if (mode === "rag") {
-    sendButton.disabled = false;
-    showChatError("知识库问答即将上线（W3.1），当前请使用直接问答或深度研究。");
-    return;
-  }
+  const mode = chatMode;
   try {
-    if (mode === "direct") {
+    if (mode === "direct" || mode === "rag") {
       input.value = "";
       autoGrow(input);
       appendUserMessage(question, new Date().toISOString());
@@ -472,10 +507,10 @@ async function submit() {
       scrollThread();
       const answer = await api("/api/v1/chat", {
         method: "POST",
-        body: JSON.stringify({ question, conversation_id: directConversationId }),
+        body: JSON.stringify({ question, conversation_id: directConversationId, mode }),
       });
       directConversationId = answer.conversation_id;
-      appendAssistantMessage(answer.content);
+      appendAssistantMessage(answer.content, answer.mode);
       scrollThread();
       return;
     }

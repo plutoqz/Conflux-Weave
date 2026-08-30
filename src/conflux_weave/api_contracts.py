@@ -82,6 +82,14 @@ class FixtureResearchTaskRequest(_ApiModel):
 class ChatMessageRequest(_ApiModel):
     question: str = Field(min_length=1, max_length=8_000)
     conversation_id: str | None = Field(default=None, max_length=64)
+    mode: Literal["direct", "rag"] = "direct"
+
+
+class ChatCitationRecord(_ApiModel):
+    index: int
+    chunk_id: str
+    source_snapshot_id: str
+    locator: dict[str, Any]
 
 
 class ChatMessageRecord(_ApiModel):
@@ -95,6 +103,7 @@ class ChatMessageRecord(_ApiModel):
 
 class ChatAnswerResponse(ChatMessageRecord):
     provider_response_id: str
+    citations: tuple[ChatCitationRecord, ...] = ()
 
 
 class ChatHistoryResponse(_ApiModel):
