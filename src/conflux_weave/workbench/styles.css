@@ -539,6 +539,78 @@ textarea:focus-visible,
 .chat-msg-actions { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
 .chat-msg-actions .quiet-button { min-height: 32px; padding: 5px 10px; font-size: 12px; }
 
+/* —— UX-1.1 对话历史线程（只读；新对话仅清空当前视图） —— */
+.chat-history { padding-top: 8px; }
+.chat-history-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 0 10px;
+  border-bottom: 1px solid var(--rule-soft);
+}
+.chat-history-title {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.chat-history-actions { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+.chat-history-actions .quiet-button { min-height: 30px; padding: 4px 10px; font-size: 12px; }
+.chat-history-link { display: inline-flex; align-items: center; text-decoration: none; }
+.chat-thread-item {
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--radius-md);
+  background: var(--hud-bg);
+  min-width: 0;
+}
+.chat-thread-item + .chat-thread-item { margin-top: 10px; }
+.chat-thread-item summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  cursor: pointer;
+  list-style: none;
+  min-width: 0;
+}
+.chat-thread-item summary::-webkit-details-marker { display: none; }
+.chat-thread-item summary::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 0;
+  height: 0;
+  border-left: 5px solid var(--muted);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 120ms ease;
+}
+.chat-thread-item[open] summary::before { transform: rotate(90deg); }
+.chat-thread-title {
+  font-weight: 650;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.chat-thread-count {
+  color: var(--muted);
+  font-size: 12px;
+  flex: 0 0 auto;
+  font-feature-settings: "tnum", "lnum";
+}
+.chat-thread-truncated {
+  flex: 0 0 auto;
+  color: var(--terra);
+  border: 1px solid color-mix(in srgb, var(--terra) 40%, transparent);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11px;
+}
+.chat-thread-body { padding: 4px 14px 14px; display: grid; gap: 18px; }
+
 .chat-composer {
   position: sticky;
   bottom: 0;
@@ -867,7 +939,6 @@ textarea:focus-visible,
 .answer-content {
   max-width: 68ch;
   margin: 0;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-size: 16px;
   line-height: 1.75;
@@ -881,7 +952,52 @@ textarea:focus-visible,
   line-height: 1.35;
   letter-spacing: -0.005em;
 }
-.answer-body { white-space: pre-wrap; }
+.answer-body { display: grid; gap: 16px; }
+.answer-body p { margin: 0; }
+.answer-body h3,
+.answer-body h4,
+.answer-body h5,
+.answer-body h6 {
+  margin: 12px 0 -6px;
+  font-family: var(--serif);
+  line-height: 1.35;
+  font-weight: 650;
+}
+.answer-body h3 { font-size: 18px; }
+.answer-body h4 { font-size: 16px; }
+.answer-body h5,
+.answer-body h6 { font-size: 15px; }
+.answer-body ul,
+.answer-body ol { margin: 0; padding-left: 24px; }
+.answer-body li + li { margin-top: 6px; }
+.answer-body blockquote {
+  margin: 0;
+  padding: 10px 16px;
+  border-left: 3px solid var(--accent);
+  color: var(--muted);
+  background: var(--wash);
+}
+.answer-body blockquote p + p { margin-top: 6px; }
+.answer-body code {
+  padding: 1px 4px;
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--radius-sm);
+  background: var(--wash);
+  font-family: var(--mono);
+  font-size: .88em;
+}
+.answer-body pre {
+  margin: 0;
+  padding: 14px 16px;
+  overflow-x: auto;
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--radius-sm);
+  background: var(--ink);
+  color: var(--paper);
+}
+.answer-body pre code { padding: 0; border: 0; background: transparent; color: inherit; }
+.answer-body hr { width: 100%; border: 0; border-top: 1px solid var(--rule); }
+.answer-body a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
 
 .content-section { margin-top: 44px; padding-top: 26px; border-top: 1px solid var(--rule); }
 .section-heading {

@@ -1,16 +1,20 @@
-/* 统一对话入口（v1 雏形）：提问即创建核验研究 Run，事件流与交付以对话形式呈现。
-   P4 统一对话路由就绪后仅替换提交入口，UI 合同不变。 */
+/* 统一对话入口（v1.1 线程化）：提问即创建核验研究 Run，事件流与交付以对话形式呈现。
+   历史按 parent_run_id 追溯为只读线程（UX-1.1）：不删除、不改审计语义；
+   "新对话"仅清空当前前端视图。P4 统一对话路由就绪后仅替换提交入口，UI 合同不变。 */
 
 import { api, familyLabels, formatDate, modeLabels, renderAnswer, showToast, stateLabels } from "./shared.js";
 import { registerView } from "./router.js";
 
 const TERMINAL_STATES = new Set(["complete", "partial", "failed", "cancelled", "expired"]);
 const VERIFIED_FAMILIES = new Set(["verified_paper_research", "managed_verified_research"]);
-const HISTORY_LIMIT = 6;
+const HISTORY_RUN_LIMIT = 20;
+const HISTORY_DETAIL_LIMIT = 12;
 const DEFAULT_PLACEHOLDER = "输入你的研究问题，Enter 发送，Shift+Enter 换行";
 
 const thread = document.getElementById("chat-thread");
 const threadEmpty = document.getElementById("chat-thread-empty");
+const historyPanel = document.getElementById("chat-history");
+const historyThreads = document.getElementById("chat-history-threads");
 const input = document.getElementById("chat-input");
 const errorNode = document.getElementById("chat-error");
 const sendButton = document.getElementById("chat-send");
@@ -33,21 +37,21 @@ function showChatError(message) {
   errorNode.hidden = false;
 }
 
-function appendUserMessage(text, time) {
+function appendUserMessage(text, time, label = "你", parent = thread) {
   const article = document.createElement("article");
   article.className = "chat-msg user";
   const header = document.createElement("header");
-  const label = document.createElement("span");
-  label.className = "chat-msg-label";
-  label.textContent = "你";
+  const labelNode = document.createElement("span");
+  labelNode.className = "chat-msg-label";
+  labelNode.textContent = label;
   const stamp = document.createElement("time");
   stamp.textContent = formatDate(time, true);
-  header.append(label, stamp);
+  header.append(labelNode, stamp);
   const body = document.createElement("div");
   body.className = "chat-msg-body";
   body.textContent = text;
   article.append(header, body);
-  thread.append(article);
+  parent.append(article);
   return article;
 }
 
@@ -162,21 +166,175 @@ function makeHandle(agent, detail) {
   return { setEvent, setDetail };
 }
 
-async function renderRunInto(agent, runId) {
-  const detail = await api(`/api/v1/runs/${encodeURIComponent(runId)}`);
-  if (TERMINAL_STATES.has(detail.state)) {
-    renderFinal(agent, detail);
-    if (detail.delivery) {
-      try {
-        const answer = await fetchAnswerText(detail);
-        if (answer) renderAnswer(agent.body, answer.content, answer.mediaType);
-      } catch {
-        agent.body.textContent = "交付结果暂时不可读。";
-      }
-    }
-    return true;
+/* —— UX-1.1 只读线程视图：按 parent_run_id 追溯到根 Run，不推断、不补全。 —— */
+
+function runQuestion(detail) {
+  return detail.research_context?.follow_up_question || detail.query || "未命名研究";
+}
+
+function isFollowUp(detail) {
+  return Boolean(detail.research_context?.parent_run_id);
+}
+
+function buildThreads(details) {
+  const nodes = new Map();
+  for (const detail of details) {
+    nodes.set(detail.run_id, {
+      detail,
+      parent: detail.research_context?.parent_run_id || null,
+    });
   }
-  return false;
+  const childrenByParent = new Map();
+  const roots = [];
+  for (const node of nodes.values()) {
+    if (node.parent && nodes.has(node.parent)) {
+      const children = childrenByParent.get(node.parent) || [];
+      children.push(node);
+      childrenByParent.set(node.parent, children);
+    } else {
+      // 父 Run 不在当前加载窗口：作为截断线程的根呈现，不推断缺失链路。
+      node.truncated = Boolean(node.parent);
+      roots.push(node);
+    }
+  }
+  const threads = roots.map((root) => {
+    const messages = [];
+    const seen = new Set();
+    const collect = (node) => {
+      if (seen.has(node.detail.run_id)) return;
+      seen.add(node.detail.run_id);
+      messages.push(node);
+      for (const child of childrenByParent.get(node.detail.run_id) || []) collect(child);
+    };
+    collect(root);
+    messages.sort((a, b) => (a.detail.created_at < b.detail.created_at ? -1 : 1));
+    const latest = messages[messages.length - 1].detail.updated_at || messages[messages.length - 1].detail.created_at;
+    return {
+      root,
+      messages,
+      latest,
+      truncated: messages.some((item) => item.truncated),
+    };
+  });
+  threads.sort((a, b) => (a.latest < b.latest ? 1 : -1));
+  return threads;
+}
+
+function renderThreadItem(threadData, expanded) {
+  const item = document.createElement("details");
+  item.className = "chat-thread-item";
+  item.open = expanded;
+  const summary = document.createElement("summary");
+  const title = document.createElement("span");
+  title.className = "chat-thread-title";
+  title.textContent = runQuestion(threadData.root.detail);
+  const meta = document.createElement("span");
+  meta.className = "chat-thread-count";
+  meta.textContent = `${threadData.messages.length} 问`;
+  summary.append(title, meta);
+  if (threadData.truncated) {
+    const truncated = document.createElement("span");
+    truncated.className = "chat-thread-truncated";
+    truncated.title = "父 Run 不在当前加载窗口，链路不完整。";
+    truncated.textContent = "线程历史不完整";
+    summary.append(truncated);
+  }
+  const body = document.createElement("div");
+  body.className = "chat-thread-body";
+  for (const node of threadData.messages) {
+    renderHistoryExchange(node, body);
+  }
+  item.append(summary, body);
+  return item;
+}
+
+function renderHistoryExchange(node, parent) {
+  const detail = node.detail;
+  appendUserMessage(
+    runQuestion(detail),
+    detail.created_at,
+    isFollowUp(detail) ? "追问" : "你",
+    parent
+  );
+  const agent = createAgentArticle(detail.run_id);
+  agent.label.textContent = `${familyLabels[detail.task_family] || "研究任务"} · ${detail.run_id}`;
+  agent.label.title = detail.run_id;
+  agent.time.textContent = formatDate(detail.updated_at, true);
+  const mode = detail.research_context?.mode;
+  if (mode && !isFollowUp(detail)) {
+    const chip = document.createElement("span");
+    chip.className = "chat-msg-mode";
+    chip.textContent = modeLabels[mode] || "";
+    agent.label.before(chip);
+  }
+  if (TERMINAL_STATES.has(detail.state)) {
+    renderFinalInto(agent, detail);
+  } else {
+    agent.status.textContent = detail.status_message;
+    watchRun(detail.run_id, agent, makeHandle(agent, detail));
+  }
+  parent.append(agent.article);
+}
+
+async function loadHistory() {
+  for (const { close } of [...watches.values()]) close();
+  watches.clear();
+  thread.replaceChildren();
+  historyThreads.replaceChildren();
+  historyPanel.hidden = true;
+  threadEmpty.hidden = true;
+  const loading = document.createElement("div");
+  loading.className = "skeleton";
+  for (const width of ["46%", "88%", "64%"]) {
+    const line = document.createElement("span");
+    line.className = "skeleton-line";
+    line.style.width = width;
+    loading.append(line);
+  }
+  historyPanel.hidden = false;
+  historyThreads.append(loading);
+  try {
+    const page = await api(`/api/v1/runs?limit=${HISTORY_RUN_LIMIT}`);
+    const candidates = (page.items || [])
+      .filter((item) => VERIFIED_FAMILIES.has(item.task_family))
+      .slice(0, HISTORY_DETAIL_LIMIT);
+    const details = [];
+    for (const item of candidates) {
+      try {
+        details.push(await api(`/api/v1/runs/${encodeURIComponent(item.run_id)}`));
+      } catch { continue; }
+    }
+    const threads = buildThreads(details);
+    if (!threads.length) {
+      historyPanel.hidden = true;
+      threadEmpty.hidden = false;
+      return;
+    }
+    historyThreads.replaceChildren(
+      ...threads.map((threadData, index) => renderThreadItem(threadData, index === 0))
+    );
+    historyPanel.hidden = false;
+    threadEmpty.hidden = true;
+  } catch (error) {
+    historyPanel.hidden = true;
+    threadEmpty.hidden = false;
+    showToast(error.message);
+  } finally {
+    loading.remove();
+  }
+}
+
+function startNewThread() {
+  for (const { close } of [...watches.values()]) close();
+  watches.clear();
+  thread.replaceChildren();
+  threadEmpty.hidden = false;
+  clearFollow();
+  input.value = "";
+  autoGrow(input);
+  errorNode.hidden = true;
+  window.scrollTo({ top: 0, behavior: "auto" });
+  input.focus();
 }
 
 function closeWatch(runId) {
@@ -240,64 +398,6 @@ async function renderFinalInto(agent, detail) {
     } catch {
       agent.body.textContent = "交付结果暂时不可读。";
     }
-  }
-}
-
-async function loadHistory() {
-  thread.replaceChildren();
-  threadEmpty.hidden = true;
-  const loading = document.createElement("div");
-  loading.className = "skeleton";
-  for (const width of ["46%", "88%", "64%"]) {
-    const line = document.createElement("span");
-    line.className = "skeleton-line";
-    line.style.width = width;
-    loading.append(line);
-  }
-  thread.append(loading);
-  try {
-    const page = await api("/api/v1/runs?limit=20");
-    const items = (page.items || [])
-      .filter((item) => VERIFIED_FAMILIES.has(item.task_family))
-      .slice(0, HISTORY_LIMIT)
-      .reverse();
-    if (!items.length) {
-      thread.replaceChildren();
-      threadEmpty.hidden = false;
-      return;
-    }
-    for (const item of items) {
-      let detail = null;
-      try {
-        detail = await api(`/api/v1/runs/${encodeURIComponent(item.run_id)}`);
-      } catch { continue; }
-      const question = detail.research_context?.follow_up_question || detail.query || "未命名研究";
-      appendUserMessage(question, detail.created_at);
-      const agent = createAgentArticle(item.run_id);
-      agent.label.textContent = `${familyLabels[detail.task_family] || "研究任务"} · ${detail.run_id}`;
-      agent.label.title = detail.run_id;
-      agent.time.textContent = formatDate(detail.updated_at, true);
-      if (detail.research_context?.mode) {
-        const mode = document.createElement("span");
-        mode.className = "chat-msg-mode";
-        mode.textContent = modeLabels[detail.research_context.mode] || "";
-        agent.label.before(mode);
-      }
-      thread.append(agent.article);
-      if (TERMINAL_STATES.has(detail.state)) {
-        await renderFinalInto(agent, detail);
-      } else {
-        agent.status.textContent = detail.status_message;
-        watchRun(item.run_id, agent, makeHandle(agent, detail));
-      }
-    }
-    scrollThread();
-  } catch (error) {
-    thread.replaceChildren();
-    threadEmpty.hidden = false;
-    showToast(error.message);
-  } finally {
-    loading.remove();
   }
 }
 
@@ -374,6 +474,7 @@ input.addEventListener("input", () => {
   autoGrow(input);
 });
 document.getElementById("chat-clear-follow").addEventListener("click", clearFollow);
+document.getElementById("chat-new-thread").addEventListener("click", startNewThread);
 
 registerView("chat", {
   mount: loadHistory,

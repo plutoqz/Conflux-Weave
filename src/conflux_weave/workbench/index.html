@@ -126,6 +126,16 @@
             <h1>直接提问</h1>
             <p>问题会创建为一次核验研究：结果带引用证据，运行过程实时可见。</p>
           </div>
+          <div id="chat-history" class="chat-history" hidden>
+            <div class="chat-history-bar">
+              <span class="chat-history-title">历史线程</span>
+              <div class="chat-history-actions">
+                <button type="button" id="chat-new-thread" class="quiet-button">新对话</button>
+                <a href="#/research" class="quiet-button chat-history-link">查看全部研究</a>
+              </div>
+            </div>
+            <div id="chat-history-threads"></div>
+          </div>
           <div id="chat-thread" class="chat-thread" aria-live="polite"></div>
           <form id="chat-form" class="chat-composer" aria-label="发送问题">
             <div id="chat-follow-chip" class="chat-follow-chip" hidden>

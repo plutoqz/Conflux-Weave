@@ -68,6 +68,11 @@ assert.equal(
   (await page.locator("#confidence-value").innerText()).trim(),
   "引用核验完成"
 );
+assert.ok(await page.locator("#answer-content h2").count() >= 1, "report title is rendered as a heading");
+assert.ok(await page.locator("#answer-content h3").count() >= 1, "report sections are rendered as headings");
+assert.ok(await page.locator("#answer-content ul, #answer-content ol").count() >= 1, "report lists are rendered structurally");
+assert.equal(await page.locator("#answer-content .answer-body").count(), 1);
+assert.equal(await page.locator("#answer-content script").count(), 0, "report content cannot inject script nodes");
 assert.equal(await page.locator("#rerun-run").isVisible(), true);
 assert.equal(await page.locator("#follow-up-run").isVisible(), true);
 

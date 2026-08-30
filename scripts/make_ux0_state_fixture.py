@@ -143,7 +143,14 @@ def main() -> None:
                 "extraction_method": "structured-fixture",
             },
         ],
-        report_text="# 核验研究完成\n\n证据链闭合，两条引用均可回溯 [1][2]。\n",
+        report_text=(
+            "# 核验研究完成\n\n"
+            "## 结论\n\n"
+            "证据链闭合，两条引用均可回溯 [1][2]。\n\n"
+            "## 核验要点\n\n"
+            "- 运行状态已持久化。\n"
+            "- 引用可回溯到 Evidence。\n"
+        ),
     )
 
     # 2. partial（boundary 三色：limitation/unmet/action）
@@ -163,7 +170,12 @@ def main() -> None:
         limitations=("仅核验单条来源，覆盖面不足。",),
         unmet=("未达到双来源交叉验证标准。",),
         actions=("提高检索预算后重新研究。",),
-        report_text="# 部分完成\n\n单来源结论，限制见下。\n",
+        report_text=(
+            "# 部分完成\n\n"
+            "## 当前结论\n\n"
+            "单来源结论，限制见下。\n\n"
+            "> 该结论只覆盖当前语料范围。\n"
+        ),
     )
 
     # 3. working（1/2 步完成，进行中）

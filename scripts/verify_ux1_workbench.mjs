@@ -67,36 +67,49 @@ await page.waitForFunction(() => document.querySelector("#cfg-model")?.value ===
 await page.locator("#settings-checks .check-row").first().waitFor({ state: "visible" });
 await page.screenshot({ path: path.join(outputRoot, "desktop-1440-settings.png"), fullPage: true });
 
-// ---- 对话：fixture 全流程（提交 → SSE → 交付 → 深链研究） ----
+// ---- 对话：UX-1.1 只读线程历史（根 Run → 追问链；父 Run 缺失时标记截断） ----
 await gotoSection("chat");
 await page.locator("#chat-view").waitFor({ state: "visible" });
+await page.locator("#chat-history").waitFor({ state: "visible" });
+await page.locator(".chat-thread-item").first().waitFor({ state: "visible" });
+assert.equal(await page.locator(".chat-thread-item").count(), 2, "two seeded history threads");
+const newestThread = page.locator(".chat-thread-item").first();
+assert.equal(await newestThread.getAttribute("open"), "", "most recent thread is expanded by default");
+assert.match(await newestThread.locator(".chat-thread-title").innerText(), /记忆架构/);
+assert.equal(await newestThread.locator(".chat-thread-body .chat-msg").count(), 4, "root and follow-up message pairs");
+const olderThread = page.locator(".chat-thread-item").nth(1);
+assert.equal(await olderThread.getAttribute("open"), null, "older thread collapsed by default");
+assert.match(await olderThread.locator(".chat-thread-truncated").innerText(), /线程历史不完整/);
+assert.match(await page.locator(".chat-history-link").getAttribute("href"), /#\/research/);
+
+// ---- 对话：fixture 全流程（提交 → SSE → 交付 → 深链研究） ----
 const chatQuestion = "UX-1 验证：离线 Harness fixture 能否覆盖 Context Bundle 与交付闭环？";
 await page.locator("#chat-input").fill(chatQuestion);
 await page.locator("#chat-send").click();
-await page.locator(".chat-msg.user").waitFor({ state: "visible" });
-await page.locator(".chat-msg.agent").first().waitFor({ state: "visible" });
+await page.locator("#chat-thread .chat-msg.user").waitFor({ state: "visible" });
+await page.locator("#chat-thread .chat-msg.agent").first().waitFor({ state: "visible" });
 // 终态：交付渲染（fixture 为 partial，answer 文本来自真实交付工件）
 await page.waitForFunction(
   () => {
-    const foot = document.querySelector(".chat-msg.agent .chat-msg-foot");
+    const foot = document.querySelector("#chat-thread .chat-msg.agent .chat-msg-foot");
     return foot && !foot.hidden;
   },
   undefined,
   { timeout: 30_000 },
 );
 await page.waitForFunction(
-  () => (document.querySelector(".chat-msg.agent .chat-msg-body")?.textContent || "").trim().length > 0,
+  () => (document.querySelector("#chat-thread .chat-msg.agent .chat-msg-body")?.textContent || "").trim().length > 0,
   undefined,
   { timeout: 30_000 },
 );
-const agentBody = await page.locator(".chat-msg.agent .chat-msg-body").first().innerText();
+const agentBody = await page.locator("#chat-thread .chat-msg.agent .chat-msg-body").first().innerText();
 assert.match(agentBody, /Harness/);
-const agentMeta = await page.locator(".chat-msg-meta").first().innerText();
+const agentMeta = await page.locator("#chat-thread .chat-msg-meta").first().innerText();
 assert.match(agentMeta, /限制/);
 await page.screenshot({ path: path.join(outputRoot, "desktop-1440-chat.png"), fullPage: true });
 
-// 对话深链到研究视图
-await page.locator(".chat-msg-actions .quiet-button").first().click();
+// 对话深链到研究视图（当前会话的 Run）
+await page.locator("#chat-thread .chat-msg-actions .quiet-button").first().click();
 await page.waitForFunction(
   () => window.location.hash.startsWith("#/research/"),
   undefined,
@@ -166,6 +179,12 @@ await page.setViewportSize({ width: 390, height: 844 });
 await gotoSection("chat");
 await page.screenshot({ path: path.join(outputRoot, "mobile-390-chat.png"), fullPage: true });
 
+// ---- UX-1.1 新对话：仅清空当前前端视图，不删除历史线程 ----
+await page.locator("#chat-new-thread").click();
+await page.locator("#chat-thread-empty").waitFor({ state: "visible" });
+assert.equal(await page.locator("#chat-thread .chat-msg").count(), 0, "new-thread clears the live view");
+assert.equal(await page.locator(".chat-thread-item").count(), 2, "history threads are preserved");
+
 assert.deepEqual(consoleErrors, [], "zero console errors");
 
 const summary = {
@@ -176,6 +195,8 @@ const summary = {
   provider_not_ready_alert_verified: true,
   settings_save_restart_banner_verified: true,
   chat_fixture_flow_verified: true,
+  chat_thread_view_verified: true,
+  new_thread_view_only_verified: true,
   refresh_restore_verified: true,
   viewports: ["1440x900", "1024x768", "768x1024", "390x844", "320x568"],
   sections: sections,
