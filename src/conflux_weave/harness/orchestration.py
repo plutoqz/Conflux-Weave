@@ -182,10 +182,17 @@ class LegacyPaperRuntimeAdapter:
 
 class DurableResearchRuntimeAdapter:
     executor_id = "durable_verified_research@v1"
-    task_kinds = ("verified_paper_research", "managed_verified_research")
 
-    def __init__(self, runtime: Any) -> None:
+    def __init__(self, runtime: Any, *, deep_research_enabled: bool = False) -> None:
         self.runtime = runtime
+        self.task_kinds = (
+            "verified_paper_research",
+            "managed_verified_research",
+            "deep_research",
+        ) if deep_research_enabled else (
+            "verified_paper_research",
+            "managed_verified_research",
+        )
 
     def submit(self, submission: TaskSubmission) -> Any:
         if submission.task_kind not in self.task_kinds:

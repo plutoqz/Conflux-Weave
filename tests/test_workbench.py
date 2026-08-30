@@ -228,7 +228,8 @@ def test_workbench_ux1_sections_are_local_and_wired(tmp_path) -> None:
     assert "registerView" in router and "hashchange" in router
     assert "/api/v1/health/ready" in overview
     assert "/api/v1/config" in settings and "/api/v1/config/provider" in settings
-    assert "/api/v1/tasks/verified-research" in chat
+    assert "/api/v1/tasks/deep-research" in chat
+    assert "/api/v1/chat" in chat
     assert "/follow-up" in chat
     assert "EventSource" in chat
 

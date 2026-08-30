@@ -25,6 +25,7 @@ from conflux_weave.api_contracts import (
     ChatHistoryResponse,
     ChatMessageRecord,
     ChatMessageRequest,
+    DeepResearchTaskRequest,
     ApiErrorResponse,
     ArtifactContentResponse,
     FixtureResearchTaskRequest,
@@ -296,6 +297,27 @@ def create_app(
                 for message in chat_service.history(limit=limit)
             )
         )
+
+    @app.post("/api/v1/tasks/deep-research", response_model=ResearchTaskAcceptedResponse)
+    async def submit_deep_research(request: DeepResearchTaskRequest):
+        """W3.2 模式 C：GPT Researcher 发现聚合 + 本地证据链（durable Run）。"""
+        try:
+            result = orchestrator.submit(
+                TaskSubmission(
+                    task_kind="deep_research",
+                    input={"objective": request.objective},
+                    requested_agent="durable_verified_research@v1",
+                )
+            )
+            state = query_service.get_run(result.run_id).state
+            return ResearchTaskAcceptedResponse(
+                task_id=result.task_id,
+                run_id=result.run_id,
+                created=result.created,
+                state=state,
+            )
+        except Exception as exc:
+            return error_response(exc)
 
     @app.get("/api/v1/runs", response_model=RunPageResponse)
     async def list_runs(cursor: str | None = None, limit: int = Query(default=20, ge=1, le=100)):
@@ -681,13 +703,31 @@ def build_local_app(
                 OpenAICompatibleChatAdapter(store, config),
             )
             retrieval_pipeline = retrieval
+            try:
+                from conflux_weave.deep_research import (
+                    DeepResearchWorkflow,
+                    GPTResearcherBridge,
+                )
+
+                deep_workflow = DeepResearchWorkflow(
+                    store,
+                    OpenAICompatibleChatAdapter(store, config),
+                    GPTResearcherBridge(config, retrieval),
+                    code_revision=_code_revision(),
+                )
+                deep_enabled = True
+            except Exception as deep_exc:
+                deep_workflow = None
+                deep_enabled = False
+                print(f"deep research engine unavailable: {deep_exc}")
             research_runtime = DurableResearchRuntimeAdapter(
                 DurableResearchRuntime(
                     repository,
                     store,
-                    VerifiedWorkflowExecutorAdapter(store, verified, managed),
+                    VerifiedWorkflowExecutorAdapter(store, verified, managed, deep_workflow),
                     code_revision=_code_revision(),
-                )
+                ),
+                deep_research_enabled=deep_enabled,
             )
         except Exception as exc:
             research_runtime = UnavailableTaskRuntime(

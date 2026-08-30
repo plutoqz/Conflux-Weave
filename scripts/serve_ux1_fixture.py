@@ -50,7 +50,7 @@ from conflux_weave.server import create_app
 ROOT = Path("tmp/ux1-fixture")
 DOTENV_PATH = ROOT / "settings.env"
 
-_VERIFIED_KINDS = {"verified_paper_research", "managed_verified_research"}
+_VERIFIED_KINDS = {"verified_paper_research", "managed_verified_research", "deep_research"}
 
 SEED_BASE_TS = "2026-08-28T09:{minute:02d}:00Z"
 

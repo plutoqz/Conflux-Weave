@@ -115,6 +115,10 @@ class VerifiedResearchTaskRequest(_ApiModel):
     mode: Literal["single", "managed"] = "single"
     max_subquestions: int = Field(default=4, ge=2, le=4)
 
+
+class DeepResearchTaskRequest(_ApiModel):
+    objective: str = Field(min_length=1, max_length=4_000)
+
     @field_validator("objective")
     @classmethod
     def require_nonblank_objective(cls, value: str) -> str:
@@ -792,6 +796,7 @@ __all__ = [
     "ChatHistoryResponse",
     "ChatMessageRecord",
     "ChatMessageRequest",
+    "DeepResearchTaskRequest",
     "decode_run_cursor",
     "encode_run_cursor",
     "map_exception",

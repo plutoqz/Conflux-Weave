@@ -522,9 +522,9 @@ async function submit() {
       });
       clearFollow();
     } else {
-      accepted = await api("/api/v1/tasks/verified-research", {
+      accepted = await api("/api/v1/tasks/deep-research", {
         method: "POST",
-        body: JSON.stringify({ objective: question, mode: "single" }),
+        body: JSON.stringify({ objective: question }),
       });
     }
     input.value = "";

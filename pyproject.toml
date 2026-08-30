@@ -15,6 +15,7 @@ dependencies = [
   "python-dotenv>=1,<2",
   "uvicorn>=0.34,<1",
   "lancedb>=0.22,<1",
+  "gpt-researcher>=0.15.1",
 ]
 
 [project.scripts]
@@ -31,3 +32,6 @@ packages = ["src/conflux_weave"]
 [tool.pytest.ini_options]
 addopts = "-ra"
 testpaths = ["tests"]
+
+[tool.uv.sources]
+gpt-researcher = { git = "https://github.com/assafelovic/gpt-researcher" }

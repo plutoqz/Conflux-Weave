@@ -37,7 +37,8 @@ from conflux_weave.runtime.worker import SQLiteStepWorker
 DURABLE_RESEARCH_WORKFLOW_VERSION = "durable-verified-research-v1"
 VERIFIED_RESEARCH_TASK = "verified_paper_research"
 MANAGED_RESEARCH_TASK = "managed_verified_research"
-RESEARCH_TASK_KINDS = (VERIFIED_RESEARCH_TASK, MANAGED_RESEARCH_TASK)
+DEEP_RESEARCH_TASK = "deep_research"
+RESEARCH_TASK_KINDS = (VERIFIED_RESEARCH_TASK, MANAGED_RESEARCH_TASK, DEEP_RESEARCH_TASK)
 STEP_KINDS = ("execute_research", "publish_delivery")
 EXECUTION_SCHEMA = "conflux-weave.durable-research-execution.v1"
 DURABLE_RESEARCH_EVIDENCE_SCHEMA = "conflux-weave.durable-research-evidence.v1"
@@ -81,10 +82,12 @@ class VerifiedWorkflowExecutorAdapter:
         artifact_store: LocalArtifactStore,
         verified_workflow: Any,
         managed_workflow: Any | None = None,
+        deep_workflow: Any | None = None,
     ) -> None:
         self.artifact_store = artifact_store
         self.verified_workflow = verified_workflow
         self.managed_workflow = managed_workflow
+        self.deep_workflow = deep_workflow
 
     def __call__(
         self,
@@ -97,6 +100,13 @@ class VerifiedWorkflowExecutorAdapter:
             evidence_refs = tuple(item.evidence_id for item in result.evidence)
             evidence_records = tuple(asdict(item) for item in result.evidence)
             retrieval_rounds = 1
+        elif task_kind == DEEP_RESEARCH_TASK:
+            if self.deep_workflow is None:
+                raise ValueError("deep research engine is not configured")
+            result = self.deep_workflow.execute(objective)
+            evidence_refs = tuple(item.evidence_id for item in result.evidence)
+            evidence_records = tuple(asdict(item) for item in result.evidence)
+            retrieval_rounds = int(result.usage.get("retrieval_rounds", 1))
         elif task_kind == MANAGED_RESEARCH_TASK:
             if self.managed_workflow is None:
                 raise ValueError("managed research workflow is not configured")
@@ -119,11 +129,16 @@ class VerifiedWorkflowExecutorAdapter:
             retrieval_rounds = len(result.subruns)
         else:
             raise ValueError(f"unsupported research task kind: {task_kind}")
-        input_tokens, output_tokens, provider_calls = self._collect_usage(
-            result.manifest_artifact_id
-        )
-        if provider_calls < 1:
-            raise ValueError("research manifest contains no traceable Provider response")
+        if task_kind == DEEP_RESEARCH_TASK:
+            input_tokens = int(result.usage.get("input_tokens", 0))
+            output_tokens = int(result.usage.get("output_tokens", 0))
+            provider_calls = int(result.provider_call_count)
+        else:
+            input_tokens, output_tokens, provider_calls = self._collect_usage(
+                result.manifest_artifact_id
+            )
+            if provider_calls < 1:
+                raise ValueError("research manifest contains no traceable Provider response")
         return DurableResearchExecution(
             report_artifact_id=result.report_artifact_id,
             manifest_artifact_id=result.manifest_artifact_id,
@@ -262,9 +277,12 @@ class DurableResearchRuntime:
         # Single agent worst case (W2a.2, no-degrade): query planning 1 + 3 queries ×
         # (embedding + rerank) 6 + draft + verify (+ verifier repair) + claim repair +
         # re-verify (+ repair) + distill + writer ×3 (attempts) + audit ×3 ≤ 23;
-        # frozen at 23.
-        provider_call_limit = 23 if task_kind == VERIFIED_RESEARCH_TASK else 2 + 6 * max_subquestions
-        retrieval_round_limit = 3 if task_kind == VERIFIED_RESEARCH_TASK else max_subquestions
+        # frozen at 23. Deep research is batch-opaque: the ceiling counts observable
+        # boundary calls (snapshot fetches + engine batch), not internal engine calls.
+        provider_call_limit = 23 if task_kind == VERIFIED_RESEARCH_TASK else (
+            32 if task_kind == DEEP_RESEARCH_TASK else 2 + 6 * max_subquestions
+        )
+        retrieval_round_limit = (3 if task_kind == VERIFIED_RESEARCH_TASK else (4 if task_kind == DEEP_RESEARCH_TASK else max_subquestions))
         frozen_budget = budget or BudgetLedger(
             900,
             320_000,
