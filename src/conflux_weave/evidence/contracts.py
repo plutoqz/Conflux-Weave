@@ -78,6 +78,7 @@ class Citation:
 class ReportParagraph:
     text: str
     claim_ids: tuple[str, ...]
+    unverified: bool = False
 
 
 @dataclass(frozen=True, slots=True)

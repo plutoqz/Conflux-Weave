@@ -150,12 +150,16 @@
               <fieldset id="chat-mode-fieldset" class="mode-fieldset">
                 <div class="mode-switch chat-mode-switch">
                   <label>
-                    <input type="radio" name="chat_mode" value="single" checked>
-                    <span>单 Agent</span>
+                    <input type="radio" name="chat_mode" value="direct" checked>
+                    <span>直接问答</span>
+                  </label>
+                  <label class="mode-option-disabled" title="W3.1 即将上线">
+                    <input type="radio" name="chat_mode" value="rag" disabled>
+                    <span>知识库问答</span>
                   </label>
                   <label>
-                    <input type="radio" name="chat_mode" value="managed">
-                    <span>Manager</span>
+                    <input type="radio" name="chat_mode" value="deep">
+                    <span>深度研究</span>
                   </label>
                 </div>
               </fieldset>

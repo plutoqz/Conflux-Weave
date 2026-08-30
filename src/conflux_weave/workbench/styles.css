@@ -1353,3 +1353,8 @@ textarea:hover, input:hover { border-color: var(--muted); }
   #activity-panel { display: none !important; }
   #answer-panel { display: block !important; }
 }
+
+/* —— W3.0 三模式对话：直接问答 / 知识库问答（未上线）/ 深度研究 —— */
+.mode-switch label.mode-option-disabled { opacity: 0.45; cursor: not-allowed; }
+.mode-switch label.mode-option-disabled span { pointer-events: none; }
+.chat-msg.direct .chat-msg-body { color: var(--ink); }

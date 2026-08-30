@@ -28,12 +28,13 @@ from conflux_weave.provider import OpenAICompatibleChatAdapter
 from conflux_weave.runtime import LocalArtifactStore
 
 
-REPORT_DOCUMENT_SCHEMA = "conflux-weave.research-report-document.v3"
+REPORT_DOCUMENT_SCHEMA = "conflux-weave.research-report-document.v4"
 EVIDENCE_CARDS_SCHEMA = "conflux-weave.evidence-cards.v1"
 PARAGRAPH_AUDITS_SCHEMA = "conflux-weave.writer-paragraph-audits.v1"
 WRITER_PROMPT_VERSION = "writer-zh-cards-v1"
 
 WRITER_MAX_OUTPUT_TOKENS = 4096
+WRITER_MAX_ATTEMPTS = 3
 AUDIT_MAX_OUTPUT_TOKENS = 2000
 DISTILL_MAX_OUTPUT_TOKENS = 4096
 WRITER_TEMPERATURE = 0.2
@@ -120,11 +121,16 @@ AUDIT_SYSTEM_PROMPT = (
     '{"audits":[{"section_index":0,"paragraph_index":0,'
     '"verdict":"supported|unsupported","rationale":"why"}]} '
     "The root must contain only audits. Audit the summary as section_index 0, "
-    "paragraph_index 0. Use supported only when every factual statement in the "
-    "paragraph is entailed by the cited Claims and their Evidence quotes; use "
-    "unsupported when the paragraph introduces any fact, number, date, name, "
-    "comparison, or causal claim beyond them. Cover every paragraph exactly once "
-    "and provide a non-empty rationale for each verdict."
+    "paragraph_index 0. Judge semantic entailment, not wording: paragraphs are "
+    "Chinese paraphrases of the cited Claims and may reorganize, merge, bold, or "
+    "re-bullet them. Supported means every factual assertion in the paragraph is "
+    "entailed by the union of its cited Claims and their Evidence quotes; a "
+    "comparison is supported when both compared items and the compared respect are "
+    "present in that union. Unsupported means the paragraph introduces a fact, "
+    "entity, number, date, causal claim, or evaluation that is absent from that "
+    "union, or drops a load-bearing qualifier in a way that changes the claim. "
+    "Cover every paragraph exactly once and provide a non-empty rationale that "
+    "quotes the exact offending sentence when unsupported."
 )
 
 
@@ -135,6 +141,7 @@ class EvidenceCard:
     zh_key_points: tuple[str, ...]
     terms: tuple[tuple[str, str], ...]
     scope_limits: str
+    claim_ids: tuple[str, ...] = ()  # deterministic, injected from Citations
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,6 +196,15 @@ def distill_evidence_cards(
             producer_step_id=step_id,
         )
         cards = _parse_cards(completion.content, evidence)
+        claims_by_evidence: dict[str, list[str]] = {}
+        for citation in citations:
+            ids = claims_by_evidence.setdefault(citation.evidence_id, [])
+            if citation.claim_id not in ids:
+                ids.append(citation.claim_id)
+        cards = tuple(
+            replace(card, claim_ids=tuple(claims_by_evidence.get(card.evidence_id, ())))
+            for card in cards
+        )
         cards_ref = store.put_json(
             {
                 "schema_version": EVIDENCE_CARDS_SCHEMA,
@@ -199,6 +215,7 @@ def distill_evidence_cards(
                         "zh_key_points": list(card.zh_key_points),
                         "terms": [{"en": en, "zh": zh} for en, zh in card.terms],
                         "scope_limits": card.scope_limits,
+                        "claim_ids": list(card.claim_ids),
                     }
                     for card in cards
                 ],
@@ -282,33 +299,50 @@ def _writer_system_prompt(with_cards: bool) -> str:
     return (
         "You are a research report Writer. You receive an objective, Verifier-accepted "
         "Claims and report material. Compose a readable, rich research report. "
-        "Write every text field in the same language as the objective. Quality bar: the "
-        "summary answers the objective directly in two to five sentences; organize the "
-        "body into two to six thematic sections (mechanisms, comparisons, workflows, "
-        "examples); each paragraph synthesizes several related Claims and prefers "
-        "concrete details and examples from the supplied material over abstraction. "
-        "Every claim_ids list must be non-empty, duplicate-free, and reference only "
-        "supplied Claim IDs. background is explicitly model-knowledge supplementation "
-        "for concepts the material does not fully cover: definitions, terminology, "
-        "common mechanisms, and typical workflows only. Background items must be "
-        "conceptual explanations without specific statistics, dates, prices, or "
-        "benchmark numbers, must not contradict the cited content, and are never "
-        "evidence. Summarize every supplied Claim somewhere in the cited sections. "
-        "open_questions lists what the corpus could not answer. "
+        "Write every text field in the same language as the objective. Quality bar: "
+        "answer the objective directly; prefer concrete details and examples from the "
+        "supplied material over abstraction. Claim IDs are verbatim identifiers copied from the supplied claim list - never invent or renumber them. Every claim_ids list must be "
+        "non-empty, duplicate-free, and reference only supplied Claim IDs. "
+        "Layout rules (mandatory): "
+        "summary.text is exactly 3-5 Markdown bullet lines; each line starts with "
+        "\"- **\" plus a bolded self-contained conclusion, then a colon and one "
+        "supporting sentence grounded in the cited claims. "
+        "Prefix section headings with Chinese ordinals in order (一、二、三…). "
+        "Each section contains at least one Markdown list for enumerations, at least "
+        "one bolded key conclusion (**…**), and at least one explicit cross-source "
+        "comparison (与 X 相比，Y…) when the material supports it. "
+        "Paragraphs: one assertion per sentence, at most 3-5 short sentences, target "
+        "at most 250 characters; alternate narrative and lists; never stack text "
+        "walls or bullet dumps. "
+        "Unverified paragraphs: inside any section you may intersperse model-"
+        "knowledge paragraphs that carry general concepts the material does not "
+        "cover - definitions, terminology, mental models, common mechanisms, and "
+        "clearly illustrative examples such as generic JSON snippets or worked "
+        "flows. Mark them with \"claim_ids\": [] and \"unverified\": true; the "
+        "renderer prefixes ○ and labels them unverified. They must not state "
+        "specific statistics, dates, prices, or benchmark numbers as fact, must not "
+        "contradict the cited content, and one paragraph must not mix verified and "
+        "unverified statements. "
+        "background is the same model-knowledge lane for longer standalone items "
+        "(0-6 items, heading + text). Summarize every supplied Claim somewhere in "
+        "the cited sections. open_questions lists what the corpus could not answer. "
         + (WRITER_CARD_INSTRUCTIONS if with_cards else WRITER_QUOTE_INSTRUCTIONS)
         + " "
         + WRITER_STYLE_RULES
         + " "
         + WRITER_TRANSLATION_ESE_BANS
         + " Return EXACTLY this JSON object shape and nothing else: "
-        '{"summary":{"text":"direct answer summary","claim_ids":["claim-0001"]},'
-        '"sections":[{"heading":"section heading",'
-        '"paragraphs":[{"text":"paragraph text","claim_ids":["claim-0001"]}]}],'
-        '"background":[{"heading":"background heading","text":"model-knowledge explanation"}],'
-        '"open_questions":["open question"]} '
+        '{"summary":{"text":"- **结论一**：支撑句。\n- **结论二**：支撑句。","claim_ids":["claim-0001"]},'
+        '"sections":[{"heading":"一、小节标题",'
+        '"paragraphs":[{"text":"正文段落","claim_ids":["claim-0001"]},'
+        '{"text":"通识或示意段落","claim_ids":[],"unverified":true}]}],'
+        '"background":[{"heading":"背景标题","text":"背景正文"}],'
+        '"open_questions":["开放问题"]} '
         "The root must contain exactly summary, sections, background, and open_questions; "
         "every section is {\"heading\": string, \"paragraphs\": list} and every paragraph "
-        "is {\"text\": string, \"claim_ids\": list of 1-10 Claim IDs}; no extra keys anywhere."
+        "is {\"text\": string, \"claim_ids\": list, \"unverified\": optional bool}; "
+        "verified paragraphs cite 1-10 Claim IDs, unverified paragraphs cite none; "
+        "no extra keys anywhere."
     )
 
 
@@ -348,6 +382,8 @@ def _require_no_digit_drift(
         for paragraph_index, paragraph in enumerate(section.paragraphs):
             paragraphs.append((section_index, paragraph_index, paragraph))
     for section_index, paragraph_index, paragraph in paragraphs:
+        if paragraph.unverified:
+            continue
         allowed: set[str] = set()
         for claim_id in paragraph.claim_ids:
             allowed.update(DIGIT_PATTERN.findall(claim_by_id[claim_id].text))
@@ -404,6 +440,7 @@ def compose_report_document(
                         "zh_key_points": list(card.zh_key_points),
                         "terms": [{"en": en, "zh": zh} for en, zh in card.terms],
                         "scope_limits": card.scope_limits,
+                        "claim_ids": list(card.claim_ids),
                     }
                     for card in cards
                 ],
@@ -436,94 +473,112 @@ def compose_report_document(
                 ],
             }
         )
-        writer_completion = chat.complete(
-            system_prompt=_writer_system_prompt(with_cards=bool(cards)),
-            user_prompt=json.dumps(writer_material, ensure_ascii=False),
-            max_output_tokens=WRITER_MAX_OUTPUT_TOKENS,
-            temperature=WRITER_TEMPERATURE,
-            json_object=True,
-            enable_thinking=False,
-            producer_step_id=writer_step_id,
-        )
-        try:
-            document = _parse_writer_payload(writer_completion.content, claims, objective)
-        except ValueError as schema_error:
-            # 一次 schema 规范化重试：只修格式，全部质量门照旧把关（W2a 冻结）。
-            repair_instruction = (
-                "Your previous output violated the report schema. Return ONLY the exact "
-                f"JSON object with no extra keys. The violation was: {schema_error}. "
-                "Remember: root keys exactly summary, sections, background, open_questions; "
-                'every section is {"heading": string, "paragraphs": list of '
-                '{"text": string, "claim_ids": list}}; every paragraph cites 1-10 Claims.'
-            )
-            writer_completion = chat.complete(
-                system_prompt=_writer_system_prompt(with_cards=bool(cards)) + " " + repair_instruction,
-                user_prompt=json.dumps(
-                    {**writer_material, "previous_invalid_output": writer_completion.content[:2000]},
-                    ensure_ascii=False,
-                ),
-                max_output_tokens=WRITER_MAX_OUTPUT_TOKENS,
-                temperature=WRITER_TEMPERATURE,
-                json_object=True,
-                enable_thinking=False,
-                producer_step_id=f"{writer_step_id}-repair",
-            )
-            document = _parse_writer_payload(writer_completion.content, claims, objective)
-        _require_no_digit_drift(document, claims, evidence, citations)
-        omitted = unreferenced_claim_ids(document, claims)
-        if 2 * len(omitted) > len(claims):
-            return _degraded(
-                f"writer omitted {len(omitted)} of {len(claims)} verified Claims",
-                writer_completion=writer_completion,
-            )
-        warnings: tuple[str, ...] = ()
-        if omitted:
-            warnings = (
-                f"Writer 未引用 {len(omitted)} 条已验证 Claim，已由确定性代码汇总到「补充发现」。",
-            )
-        document = replace(
-            document, unreferenced_claim_ids=omitted, warnings=warnings
-        )
-        paragraphs = _flatten_paragraphs(document)
-        audit_completion = chat.complete(
-            system_prompt=AUDIT_SYSTEM_PROMPT,
-            user_prompt=json.dumps(
-                {
-                    "objective": objective,
-                    "claims": [
-                        {"claim_id": item.claim_id, "text": item.text} for item in claims
-                    ],
-                    "evidence": [
-                        {"evidence_id": item.evidence_id, "quote": item.quote}
-                        for item in evidence
-                    ],
-                    "citations": [
+        # 一次修复重试统一覆盖三类违规：JSON schema / C5 数字漂移 / 审计拒绝。
+        # 只规范化格式与归属，全部质量门照旧把关；重试自身失败按原始违规降级（W2a.2）。
+        valid_ids = ", ".join(claim.claim_id for claim in claims)
+        document = None
+        audit_completion = None
+        first_violation = ""
+        latest_violation = ""
+        for attempt in range(WRITER_MAX_ATTEMPTS):
+            try:
+                writer_completion = chat.complete(
+                    system_prompt=(
+                        _writer_system_prompt(with_cards=bool(cards))
+                        + (
+                            f" Your previous attempt was rejected: {latest_violation} Fix the "
+                            "violation and return ONLY the exact JSON object. If a sentence is "
+                            "general knowledge, move it into an unverified paragraph; if it "
+                            "asserts a specific fact, cite the Claim that actually contains it; "
+                            f"copy numbers verbatim. The ONLY Claim IDs that exist are: {valid_ids}."
+                            if attempt
+                            else ""
+                        )
+                    ),
+                    user_prompt=json.dumps(writer_material, ensure_ascii=False),
+                    max_output_tokens=WRITER_MAX_OUTPUT_TOKENS,
+                    temperature=WRITER_TEMPERATURE,
+                    json_object=True,
+                    enable_thinking=False,
+                    producer_step_id=writer_step_id if attempt == 0 else f"{writer_step_id}-repair",
+                )
+                document = _parse_writer_payload(writer_completion.content, claims, objective)
+                _require_no_digit_drift(document, claims, evidence, citations)
+                omitted = unreferenced_claim_ids(document, claims)
+                if 2 * len(omitted) > len(claims):
+                    raise ValueError(f"writer omitted {len(omitted)} of {len(claims)} verified Claims")
+                warnings: tuple[str, ...] = ()
+                if omitted:
+                    warnings = (
+                        f"Writer 未引用 {len(omitted)} 条已验证 Claim，已由确定性代码汇总到「补充发现」。",
+                    )
+                document = replace(
+                    document, unreferenced_claim_ids=omitted, warnings=warnings
+                )
+                paragraphs = _flatten_paragraphs(document)
+                audit_completion = chat.complete(
+                    system_prompt=AUDIT_SYSTEM_PROMPT,
+                    user_prompt=json.dumps(
                         {
-                            "display_index": item.display_index,
-                            "claim_id": item.claim_id,
-                            "evidence_id": item.evidence_id,
-                        }
-                        for item in citations
-                    ],
-                    "paragraphs": [
-                        {
-                            "section_index": section_index,
-                            "paragraph_index": paragraph_index,
-                            "text": paragraph.text,
-                            "claim_ids": list(paragraph.claim_ids),
-                        }
-                        for section_index, paragraph_index, paragraph in paragraphs
-                    ],
-                },
-                ensure_ascii=False,
-            ),
-            max_output_tokens=AUDIT_MAX_OUTPUT_TOKENS,
-            temperature=0.0,
-            json_object=True,
-            enable_thinking=False,
-            producer_step_id=audit_step_id,
-        )
-        _parse_audit_payload(audit_completion.content, paragraphs)
+                            "objective": objective,
+                            "claims": [
+                                {"claim_id": item.claim_id, "text": item.text} for item in claims
+                            ],
+                            "evidence": [
+                                {"evidence_id": item.evidence_id, "quote": item.quote}
+                                for item in evidence
+                            ],
+                            "citations": [
+                                {
+                                    "display_index": item.display_index,
+                                    "claim_id": item.claim_id,
+                                    "evidence_id": item.evidence_id,
+                                }
+                                for item in citations
+                            ],
+                            "paragraphs": [
+                                {
+                                    "section_index": section_index,
+                                    "paragraph_index": paragraph_index,
+                                    "text": paragraph.text,
+                                    "claim_ids": list(paragraph.claim_ids),
+                                }
+                                for section_index, paragraph_index, paragraph in paragraphs
+                            ],
+                        },
+                        ensure_ascii=False,
+                    ),
+                    max_output_tokens=AUDIT_MAX_OUTPUT_TOKENS,
+                    temperature=0.0,
+                    json_object=True,
+                    enable_thinking=False,
+                    producer_step_id=audit_step_id,
+                )
+                _parse_audit_payload(audit_completion.content, paragraphs)
+                break
+            except ValueError as violation:
+                # 首错为根因：兜底原因保留首次违规；反馈用最新违规；二次错误不掩盖首错。
+                latest_violation = str(violation)[:500]
+                if not first_violation:
+                    first_violation = latest_violation
+                if attempt == WRITER_MAX_ATTEMPTS - 1:
+                    return _fallback_outcome(
+                        store, objective, claims, first_violation,
+                        writer_completion=writer_completion,
+                        audit_completion=audit_completion,
+                    )
+                writer_material = {
+                    **writer_material,
+                    "previous_invalid_output": writer_completion.content[:2000],
+                }
+            except Exception:
+                if latest_violation:
+                    return _fallback_outcome(
+                        store, objective, claims, first_violation or latest_violation,
+                        writer_completion=writer_completion,
+                        audit_completion=audit_completion,
+                    )
+                raise
         document_ref = store.put_json(
             {
                 "schema_version": REPORT_DOCUMENT_SCHEMA,
@@ -566,21 +621,85 @@ def compose_report_document(
             audit_request_artifact_id=audit_completion.request_artifact.artifact_id,
             audit_response_artifact_id=audit_completion.response_artifact.artifact_id,
         )
-    except Exception as exc:  # noqa: BLE001 - degrade, never abort delivery
-        return _degraded(
-            f"report writer failed: {exc}",
+    except Exception as exc:  # noqa: BLE001 - 兜底交付，绝不中断
+        return _fallback_outcome(
+            store, objective, claims, f"report writer failed: {exc}",
             writer_completion=writer_completion,
             audit_completion=audit_completion,
         )
 
 
-def _degraded(
+def build_deterministic_document(
+    objective: str, claims: tuple[Claim, ...]
+) -> ReportDocument:
+    """Complete report assembled without the model: every accepted Claim verbatim.
+
+    禁止降级（W2a.2）：模型写作未通过校验时的交付底线。逐字使用 Claim 原文，
+    引用闭合与 C5 由构造保证，不依赖任何模型输出。
+    """
+    if not claims:
+        raise ValueError("deterministic fallback requires at least one Claim")
+    ordinals = "一二三四五六七八九十"
+    summary = ReportParagraph(
+        text="\n".join(f"- {claim.text}" for claim in claims[:5]),
+        claim_ids=tuple(claim.claim_id for claim in claims[:5]),
+    )
+    sections = []
+    for chunk_index in range(0, len(claims), 5):
+        chunk = claims[chunk_index : chunk_index + 5]
+        ordinal = ordinals[len(sections)] if len(sections) < len(ordinals) else "续"
+        sections.append(
+            ReportSection(
+                f"{ordinal}、已验证研究发现",
+                tuple(
+                    ReportParagraph(claim.text, (claim.claim_id,)) for claim in chunk
+                ),
+            )
+        )
+    return ReportDocument(objective=objective, summary=summary, sections=tuple(sections))
+
+
+def _fallback_outcome(
+    store: LocalArtifactStore,
+    objective: str,
+    claims: tuple[Claim, ...],
     reason: str,
     *,
     writer_completion=None,
     audit_completion=None,
 ) -> WriterOutcome:
-    outcome = WriterOutcome(document=None, status="degraded", reason=reason, warnings=())
+    document = build_deterministic_document(objective, claims)
+    document_ref = store.put_json(
+        {
+            "schema_version": REPORT_DOCUMENT_SCHEMA,
+            "writer_prompt_version": WRITER_PROMPT_VERSION,
+            "assembly": "deterministic-fallback",
+            "objective": document.objective,
+            "summary": asdict(document.summary),
+            "sections": [
+                {
+                    "heading": section.heading,
+                    "paragraphs": [asdict(item) for item in section.paragraphs],
+                }
+                for section in document.sections
+            ],
+            "background": [],
+            "open_questions": [],
+            "unreferenced_claim_ids": [],
+            "warnings": [f"模型写作未通过校验（{reason}），已由确定性代码组装完整报告。"],
+        },
+        producer_step_id="s1-research-write-fallback",
+        schema_version=REPORT_DOCUMENT_SCHEMA,
+    )
+    outcome = WriterOutcome(
+        document=document,
+        status="fallback",
+        reason=reason,
+        warnings=(
+            f"模型写作未通过校验（{reason}），已由确定性代码组装完整报告。",
+        ),
+        document_artifact_id=document_ref.artifact_id,
+    )
     if writer_completion is not None:
         outcome = replace(
             outcome,
@@ -675,12 +794,22 @@ def _parse_background(raw: object) -> tuple[ReportBackground, ...]:
 def _parse_paragraph(
     raw: object, claims: tuple[Claim, ...], label: str
 ) -> ReportParagraph:
-    if not isinstance(raw, dict) or set(raw) != {"text", "claim_ids"}:
+    if not isinstance(raw, dict) or set(raw) not in (
+        {"text", "claim_ids"},
+        {"text", "claim_ids", "unverified"},
+    ):
         raise ValueError(f"writer {label} has an invalid schema")
     text = raw["text"]
     if not isinstance(text, str) or not text.strip() or len(text) > MAX_TEXT_CHARS:
         raise ValueError(f"writer {label} text must be a bounded non-empty string")
+    unverified = raw.get("unverified", False)
+    if not isinstance(unverified, bool):
+        raise ValueError(f"writer {label} unverified must be a boolean")
     raw_claim_ids = raw["claim_ids"]
+    if unverified:
+        if raw_claim_ids:
+            raise ValueError(f"writer {label} is unverified and must not cite Claims")
+        return ReportParagraph(text.strip(), (), unverified=True)
     if not isinstance(raw_claim_ids, list) or not 1 <= len(raw_claim_ids) <= MAX_CLAIMS_PER_PARAGRAPH:
         raise ValueError(f"writer {label} must cite between 1 and {MAX_CLAIMS_PER_PARAGRAPH} Claims")
     claim_ids = tuple(str(value) for value in raw_claim_ids)
@@ -696,10 +825,13 @@ def _parse_paragraph(
 def _flatten_paragraphs(
     document: ReportDocument,
 ) -> list[tuple[int, int, ReportParagraph]]:
+    """Cited paragraphs only: unverified paragraphs are excluded from the audit."""
+
     flattened = [(0, 0, document.summary)]
     for section_index, section in enumerate(document.sections, 1):
         for paragraph_index, paragraph in enumerate(section.paragraphs):
-            flattened.append((section_index, paragraph_index, paragraph))
+            if not paragraph.unverified:
+                flattened.append((section_index, paragraph_index, paragraph))
     return flattened
 
 

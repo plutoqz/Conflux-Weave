@@ -11,13 +11,19 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+import subprocess
 
 from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 
+from conflux_weave.chat import ChatService
 from conflux_weave.api_contracts import (
+    ChatAnswerResponse,
+    ChatHistoryResponse,
+    ChatMessageRecord,
+    ChatMessageRequest,
     ApiErrorResponse,
     ArtifactContentResponse,
     FixtureResearchTaskRequest,
@@ -121,6 +127,7 @@ def create_app(
     poll_interval_seconds: float = 0.25,
     dotenv_path: Path | None = None,
     config_paths: dict[str, str] | None = None,
+    chat_service: ChatService | None = None,
 ) -> FastAPI:
     """Build the one ASGI application around injected authoritative components."""
 
@@ -223,6 +230,50 @@ def create_app(
             )
         except Exception as exc:
             return error_response(exc)
+
+    @app.post("/api/v1/chat", response_model=ChatAnswerResponse)
+    def submit_chat_message(request: ChatMessageRequest):
+        """W3.0 模式 A：直接问答——无 Run、无报告工件，仅对话记录。"""
+        if chat_service is None:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "code": "provider_not_configured",
+                    "message": "模型服务未配置，直接问答不可用。",
+                    "recovery_action": "在设置中完成模型服务配置后重试。",
+                },
+            )
+        try:
+            result = chat_service.direct_answer(request.question, request.conversation_id)
+        except Exception as exc:
+            return error_response(exc)
+        return ChatAnswerResponse(
+            message_id=result["message_id"],
+            conversation_id=result["conversation_id"],
+            role=result["role"],
+            mode=result["mode"],
+            content=result["content"],
+            created_at=result["created_at"],
+            provider_response_id=result["provider_response_id"],
+        )
+
+    @app.get("/api/v1/chat/messages", response_model=ChatHistoryResponse)
+    async def list_chat_messages(limit: int = Query(default=20, ge=1, le=100)):
+        if chat_service is None:
+            return ChatHistoryResponse(items=())
+        return ChatHistoryResponse(
+            items=tuple(
+                ChatMessageRecord(
+                    message_id=message.message_id,
+                    conversation_id=message.conversation_id,
+                    role=message.role,
+                    mode=message.mode,
+                    content=message.content,
+                    created_at=message.created_at,
+                )
+                for message in chat_service.history(limit=limit)
+            )
+        )
 
     @app.get("/api/v1/runs", response_model=RunPageResponse)
     async def list_runs(cursor: str | None = None, limit: int = Query(default=20, ge=1, le=100)):
@@ -509,6 +560,30 @@ def create_app(
     return app
 
 
+def _code_revision() -> str:
+    """Code identity for run idempotency: same code dedupes, changed code reruns."""
+
+    try:
+        head = subprocess.check_output(
+            ["git", "rev-parse", "--short=12", "HEAD"],
+            text=True,
+            cwd=Path(__file__).parent,
+        ).strip()
+    except Exception:
+        return "unknown"
+    try:
+        dirty = bool(
+            subprocess.check_output(
+                ["git", "status", "--porcelain"],
+                text=True,
+                cwd=Path(__file__).parent,
+            ).strip()
+        )
+    except Exception:
+        dirty = False
+    return f"{head}{'-dirty' if dirty else ''}"
+
+
 def build_local_app(
     *,
     database: Path = Path("var") / "db" / "conflux-weave.sqlite3",
@@ -543,6 +618,7 @@ def build_local_app(
             task_kinds=("verified_paper_research", "managed_verified_research"),
             message="Provider configuration is incomplete",
         )
+        chat_service = None
     else:
         paper_runtime = LegacyPaperRuntimeAdapter(
             DurablePaperDiscoveryRuntime(
@@ -553,6 +629,7 @@ def build_local_app(
             )
         )
         provider_configured = True
+        chat_service = ChatService(OpenAICompatibleChatAdapter(store, config), database)
         try:
             from conflux_weave.hybrid_retrieval import HybridRetrievalPipeline
             from conflux_weave.indexing import LanceDBDenseIndex, load_chunks
@@ -586,6 +663,7 @@ def build_local_app(
                     repository,
                     store,
                     VerifiedWorkflowExecutorAdapter(store, verified, managed),
+                    code_revision=_code_revision(),
                 )
             )
         except Exception as exc:
@@ -612,6 +690,7 @@ def build_local_app(
             "lancedb_root": str(lancedb_root),
             "dotenv": str(dotenv_path) if dotenv_path else "",
         },
+        chat_service=chat_service,
     )
 
 

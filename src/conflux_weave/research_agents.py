@@ -18,7 +18,9 @@ from conflux_weave.harness import (
 )
 from conflux_weave.hybrid_retrieval import HybridRetrievalPipeline, HybridRetrievalRun
 from conflux_weave.provider import OpenAICompatibleChatAdapter
-from conflux_weave.report_writer import WriterOutcome, compose_report_document, distill_evidence_cards
+from conflux_weave.report_writer import (
+    WriterOutcome, build_deterministic_document, compose_report_document, distill_evidence_cards,
+)
 from conflux_weave.runtime import LocalArtifactStore
 
 RESEARCH_TOOL_ID = "hybrid_paper_retrieval"
@@ -218,19 +220,16 @@ class VerifiedResearchWorkflow:
             if enable_writer
             else None
         )
-        report_schema_version = "conflux-weave.verified-research-report.v1"
-        if writer is not None and writer.status == "ok":
-            report = render_report_document(title=objective, document=writer.document, claims=accepted_claims, evidence=accepted_evidence, citations=citations, evidence_trust={item.evidence_id: SourceTrustLevel.GENERAL_SOURCE for item in accepted_evidence}, limitations=limitations)
-            report_schema_version = "conflux-weave.verified-research-report.v2"
-        else:
-            if writer is not None:
-                limitations += ("报告写作未通过校验，已降级为证据清单视图。",)
-            report = render_evidence_report(title="Verified paper research", intro_lines=(f"> Objective: {objective}", f"> Plan Artifact: `{plan_ref.artifact_id}`", f"> Retrieval Artifact: `{retrieval_ref.artifact_id}`"), blocks=tuple(AnswerBlock(f"Claim {index}", claim.text, EvidenceSupportStatus.CITED, (claim.claim_id,)) for index, claim in enumerate(accepted_claims, 1)), claims=accepted_claims, evidence=accepted_evidence, citations=citations, evidence_trust={item.evidence_id: SourceTrustLevel.GENERAL_SOURCE for item in accepted_evidence}, limitations=limitations)
-        report_ref = self.store.put_bytes(report.encode("utf-8"), media_type="text/markdown; charset=utf-8", producer_step_id="s1-research-deliver", schema_version=report_schema_version)
+        # 禁止降级（W2a.2）：模型报告或确定性组装，交付永远是完整 v2 报告。
+        if writer is not None and writer.status == "fallback":
+            limitations += ("报告正文为确定性组装的已验证 Claim 原文（模型写作未通过校验轮次），已完整覆盖全部核验结论。",)
+        document = writer.document if writer is not None and writer.document is not None else build_deterministic_document(objective, accepted_claims)
+        report = render_report_document(title=objective, document=document, claims=accepted_claims, evidence=accepted_evidence, citations=citations, evidence_trust={item.evidence_id: SourceTrustLevel.GENERAL_SOURCE for item in accepted_evidence}, limitations=limitations)
+        report_ref = self.store.put_bytes(report.encode("utf-8"), media_type="text/markdown; charset=utf-8", producer_step_id="s1-research-deliver", schema_version="conflux-weave.verified-research-report.v2")
         coverage = CoverageReport(len(accepted_evidence), len(claims), len(accepted_claims), len(claims) - len(accepted_claims), repair_rounds, "verified_delivery" if accepted_claims else "no_supported_claim")
         harness_refs = self._harness_trace(objective, plan_ref.artifact_id, retrieval_ref, report_ref, accepted_evidence, coverage)
-        writer_status = writer.status if writer is not None else "disabled"
-        manifest = {"schema_version": "conflux-weave.verified-research-manifest.v1", "objective": objective, "corpus_scope": self.corpus_scope, "disposition": DeliveryDisposition.COMPLETE.value, "profiles": {"research": asdict(self.research_profile), "verifier": asdict(self.verifier_profile)}, "plan_artifact": plan_ref.artifact_id, "retrieval_artifact": retrieval_ref.artifact_id, "model_artifacts": query_refs + research_refs + verify_refs, "harness_artifacts": harness_refs, "report_artifact": report_ref.artifact_id, "coverage": asdict(coverage), "citation_closure": 1.0, "repair_rounds": repair_rounds, "search_queries": list(queries), "query_planning_warning": query_warning, "limitations": list(limitations), "report_contract": "v2" if writer_status == "ok" else "v1", "writer_status": writer_status, "writer_degrade_reason": writer.reason if writer is not None else None, "writer_document_artifact": writer.document_artifact_id if writer_status == "ok" else None, "writer_audit_artifact": writer.audit_artifact_id if writer_status == "ok" else None, "writer_request_artifact": writer.writer_request_artifact_id if writer is not None else None, "writer_response_artifact": writer.writer_response_artifact_id if writer is not None else None, "writer_audit_request_artifact": writer.audit_request_artifact_id if writer is not None else None, "writer_audit_response_artifact": writer.audit_response_artifact_id if writer is not None else None, "writer_warnings": list(writer.warnings) if writer_status == "ok" else [], "unreferenced_claim_ids": list(writer.document.unreferenced_claim_ids) if writer_status == "ok" else [], "distill_status": distill.status if distill is not None else "skipped", "distill_artifact": distill.cards_artifact_id if distill is not None and distill.status == "ok" else None, "distill_request_artifact": distill.request_artifact_id if distill is not None else None, "distill_response_artifact": distill.response_artifact_id if distill is not None else None, "distill_degrade_reason": distill.reason if distill is not None and distill.status == "failed" else None}
+        writer_status = writer.status if writer is not None else "deterministic"
+        manifest = {"schema_version": "conflux-weave.verified-research-manifest.v1", "objective": objective, "corpus_scope": self.corpus_scope, "disposition": DeliveryDisposition.COMPLETE.value, "profiles": {"research": asdict(self.research_profile), "verifier": asdict(self.verifier_profile)}, "plan_artifact": plan_ref.artifact_id, "retrieval_artifact": retrieval_ref.artifact_id, "model_artifacts": query_refs + research_refs + verify_refs, "harness_artifacts": harness_refs, "report_artifact": report_ref.artifact_id, "coverage": asdict(coverage), "citation_closure": 1.0, "repair_rounds": repair_rounds, "search_queries": list(queries), "query_planning_warning": query_warning, "limitations": list(limitations), "report_contract": "v2", "writer_status": writer_status, "writer_degrade_reason": writer.reason if writer is not None else None, "writer_document_artifact": writer.document_artifact_id if writer is not None else None, "writer_audit_artifact": writer.audit_artifact_id if writer_status == "ok" else None, "writer_request_artifact": writer.writer_request_artifact_id if writer is not None else None, "writer_response_artifact": writer.writer_response_artifact_id if writer is not None else None, "writer_audit_request_artifact": writer.audit_request_artifact_id if writer is not None else None, "writer_audit_response_artifact": writer.audit_response_artifact_id if writer is not None else None, "writer_warnings": list(writer.warnings) if writer is not None else [], "unreferenced_claim_ids": list(writer.document.unreferenced_claim_ids) if writer is not None else [], "distill_status": distill.status if distill is not None else "skipped", "distill_artifact": distill.cards_artifact_id if distill is not None and distill.status == "ok" else None, "distill_request_artifact": distill.request_artifact_id if distill is not None else None, "distill_response_artifact": distill.response_artifact_id if distill is not None else None, "distill_degrade_reason": distill.reason if distill is not None and distill.status == "failed" else None}
         manifest_ref = self.store.put_json(manifest, producer_step_id="s1-research-deliver", schema_version=manifest["schema_version"])
         return ResearchExecution(report_ref.artifact_id, manifest_ref.artifact_id, accepted_claims, accepted_evidence, citations, assessments, coverage, DeliveryDisposition.COMPLETE, limitations)
 
@@ -353,15 +352,31 @@ class VerifiedResearchWorkflow:
 
     def _verify(self, claims: tuple[Claim, ...], evidence: tuple[EvidenceRef, ...], *, round_number: int):
         prompt={"claims":[asdict(item) for item in claims],"evidence":[asdict(item) for item in evidence],"instruction":"Return assessments for every claim with claim_id,evidence_ids,relation supports|contradicts|context|insufficient,verdict accepted|rejected|uncertain,rationale."}
-        completion=self.chat.complete(system_prompt="Act as an independent evidence verifier. Accept only claims directly supported by the quoted evidence. Return JSON {assessments:[...]}. Every evidence_id must exactly match an evidence_id supplied by the user.",user_prompt=json.dumps(prompt,ensure_ascii=False),max_output_tokens=1800,temperature=0,json_object=True,enable_thinking=False,producer_step_id=f"s1-verifier-{round_number}")
-        assessments, assessment_ref = _parse_verifier_assessments(
-            completion.content,
-            claims,
-            evidence,
-            completion.response_artifact.artifact_id,
-            self.store,
-            f"s1-verifier-{round_number}",
-        )
+        def call(step_id: str, extra: str = ""):
+            return self.chat.complete(system_prompt="Act as an independent evidence verifier. Accept only claims directly supported by the quoted evidence. Return JSON {assessments:[...]}. Every evidence_id must exactly match an evidence_id supplied by the user." + extra,user_prompt=json.dumps(prompt,ensure_ascii=False),max_output_tokens=4096,temperature=0,json_object=True,enable_thinking=False,producer_step_id=step_id)
+        def parse(completion, step_id: str):
+            return _parse_verifier_assessments(
+                completion.content,
+                claims,
+                evidence,
+                completion.response_artifact.artifact_id,
+                self.store,
+                step_id,
+            )
+        completion = call(f"s1-verifier-{round_number}")
+        try:
+            assessments, assessment_ref = parse(completion, f"s1-verifier-{round_number}")
+        except ValueError as schema_error:
+            # 一次 schema 修复重试（W2a.2）：Claim 预算扩到 10 后验证器输出变长，
+            # 首轮实测出现 invalid schema / unknown Claim ID；只规范化格式，fail-closed 不变。
+            valid_ids = ", ".join(claim.claim_id for claim in claims)
+            completion = call(
+                f"s1-verifier-{round_number}-repair",
+                f" Your previous output violated the schema: {schema_error}. Return ONLY the exact JSON object. "
+                f"Assess every claim exactly once; the ONLY Claim IDs that exist are: {valid_ids}. "
+                "Every evidence_id must be copied verbatim from the supplied evidence list.",
+            )
+            assessments, assessment_ref = parse(completion, f"s1-verifier-{round_number}-repair")
         return tuple(assessments), [completion.request_artifact.artifact_id,completion.response_artifact.artifact_id,assessment_ref.artifact_id]
 
     @staticmethod

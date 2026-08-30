@@ -79,6 +79,28 @@ class FixtureResearchTaskRequest(_ApiModel):
         return value.strip()
 
 
+class ChatMessageRequest(_ApiModel):
+    question: str = Field(min_length=1, max_length=8_000)
+    conversation_id: str | None = Field(default=None, max_length=64)
+
+
+class ChatMessageRecord(_ApiModel):
+    message_id: str
+    conversation_id: str
+    role: str
+    mode: str
+    content: str
+    created_at: str
+
+
+class ChatAnswerResponse(ChatMessageRecord):
+    provider_response_id: str
+
+
+class ChatHistoryResponse(_ApiModel):
+    items: tuple[ChatMessageRecord, ...] = ()
+
+
 class VerifiedResearchTaskRequest(_ApiModel):
     objective: str = Field(min_length=1, max_length=4_000)
     mode: Literal["single", "managed"] = "single"
@@ -757,6 +779,10 @@ __all__ = [
     "WorkbenchConfigResponse",
     "WorkbenchQueryService",
     "VerifiedResearchTaskRequest",
+    "ChatAnswerResponse",
+    "ChatHistoryResponse",
+    "ChatMessageRecord",
+    "ChatMessageRequest",
     "decode_run_cursor",
     "encode_run_cursor",
     "map_exception",

@@ -103,6 +103,12 @@ def _require_closed_paragraph(
 ) -> None:
     if not paragraph.text.strip():
         raise ReportDocumentValidationError(f"{label} text must not be empty")
+    if paragraph.unverified:
+        if paragraph.claim_ids:
+            raise ReportDocumentValidationError(
+                f"{label} is unverified and must not register Claims"
+            )
+        return
     if not paragraph.claim_ids:
         raise ReportDocumentValidationError(f"{label} must reference at least one Claim")
     if len(paragraph.claim_ids) != len(set(paragraph.claim_ids)):

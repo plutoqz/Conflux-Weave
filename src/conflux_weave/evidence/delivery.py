@@ -202,7 +202,10 @@ def render_report_document(
     for section in document.sections:
         lines.extend((f"## {section.heading}", ""))
         for paragraph in section.paragraphs:
-            lines.append(f"{paragraph.text} {markers(paragraph.claim_ids)}".rstrip())
+            if paragraph.unverified:
+                lines.append(f"○ {paragraph.text}")
+            else:
+                lines.append(f"{paragraph.text} {markers(paragraph.claim_ids)}".rstrip())
         lines.append("")
     if document.background:
         lines.extend(("## 背景补充（模型知识 · 未经证据核验）", ""))

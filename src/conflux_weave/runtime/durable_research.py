@@ -259,15 +259,16 @@ class DurableResearchRuntime:
         ):
             raise ValueError("follow_up_question must not be blank")
 
-        # Single agent worst case (W2a): query planning 1 + 3 queries × (embedding +
-        # rerank) 6 + draft + verify + repair + re-verify + distill + writer +
-        # writer-schema-repair + audit = 15 calls.
-        provider_call_limit = 15 if task_kind == VERIFIED_RESEARCH_TASK else 2 + 6 * max_subquestions
+        # Single agent worst case (W2a.2, no-degrade): query planning 1 + 3 queries ×
+        # (embedding + rerank) 6 + draft + verify (+ verifier repair) + claim repair +
+        # re-verify (+ repair) + distill + writer ×3 (attempts) + audit ×3 ≤ 23;
+        # frozen at 23.
+        provider_call_limit = 23 if task_kind == VERIFIED_RESEARCH_TASK else 2 + 6 * max_subquestions
         retrieval_round_limit = 3 if task_kind == VERIFIED_RESEARCH_TASK else max_subquestions
         frozen_budget = budget or BudgetLedger(
             900,
             320_000,
-            32_000,
+            48_000,
             "provider-price-not-frozen",
             provider_call_limit,
             retrieval_round_limit,

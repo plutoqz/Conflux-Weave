@@ -27,6 +27,9 @@ export const modeLabels = {
   single: "单 Agent",
   managed: "Manager 协作",
   fixture: "离线验证",
+  direct: "直接问答",
+  rag: "知识库问答",
+  deep: "深度研究",
 };
 
 export async function api(path, options = {}) {

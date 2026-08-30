@@ -21,6 +21,7 @@ const sendButton = document.getElementById("chat-send");
 
 const watches = new Map();
 let followParent = null;
+let directConversationId = null;
 
 function autoGrow(node) {
   node.style.height = "auto";
@@ -52,6 +53,24 @@ function appendUserMessage(text, time, label = "你", parent = thread) {
   body.textContent = text;
   article.append(header, body);
   parent.append(article);
+  return article;
+}
+
+function appendAssistantMessage(content) {
+  const article = document.createElement("article");
+  article.className = "chat-msg agent direct";
+  const header = document.createElement("header");
+  const label = document.createElement("span");
+  label.className = "chat-msg-label";
+  label.textContent = "直接问答 · 模型知识（未核验）";
+  const stamp = document.createElement("time");
+  stamp.textContent = formatDate(new Date().toISOString(), true);
+  header.append(label, stamp);
+  const body = document.createElement("div");
+  body.className = "chat-msg-body";
+  renderAnswer(body, content || "", "text/markdown");
+  article.append(header, body);
+  thread.append(article);
   return article;
 }
 
@@ -304,10 +323,21 @@ async function loadHistory() {
         details.push(await api(`/api/v1/runs/${encodeURIComponent(item.run_id)}`));
       } catch { continue; }
     }
+    const chatPage = await api("/api/v1/chat/messages?limit=20").catch(() => ({ items: [] }));
+    for (const message of chatPage.items || []) {
+      if (message.role === "user") {
+        appendUserMessage(message.content, message.created_at);
+      } else {
+        appendAssistantMessage(message.content);
+      }
+    }
+    if ((chatPage.items || []).length) threadEmpty.hidden = true;
     const threads = buildThreads(details);
     if (!threads.length) {
-      historyPanel.hidden = true;
-      threadEmpty.hidden = false;
+      if (!(chatPage.items || []).length) {
+        historyPanel.hidden = true;
+        threadEmpty.hidden = false;
+      }
       return;
     }
     historyThreads.replaceChildren(
@@ -327,6 +357,7 @@ async function loadHistory() {
 function startNewThread() {
   for (const { close } of [...watches.values()]) close();
   watches.clear();
+  directConversationId = null;
   thread.replaceChildren();
   threadEmpty.hidden = false;
   clearFollow();
@@ -426,7 +457,28 @@ async function submit() {
   }
   errorNode.hidden = true;
   sendButton.disabled = true;
+  const mode = document.querySelector('input[name="chat_mode"]:checked')?.value || "direct";
+  if (mode === "rag") {
+    sendButton.disabled = false;
+    showChatError("知识库问答即将上线（W3.1），当前请使用直接问答或深度研究。");
+    return;
+  }
   try {
+    if (mode === "direct") {
+      input.value = "";
+      autoGrow(input);
+      appendUserMessage(question, new Date().toISOString());
+      threadEmpty.hidden = true;
+      scrollThread();
+      const answer = await api("/api/v1/chat", {
+        method: "POST",
+        body: JSON.stringify({ question, conversation_id: directConversationId }),
+      });
+      directConversationId = answer.conversation_id;
+      appendAssistantMessage(answer.content);
+      scrollThread();
+      return;
+    }
     let accepted;
     if (followParent) {
       accepted = await api(`/api/v1/runs/${encodeURIComponent(followParent)}/follow-up`, {
@@ -435,10 +487,9 @@ async function submit() {
       });
       clearFollow();
     } else {
-      const mode = document.querySelector('input[name="chat_mode"]:checked')?.value || "single";
       accepted = await api("/api/v1/tasks/verified-research", {
         method: "POST",
-        body: JSON.stringify({ objective: question, mode }),
+        body: JSON.stringify({ objective: question, mode: "single" }),
       });
     }
     input.value = "";

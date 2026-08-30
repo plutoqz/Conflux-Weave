@@ -1,6 +1,7 @@
 """W1 report writer stage: parsing, closure, audit gating, degradation, rendering."""
 
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -157,7 +158,7 @@ def test_compose_succeeds_and_stores_structured_document(tmp_path):
             outcome.document_artifact_id.removeprefix("artifact-sha256-")
         ).read_text(encoding="utf-8")
     )
-    assert document["schema_version"] == "conflux-weave.research-report-document.v3"
+    assert document["schema_version"] == "conflux-weave.research-report-document.v4"
     assert len(document["background"]) == 1
     assert document["objective"] == OBJECTIVE
     assert len(transport.requests) == 2
@@ -171,11 +172,11 @@ def test_compose_degrades_on_invalid_writer_json_without_audit_call(tmp_path):
         LocalArtifactStore(tmp_path / "store"), chat, OBJECTIVE, CLAIMS, EVIDENCE, CITATIONS
     )
 
-    assert outcome.status == "degraded"
-    assert outcome.reason and outcome.reason.startswith("report writer failed")
-    assert outcome.document is None
+    assert outcome.status == "fallback"
+    assert outcome.reason
+    assert outcome.document is not None
     assert outcome.writer_response_artifact_id
-    assert len(transport.requests) == 2  # 首次 + schema 修复重试（W2a）
+    assert len(transport.requests) == 2  # 首次 + 修复重试
 
 
 def test_compose_degrades_on_invalid_background_and_excludes_it_from_audit(tmp_path):
@@ -190,9 +191,10 @@ def test_compose_degrades_on_invalid_background_and_excludes_it_from_audit(tmp_p
         LocalArtifactStore(tmp_path / "store"), chat, OBJECTIVE, CLAIMS, EVIDENCE, CITATIONS
     )
 
-    assert outcome.status == "degraded"
+    assert outcome.status == "fallback"
     assert "background item 0" in outcome.reason
-    assert len(transport.requests) == 2
+    assert outcome.document is not None
+    assert len(transport.requests) == 3  # 两次违规 + 末次尝试
 
 
 def test_compose_succeeds_canonical_omits_background_from_audit_prompt(tmp_path):
@@ -223,9 +225,10 @@ def test_compose_degrades_when_more_than_half_of_claims_are_omitted(tmp_path):
         LocalArtifactStore(tmp_path / "store"), chat, OBJECTIVE, three_claims, EVIDENCE, citations
     )
 
-    assert outcome.status == "degraded"
+    assert outcome.status == "fallback"
     assert "omitted 2 of 3" in outcome.reason
-    assert len(transport.requests) == 1
+    assert outcome.document is not None
+    assert len(transport.requests) == 2
 
 
 def test_compose_partial_coverage_records_supplementary_claims(tmp_path):
@@ -394,10 +397,100 @@ def test_compose_degrades_on_digit_drift(tmp_path):
         LocalArtifactStore(tmp_path / "store"), chat, OBJECTIVE, CLAIMS, EVIDENCE, CITATIONS
     )
 
-    assert outcome.status == "degraded"
+    assert outcome.status == "fallback"
     assert "digit drift" in outcome.reason
-    assert len(transport.requests) == 1
+    assert outcome.document is not None
+    assert len(transport.requests) == 3  # 首次 + 两次重试（3 次尝试上限）
 
 
 def test_digit_runs_ignore_list_markers_and_citation_markers():
     assert _digit_runs("- 1. 机制覆盖 20% [1]") == ["20"]
+
+
+def _doc_with_inline_unverified(writer_payload):
+    return _parse_writer_payload(json.dumps(writer_payload), CLAIMS, OBJECTIVE)
+
+
+def test_writer_accepts_both_paragraph_key_shapes():
+    payload = json.loads(json.dumps(FIXTURE["writer_payloads"]["partial_coverage"]))
+    payload["sections"][0]["paragraphs"].append(
+        {"text": "通识背景：技能即工具。", "claim_ids": [], "unverified": True}
+    )
+    document = _doc_with_inline_unverified(payload)
+    assert document.sections[0].paragraphs[-1].unverified is True
+    assert document.sections[0].paragraphs[0].unverified is False
+
+
+def test_unverified_paragraph_with_claims_is_rejected():
+    payload = json.loads(json.dumps(FIXTURE["writer_payloads"]["partial_coverage"]))
+    payload["sections"][0]["paragraphs"].append(
+        {"text": "伪装成通识的事实。", "claim_ids": ["claim-0001"], "unverified": True}
+    )
+    with pytest.raises(ValueError, match="unverified and must not cite Claims"):
+        _doc_with_inline_unverified(payload)
+
+
+def test_renderer_prefixes_unverified_paragraphs_without_citations():
+    payload = json.loads(json.dumps(FIXTURE["writer_payloads"]["partial_coverage"]))
+    payload["sections"][0]["paragraphs"].append(
+        {"text": "通识：技能是连接思考与行动的桥梁。", "claim_ids": [], "unverified": True}
+    )
+    document = _doc_with_inline_unverified(payload)
+    report = render_report_document(
+        title=OBJECTIVE, document=document, claims=CLAIMS, evidence=EVIDENCE,
+        citations=CITATIONS, evidence_trust=TRUST,
+    )
+    assert "○ 通识：技能是连接思考与行动的桥梁。" in report
+    unverified_line = [line for line in report.splitlines() if line.startswith("○ 通识")][0]
+    assert "[" not in unverified_line
+
+
+def test_audit_and_c5_skip_unverified_paragraphs(tmp_path):
+    payload = json.loads(json.dumps(FIXTURE["writer_payloads"]["partial_coverage"]))
+    payload["sections"][0]["paragraphs"].append(
+        {"text": "示意示例：假设参数命中率为 87%。", "claim_ids": [], "unverified": True}
+    )
+    chat, transport = make_chat(
+        tmp_path,
+        [
+            chat_response(payload, "writer"),
+            chat_response(FIXTURE["audit_payloads"]["canonical"], "audit"),
+        ],
+    )
+    outcome = compose_report_document(
+        LocalArtifactStore(tmp_path / "store"), chat, OBJECTIVE, CLAIMS, EVIDENCE, CITATIONS
+    )
+
+    assert outcome.status == "ok"
+    audit_payload = json.loads(transport.requests[1]["messages"][1]["content"])
+    flattened_text = json.dumps(audit_payload, ensure_ascii=False)
+    assert "示意示例" not in flattened_text
+    assert len(audit_payload["paragraphs"]) == 2
+
+
+def test_fallback_document_is_complete_and_renders(tmp_path):
+    chat, _ = make_chat(tmp_path, [chat_response(FIXTURE["writer_invalid_content"], "writer")])
+    store = LocalArtifactStore(tmp_path / "store")
+    outcome = compose_report_document(store, chat, OBJECTIVE, CLAIMS, EVIDENCE, CITATIONS)
+
+    assert outcome.status == "fallback"
+    report = render_report_document(
+        title=OBJECTIVE, document=outcome.document, claims=CLAIMS,
+        evidence=EVIDENCE, citations=CITATIONS, evidence_trust=TRUST,
+    )
+    assert "## 回答摘要" in report
+    assert "- The framework selects evidence before tool actions." in report
+    for claim in CLAIMS:
+        assert claim.text in report
+    assert "## 来源" in report
+    assert "### 审计附录（Evidence 汇总）" in report
+    assert "[1][2]" in report or "[1]" in report
+
+
+def test_distill_cards_carry_deterministic_claim_ids(tmp_path):
+    chat, transport = make_chat(tmp_path, [chat_response(DISTILL_CARDS, "distill")])
+    store = LocalArtifactStore(tmp_path / "store")
+    outcome = distill_evidence_cards(store, chat, CLAIMS, EVIDENCE, CITATIONS)
+
+    assert outcome.cards[0].claim_ids == ("claim-0001", "claim-0002")
+    assert asdict(outcome.cards[0])["claim_ids"] == ("claim-0001", "claim-0002")

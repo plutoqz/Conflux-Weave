@@ -570,15 +570,15 @@ def test_writer_invalid_json_degrades_to_v1_claim_list(tmp_path):
     ])
 
     assert result.disposition is DeliveryDisposition.COMPLETE
-    assert manifest["report_contract"] == "v1"
-    assert manifest["writer_status"] == "degraded"
-    assert manifest["writer_degrade_reason"].startswith("report writer failed")
-    assert manifest["writer_document_artifact"] is None
+    assert manifest["report_contract"] == "v2"
+    assert manifest["writer_status"] == "fallback"
+    assert manifest["writer_degrade_reason"]
+    assert manifest["writer_document_artifact"]
     assert manifest["writer_response_artifact"]
-    assert "Claim 1" in report
-    assert "## 回答摘要" not in report
-    assert "报告写作未通过校验，已降级为证据清单视图。" in report
-    assert "报告写作未通过校验" in " ".join(manifest["limitations"])
+    assert "## 回答摘要" in report
+    assert "The framework selects evidence before tool actions." in report
+    assert "报告正文为确定性组装的已验证 Claim 原文" in report
+    assert "确定性组装" in " ".join(manifest["limitations"])
 
 
 def test_writer_unknown_claim_reference_degrades(tmp_path):
@@ -590,10 +590,11 @@ def test_writer_unknown_claim_reference_degrades(tmp_path):
         chat_response(WRITER_FIXTURE["writer_payloads"]["unknown_claim"], "writer-retry"),
     ])
 
-    assert manifest["report_contract"] == "v1"
-    assert manifest["writer_status"] == "degraded"
+    assert manifest["report_contract"] == "v2"
+    assert manifest["writer_status"] == "fallback"
     assert "references unknown Claims" in manifest["writer_degrade_reason"]
-    assert "Claim 1" in report
+    assert "## 回答摘要" in report
+    assert "The framework selects evidence before tool actions." in report
 
 
 def test_writer_audit_unsupported_verdict_degrades(tmp_path):
@@ -605,11 +606,11 @@ def test_writer_audit_unsupported_verdict_degrades(tmp_path):
         chat_response(WRITER_FIXTURE["audit_payloads"]["unsupported"], "audit"),
     ])
 
-    assert manifest["report_contract"] == "v1"
-    assert manifest["writer_status"] == "degraded"
+    assert manifest["report_contract"] == "v2"
+    assert manifest["writer_status"] == "fallback"
     assert "audit rejected paragraph" in manifest["writer_degrade_reason"]
-    assert "Claim 1" in report
-    assert "## 回答摘要" not in report
+    assert "## 回答摘要" in report
+    assert "The framework selects evidence before tool actions." in report
 
 
 def test_writer_omitting_majority_of_claims_degrades_before_audit(tmp_path):
@@ -620,10 +621,10 @@ def test_writer_omitting_majority_of_claims_degrades_before_audit(tmp_path):
         chat_response(WRITER_FIXTURE["writer_payloads"]["over_omission"], "writer"),
     ])
 
-    assert manifest["writer_status"] == "degraded"
+    assert manifest["writer_status"] == "fallback"
     assert "omitted 2 of 3" in manifest["writer_degrade_reason"]
     assert manifest["writer_audit_request_artifact"] is None
-    assert "Claim 1" in report
+    assert "## 回答摘要" in report
 
 
 def test_writer_partial_coverage_appends_supplementary_section(tmp_path):
