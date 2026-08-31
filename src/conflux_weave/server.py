@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict
 
 from conflux_weave.chat import ChatService
 from conflux_weave.api_contracts import (
+    ChatAnswerChecks,
     ChatAnswerResponse,
     ChatCitationRecord,
     ChatHistoryResponse,
@@ -269,6 +270,15 @@ def create_app(
             content=result["content"],
             created_at=result["created_at"],
             provider_response_id=result["provider_response_id"],
+            verification=result["verification"],
+            checks=(
+                ChatAnswerChecks(
+                    status=result["checks"]["status"],
+                    violations=tuple(result["checks"]["violations"]),
+                )
+                if result.get("checks")
+                else None
+            ),
             citations=tuple(
                 ChatCitationRecord(
                     index=item["index"],

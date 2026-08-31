@@ -92,6 +92,13 @@ class ChatCitationRecord(_ApiModel):
     locator: dict[str, Any]
 
 
+class ChatAnswerChecks(_ApiModel):
+    """模式 B 确定性后检结果（模式 A 无后检，为 null）。"""
+
+    status: Literal["passed", "degraded"]
+    violations: tuple[str, ...] = ()
+
+
 class ChatMessageRecord(_ApiModel):
     message_id: str
     conversation_id: str
@@ -104,6 +111,9 @@ class ChatMessageRecord(_ApiModel):
 class ChatAnswerResponse(ChatMessageRecord):
     provider_response_id: str
     citations: tuple[ChatCitationRecord, ...] = ()
+    # 证据基准标记：direct = 模型知识（无证据），rag = 检索聚合（未经核验）。
+    verification: Literal["model-knowledge", "unverified-aggregation"]
+    checks: ChatAnswerChecks | None = None
 
 
 class ChatHistoryResponse(_ApiModel):
@@ -792,6 +802,7 @@ __all__ = [
     "WorkbenchConfigResponse",
     "WorkbenchQueryService",
     "VerifiedResearchTaskRequest",
+    "ChatAnswerChecks",
     "ChatAnswerResponse",
     "ChatHistoryResponse",
     "ChatMessageRecord",
