@@ -1,4 +1,5 @@
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -94,6 +95,40 @@ AUDIT = {"audits": [
 
 def read_artifact(store, artifact_id):
     return store.path_for_digest(artifact_id.removeprefix("artifact-sha256-")).read_text(encoding="utf-8")
+
+
+def test_gpt_researcher_bridge_passes_configured_model_to_all_roles(monkeypatch, tmp_path):
+    captured = {}
+
+    class FakeResearcher:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            captured["config"] = json.loads(Path(kwargs["config_path"]).read_text(encoding="utf-8"))
+
+        async def conduct_research(self, on_progress=None):
+            return None
+
+        async def write_report(self):
+            return "# report"
+
+        def get_research_context(self):
+            return "context"
+
+        def get_research_sources(self):
+            return []
+
+        def get_costs(self):
+            return 0
+
+    monkeypatch.setitem(sys.modules, "gpt_researcher", SimpleNamespace(GPTResearcher=FakeResearcher))
+    config = ProviderConfig("https://provider.example/v1", "secret", "glm-5.3-flash")
+
+    result = GPTResearcherBridge(config).execute("test objective")
+
+    assert result.report_markdown == "# report"
+    assert captured["config"]["FAST_LLM"] == "openai:glm-5.3-flash"
+    assert captured["config"]["SMART_LLM"] == "openai:glm-5.3-flash"
+    assert captured["config"]["STRATEGIC_LLM"] == "openai:glm-5.3-flash"
 
 
 def test_deep_workflow_produces_snapshots_ledger_and_v2_report(tmp_path):

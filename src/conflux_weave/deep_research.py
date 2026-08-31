@@ -128,12 +128,20 @@ class GPTResearcherBridge:
 
         progress = on_progress or (lambda message: None)
         model = f"openai/{self._provider_config.model}"
+        # GPT Researcher expects LLM configuration values as provider:model;
+        # keep the slash form only for its OpenAI-compatible embedding env var.
+        engine_model = f"openai:{self._provider_config.model}"
         retriever = self._retriever or ("tavily" if os.environ.get("TAVILY_API_KEY") else "duckduckgo")
         env_patches = {
             "OPENAI_API_KEY": self._provider_config.api_key,
             "OPENAI_BASE_URL": self._provider_config.base_url,
             "EMBEDDING_PROVIDER": "openai",
             "OPENAI_EMBEDDING_MODEL": model,
+            # Also set the supported environment keys so a process-level
+            # override cannot replace the system-selected model.
+            "FAST_LLM": engine_model,
+            "SMART_LLM": engine_model,
+            "STRATEGIC_LLM": engine_model,
         }
         saved = {key: os.environ.get(key) for key in env_patches}
         os.environ.update(env_patches)
@@ -144,9 +152,9 @@ class GPTResearcherBridge:
         try:
             local_chunks = self._local_chunks(objective)
             config_payload = {
-                "SMART_LLM_MODEL": model,
-                "FAST_LLM_MODEL": model,
-                "STRATEGIC_LLM_MODEL": model,
+                "SMART_LLM": engine_model,
+                "FAST_LLM": engine_model,
+                "STRATEGIC_LLM": engine_model,
                 "RETRIEVER": retriever,
                 "MAX_SEARCH_RESULTS_PER_QUERY": 4,
                 # 引擎报告随交付附录呈现，中文目标必须产出中文叙事（W3.2.1）。
