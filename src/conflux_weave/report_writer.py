@@ -33,7 +33,7 @@ EVIDENCE_CARDS_SCHEMA = "conflux-weave.evidence-cards.v1"
 PARAGRAPH_AUDITS_SCHEMA = "conflux-weave.writer-paragraph-audits.v1"
 WRITER_PROMPT_VERSION = "writer-zh-cards-v1"
 
-WRITER_MAX_OUTPUT_TOKENS = 4096
+WRITER_MAX_OUTPUT_TOKENS = 8192
 WRITER_MAX_ATTEMPTS = 3
 AUDIT_MAX_OUTPUT_TOKENS = 2000
 DISTILL_MAX_OUTPUT_TOKENS = 4096
@@ -54,6 +54,9 @@ MAX_CARD_KEY_POINT_CHARS = 500
 MAX_CARD_TERMS = 12
 MAX_CARD_TERM_CHARS = 100
 MAX_CARD_SCOPE_CHARS = 500
+# 写作素材中每条 Claim 附带的证据引文节选上限（W3.2.1：模型需要看到细节出处
+# 才能把具体事实正确归到所引 Claim 上；全量引文太长，节选够定位归属）。
+WRITER_CLAIM_EVIDENCE_CHARS = 1500
 
 DISTILL_SYSTEM_PROMPT = (
     "You are a bilingual research distiller. You receive verified Claims and their "
@@ -326,6 +329,18 @@ def _writer_system_prompt(with_cards: bool) -> str:
         "background is the same model-knowledge lane for longer standalone items "
         "(0-6 items, heading + text). Summarize every supplied Claim somewhere in "
         "the cited sections. open_questions lists what the corpus could not answer. "
+        "Attribution rules (mandatory): the claim_evidence list shows the Evidence "
+        "excerpts behind each Claim - a paragraph may cite multiple Claims, and "
+        "before you state any specific fact, entity, model name, number, date, "
+        "mechanism or example, locate it in the claim_evidence excerpts and add "
+        "that Claim's ID to the paragraph's claim_ids. If a detail appears in no "
+        "claim_evidence excerpt, either drop it or move the sentence into an "
+        "unverified paragraph (claim_ids: [], unverified: true). Never leave a "
+        "cited paragraph with specifics that its cited Claims' excerpts do not "
+        "cover - the auditor rejects exactly that and the whole report falls "
+        "back. A cross-source comparison is supported only when both compared "
+        "items AND the compared respect appear in the cited Claims' excerpts; "
+        "otherwise put the comparison in an unverified paragraph or drop it. "
         + (WRITER_CARD_INSTRUCTIONS if with_cards else WRITER_QUOTE_INSTRUCTIONS)
         + " "
         + WRITER_STYLE_RULES
@@ -410,6 +425,34 @@ class WriterOutcome:
     audit_response_artifact_id: str | None = None
 
 
+def _claim_evidence_excerpts(
+    claims: tuple[Claim, ...],
+    evidence: tuple[EvidenceRef, ...],
+    citations: tuple[Citation, ...],
+) -> list[dict]:
+    """claim → 其引用证据的引文节选（确定性构造，不依赖模型）。"""
+
+    evidence_by_id = {item.evidence_id: item for item in evidence}
+    grouped: dict[str, list[dict]] = {}
+    for citation in citations:
+        ref = evidence_by_id.get(citation.evidence_id)
+        if ref is None or citation.claim_id in grouped and any(
+            entry["evidence_id"] == citation.evidence_id
+            for entry in grouped[citation.claim_id]
+        ):
+            continue
+        grouped.setdefault(citation.claim_id, []).append(
+            {
+                "evidence_id": ref.evidence_id,
+                "excerpt": ref.quote[:WRITER_CLAIM_EVIDENCE_CHARS],
+            }
+        )
+    return [
+        {"claim_id": claim.claim_id, "evidence": grouped.get(claim.claim_id, [])}
+        for claim in claims
+    ]
+
+
 def compose_report_document(
     store: LocalArtifactStore,
     chat: OpenAICompatibleChatAdapter,
@@ -427,12 +470,26 @@ def compose_report_document(
     writer_completion = None
     audit_completion = None
     try:
+        shared_material = {
+            "objective": objective,
+            "claims": [
+                {"claim_id": item.claim_id, "text": item.text} for item in claims
+            ],
+            # 始终附上 claim→证据节选：审计要求"段落断言 ⊆ 所引 Claim 及其证据
+            # 并集"，模型必须能看到证据细节才能正确归属（W3.2.1）。
+            "claim_evidence": _claim_evidence_excerpts(claims, evidence, citations),
+            "citations": [
+                {
+                    "display_index": item.display_index,
+                    "claim_id": item.claim_id,
+                    "evidence_id": item.evidence_id,
+                }
+                for item in citations
+            ],
+        }
         writer_material = (
             {
-                "objective": objective,
-                "claims": [
-                    {"claim_id": item.claim_id, "text": item.text} for item in claims
-                ],
+                **shared_material,
                 "cards": [
                     {
                         "evidence_id": card.evidence_id,
@@ -444,32 +501,13 @@ def compose_report_document(
                     }
                     for card in cards
                 ],
-                "citations": [
-                    {
-                        "display_index": item.display_index,
-                        "claim_id": item.claim_id,
-                        "evidence_id": item.evidence_id,
-                    }
-                    for item in citations
-                ],
             }
             if cards
             else {
-                "objective": objective,
-                "claims": [
-                    {"claim_id": item.claim_id, "text": item.text} for item in claims
-                ],
+                **shared_material,
                 "evidence": [
                     {"evidence_id": item.evidence_id, "quote": item.quote}
                     for item in evidence
-                ],
-                "citations": [
-                    {
-                        "display_index": item.display_index,
-                        "claim_id": item.claim_id,
-                        "evidence_id": item.evidence_id,
-                    }
-                    for item in citations
                 ],
             }
         )
@@ -487,10 +525,15 @@ def compose_report_document(
                         _writer_system_prompt(with_cards=bool(cards))
                         + (
                             f" Your previous attempt was rejected: {latest_violation} Fix the "
-                            "violation and return ONLY the exact JSON object. If a sentence is "
-                            "general knowledge, move it into an unverified paragraph; if it "
-                            "asserts a specific fact, cite the Claim that actually contains it; "
-                            f"copy numbers verbatim. The ONLY Claim IDs that exist are: {valid_ids}."
+                            "violation and return ONLY the exact JSON object. Check the "
+                            "claim_evidence excerpts: if the offending detail appears in some "
+                            "Claim's excerpt, add that Claim ID to the paragraph's claim_ids "
+                            "(a paragraph may cite multiple Claims); if it appears in none, "
+                            "move the sentence into an unverified paragraph (claim_ids: [], "
+                            "unverified: true). If a sentence is general knowledge, move it "
+                            "into an unverified paragraph; if it asserts a specific fact, "
+                            "cite the Claim whose excerpt actually contains it; copy numbers "
+                            f"verbatim. The ONLY Claim IDs that exist are: {valid_ids}."
                             if attempt
                             else ""
                         )
@@ -636,26 +679,33 @@ def build_deterministic_document(
 
     禁止降级（W2a.2）：模型写作未通过校验时的交付底线。逐字使用 Claim 原文，
     引用闭合与 C5 由构造保证，不依赖任何模型输出。
+    排版（W3.2.1）：全部 Claim 收进唯一一节（不再按 5 条切片产生同名小节）；
+    摘要是每条 Claim 首句的确定性提要，不再与正文逐字重复。
     """
     if not claims:
         raise ValueError("deterministic fallback requires at least one Claim")
-    ordinals = "一二三四五六七八九十"
+
+    def _digest(text: str) -> str:
+        for cut in ("。", "；", "？", "！", ".", ";", "?", "!"):
+            position = text.find(cut)
+            if position > 0:
+                candidate = text[: position + 1].strip()
+                if len(candidate) >= 12:
+                    return candidate
+        return text.strip()
+
     summary = ReportParagraph(
-        text="\n".join(f"- {claim.text}" for claim in claims[:5]),
-        claim_ids=tuple(claim.claim_id for claim in claims[:5]),
+        text="\n".join(f"- {_digest(claim.text)}" for claim in claims),
+        claim_ids=tuple(claim.claim_id for claim in claims),
     )
-    sections = []
-    for chunk_index in range(0, len(claims), 5):
-        chunk = claims[chunk_index : chunk_index + 5]
-        ordinal = ordinals[len(sections)] if len(sections) < len(ordinals) else "续"
-        sections.append(
-            ReportSection(
-                f"{ordinal}、已验证研究发现",
-                tuple(
-                    ReportParagraph(claim.text, (claim.claim_id,)) for claim in chunk
-                ),
-            )
+    sections = [
+        ReportSection(
+            "一、已验证研究发现",
+            tuple(
+                ReportParagraph(claim.text, (claim.claim_id,)) for claim in claims
+            ),
         )
+    ]
     return ReportDocument(objective=objective, summary=summary, sections=tuple(sections))
 
 

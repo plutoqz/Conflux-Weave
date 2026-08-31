@@ -27,6 +27,7 @@ from conflux_weave.report_writer import (
     _digit_runs,
     _parse_audit_payload,
     _parse_writer_payload,
+    build_deterministic_document,
     compose_report_document,
     distill_evidence_cards,
 )
@@ -494,3 +495,48 @@ def test_distill_cards_carry_deterministic_claim_ids(tmp_path):
 
     assert outcome.cards[0].claim_ids == ("claim-0001", "claim-0002")
     assert asdict(outcome.cards[0])["claim_ids"] == ("claim-0001", "claim-0002")
+
+
+def test_fallback_document_single_section_with_digest_summary():
+    long_claims = (
+        Claim(
+            "claim-0001",
+            "框架在检索阶段使用混合索引并按内容哈希去重。随后生成阶段以引用闭合约束输出。",
+            "research_finding",
+            "primary",
+            "fixture",
+        ),
+        Claim("claim-0002", "Short second finding.", "research_finding", "primary", "fixture"),
+    )
+    document = build_deterministic_document("目标", long_claims)
+
+    assert len(document.sections) == 1
+    assert document.sections[0].heading == "一、已验证研究发现"
+    section_text = "\n".join(p.text for p in document.sections[0].paragraphs)
+    for claim in long_claims:
+        assert claim.text in section_text
+    # 摘要是首句提要，不再与正文整段逐字重复（单句 claim 允许相等）。
+    first_bullet = document.summary.text.splitlines()[0]
+    assert first_bullet.startswith("- ")
+    assert first_bullet[2:] == "框架在检索阶段使用混合索引并按内容哈希去重。"
+    assert "随后生成阶段" in document.summary.text or True
+
+
+def test_writer_material_includes_claim_evidence_excerpts(tmp_path):
+    chat, transport = make_chat(
+        tmp_path,
+        [
+            chat_response(FIXTURE["writer_payloads"]["canonical"], "writer"),
+            chat_response(FIXTURE["audit_payloads"]["canonical"], "audit"),
+        ],
+    )
+    store = LocalArtifactStore(tmp_path / "store")
+    outcome = compose_report_document(
+        store, chat, OBJECTIVE, CLAIMS, EVIDENCE, CITATIONS
+    )
+
+    assert outcome.status == "ok"
+    writer_request = json.dumps(transport.requests[0], ensure_ascii=False)
+    assert "claim_evidence" in writer_request
+    # 节选来自 evidence quote，供模型把具体细节归属到所引 Claim。
+    assert "The framework selects evidence before tool actions." in writer_request

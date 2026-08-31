@@ -184,8 +184,10 @@ class OpenAICompatibleChatAdapter:
     ) -> ChatCompletionResult:
         if not system_prompt.strip() or not user_prompt.strip():
             raise ValueError("system_prompt and user_prompt must not be empty")
-        if not 1 <= max_output_tokens <= 4096:
-            raise ValueError("max_output_tokens must be between 1 and 4096")
+        # 上限护栏只防荒谬值；写作阶段（W3.2.1）10 条 Claim 的富文本报告需要
+        # 8k 输出预算，4096 会把 JSON 截断导致整篇降级。
+        if not 1 <= max_output_tokens <= 16384:
+            raise ValueError("max_output_tokens must be between 1 and 16384")
         if not 0.0 <= temperature <= 2.0:
             raise ValueError("temperature must be between 0 and 2")
 
