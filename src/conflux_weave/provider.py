@@ -20,7 +20,9 @@ from conflux_weave.runtime.artifacts import LocalArtifactStore
 PROVIDER_SCHEMA_VERSION = "conflux-weave.openai-chat-completion.v1"
 EMBEDDING_SCHEMA_VERSION = "conflux-weave.embedding.v1"
 RERANK_SCHEMA_VERSION = "conflux-weave.rerank.v1"
-DEFAULT_TIMEOUT_SECONDS = 60.0
+# 思考型模型（glm-5.3-flash 等）会先输出大量 reasoning 再给正文，研究链路的
+# 大提示词调用普遍超过 60s；240s 覆盖 8k 输出预算的最慢合法调用。
+DEFAULT_TIMEOUT_SECONDS = 240.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,95 +207,122 @@ class OpenAICompatibleChatAdapter:
             payload["response_format"] = {"type": "json_object"}
         if enable_thinking is not None:
             payload["enable_thinking"] = enable_thinking
-        request_artifact = self.artifact_store.put_json(
-            {
-                "schema_version": PROVIDER_SCHEMA_VERSION,
-                "provider": self.config.provider_name,
-                "endpoint": "/chat/completions",
-                "request": payload,
-                "secret_recorded": False,
-                "attempt": 1,
-                "automatic_retry": False,
-            },
-            producer_step_id=producer_step_id,
-            schema_version=PROVIDER_SCHEMA_VERSION,
-        )
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        try:
-            response = self.transport.post(
-                self.config.base_url + "/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.config.api_key}",
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                    "User-Agent": "Conflux-Weave/0.0.1",
+
+        def _attempt(attempt_payload: dict, *, attempt: int, automatic_retry: bool) -> ChatCompletionResult:
+            request_artifact = self.artifact_store.put_json(
+                {
+                    "schema_version": PROVIDER_SCHEMA_VERSION,
+                    "provider": self.config.provider_name,
+                    "endpoint": "/chat/completions",
+                    "request": attempt_payload,
+                    "secret_recorded": False,
+                    "attempt": attempt,
+                    "automatic_retry": automatic_retry,
                 },
-                body=body,
-                timeout_seconds=self.timeout_seconds,
+                producer_step_id=producer_step_id,
+                schema_version=PROVIDER_SCHEMA_VERSION,
             )
-        except ProviderPortError as exc:
-            exc.request_artifact_ref = request_artifact.artifact_id
-            raise
+            body = json.dumps(attempt_payload, ensure_ascii=False).encode("utf-8")
+            try:
+                response = self.transport.post(
+                    self.config.base_url + "/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.config.api_key}",
+                        "Content-Type": "application/json",
+                        "Accept": "application/json",
+                        "User-Agent": "Conflux-Weave/0.0.1",
+                    },
+                    body=body,
+                    timeout_seconds=self.timeout_seconds,
+                )
+            except ProviderPortError as exc:
+                exc.request_artifact_ref = request_artifact.artifact_id
+                raise
 
-        response_artifact = self.artifact_store.put_bytes(
-            response.body,
-            media_type=_header(response.headers, "Content-Type") or "application/json",
-            producer_step_id=producer_step_id,
-            schema_version="openai-compatible.chat-completions.response",
-        )
-        if response.status_code != 200:
-            raise ProviderPortError(
-                code="provider_http_failed",
-                message=f"Provider returned HTTP {response.status_code}",
-                retryable=response.status_code >= 500 or response.status_code == 429,
-                status_code=response.status_code,
-                request_artifact_ref=request_artifact.artifact_id,
-                response_artifact_ref=response_artifact.artifact_id,
-                recovery_action="检查原始响应、模型权限和余额后显式创建新 Run。",
+            response_artifact = self.artifact_store.put_bytes(
+                response.body,
+                media_type=_header(response.headers, "Content-Type") or "application/json",
+                producer_step_id=producer_step_id,
+                schema_version="openai-compatible.chat-completions.response",
+            )
+            if response.status_code != 200:
+                raise ProviderPortError(
+                    code="provider_http_failed",
+                    message=f"Provider returned HTTP {response.status_code}",
+                    retryable=response.status_code >= 500 or response.status_code == 429,
+                    status_code=response.status_code,
+                    request_artifact_ref=request_artifact.artifact_id,
+                    response_artifact_ref=response_artifact.artifact_id,
+                    recovery_action="检查原始响应、模型权限和余额后显式创建新 Run。",
+                )
+
+            parsed = _decode_object(response.body, request_artifact, response_artifact)
+            try:
+                response_id = _required_string(parsed, "id")
+                response_model = _required_string(parsed, "model")
+                choices = parsed["choices"]
+                if not isinstance(choices, list) or len(choices) != 1:
+                    raise TypeError("choices must contain exactly one item")
+                choice = choices[0]
+                if not isinstance(choice, dict):
+                    raise TypeError("choice must be an object")
+                message = choice["message"]
+                if not isinstance(message, dict):
+                    raise TypeError("message must be an object")
+                content = _required_string(message, "content")
+                finish_reason = _required_string(choice, "finish_reason")
+                usage = parsed["usage"]
+                if not isinstance(usage, dict):
+                    raise TypeError("usage must be an object")
+                input_tokens = _required_nonnegative_int(usage, "prompt_tokens")
+                output_tokens = _required_nonnegative_int(usage, "completion_tokens")
+                total_tokens = _required_nonnegative_int(usage, "total_tokens")
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ProviderPortError(
+                    code="provider_response_invalid",
+                    message=f"Provider response contract invalid: {exc}",
+                    retryable=False,
+                    status_code=response.status_code,
+                    request_artifact_ref=request_artifact.artifact_id,
+                    response_artifact_ref=response_artifact.artifact_id,
+                    recovery_action="保留原始响应并检查 Provider 兼容合同，不要从无效响应生成回答。",
+                ) from exc
+            return ChatCompletionResult(
+                response_id=response_id,
+                model=response_model,
+                content=content,
+                finish_reason=finish_reason,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=total_tokens,
+                request_artifact=request_artifact,
+                response_artifact=response_artifact,
             )
 
-        parsed = _decode_object(response.body, request_artifact, response_artifact)
         try:
-            response_id = _required_string(parsed, "id")
-            response_model = _required_string(parsed, "model")
-            choices = parsed["choices"]
-            if not isinstance(choices, list) or len(choices) != 1:
-                raise TypeError("choices must contain exactly one item")
-            choice = choices[0]
-            if not isinstance(choice, dict):
-                raise TypeError("choice must be an object")
-            message = choice["message"]
-            if not isinstance(message, dict):
-                raise TypeError("message must be an object")
-            content = _required_string(message, "content")
-            finish_reason = _required_string(choice, "finish_reason")
-            usage = parsed["usage"]
-            if not isinstance(usage, dict):
-                raise TypeError("usage must be an object")
-            input_tokens = _required_nonnegative_int(usage, "prompt_tokens")
-            output_tokens = _required_nonnegative_int(usage, "completion_tokens")
-            total_tokens = _required_nonnegative_int(usage, "total_tokens")
-        except (KeyError, TypeError, ValueError) as exc:
-            raise ProviderPortError(
-                code="provider_response_invalid",
-                message=f"Provider response contract invalid: {exc}",
-                retryable=False,
-                status_code=response.status_code,
-                request_artifact_ref=request_artifact.artifact_id,
-                response_artifact_ref=response_artifact.artifact_id,
-                recovery_action="保留原始响应并检查 Provider 兼容合同，不要从无效响应生成回答。",
-            ) from exc
-        return ChatCompletionResult(
-            response_id=response_id,
-            model=response_model,
-            content=content,
-            finish_reason=finish_reason,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            total_tokens=total_tokens,
-            request_artifact=request_artifact,
-            response_artifact=response_artifact,
-        )
+            return _attempt(payload, attempt=1, automatic_retry=False)
+        except ProviderPortError as exc:
+            # 一次确定性能力重试（W3.2.1）：部分思考型模型（如 glm-5.3-flash）不支持
+            # 关闭思考，网关会以 HTTP 400（code 1210）或无效响应体拒绝
+            # enable_thinking=false。此时去掉该参数重试一次；成功路径不受影响，
+            # 二次失败按原错误 fail-closed，5xx/429 不自动重试（避免重复计费调用）。
+            # 注意：首次失败调用的用量不进入任何 manifest 引用图（成本少记），
+            # 换取对异构模型家族的兼容；该权衡已记录。
+            rejected_contract = exc.code == "provider_response_invalid" or (
+                exc.code == "provider_http_failed" and exc.status_code == 400
+            )
+            if enable_thinking is False and rejected_contract:
+                # 该模型家族拒绝 enable_thinking 但支持 reasoning_effort 控制思考
+                # 强度（网关契约：low/high/max）。low 把 reasoning 压到很小，避免
+                # 思考吃满输出预算导致正文为空。
+                retry_payload = {
+                    key: value
+                    for key, value in payload.items()
+                    if key != "enable_thinking"
+                }
+                retry_payload["reasoning_effort"] = "low"
+                return _attempt(retry_payload, attempt=2, automatic_retry=True)
+            raise
 
 
 @dataclass(frozen=True, slots=True)

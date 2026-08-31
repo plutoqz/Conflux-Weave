@@ -579,7 +579,9 @@ def create_app(
                 adapter.complete,
                 system_prompt="You are a connection test for the Conflux-Weave workbench.",
                 user_prompt="Reply with the single word: ok",
-                max_output_tokens=8,
+                # 思考型模型（如 glm-5.3-flash）会先把输出预算花在 reasoning 上，
+                # 8 token 连正文都放不下；512 足够思考 + 一个词的回答。
+                max_output_tokens=512,
                 producer_step_id="step-provider-config-test",
             )
             latency_ms = int((time.monotonic() - started) * 1000)

@@ -132,3 +132,139 @@ def test_provider_config_rejects_non_https_endpoint(monkeypatch) -> None:
 
     with pytest.raises(ProviderConfigurationError, match="HTTPS"):
         ProviderConfig.from_environment()
+
+
+class SequencedTransport:
+    """Returns queued responses in order; records every request body."""
+
+    def __init__(self, responses) -> None:
+        self.responses = iter(responses)
+        self.bodies = []
+
+    def post(self, url, *, headers, body, timeout_seconds):
+        self.bodies.append(json.loads(body))
+        return next(self.responses)
+
+
+def thinking_reject_response() -> dict:
+    # glm-5.3-flash 网关行为：enable_thinking=false 时返回带 error 的无效响应。
+    return {
+        "error": {"message": "该模型始终思考，不支持关闭思考；请使用 low、high 或 max。"},
+        "choices": [],
+    }
+
+
+def test_adapter_retries_once_without_enable_thinking_when_model_rejects_it(tmp_path) -> None:
+    transport = SequencedTransport([response(thinking_reject_response()), response(valid_response())])
+    store = LocalArtifactStore(tmp_path)
+    result = OpenAICompatibleChatAdapter(
+        store,
+        ProviderConfig("https://provider.example/v1", "fixture-secret", "fixture-model"),
+        transport=transport,
+    ).complete(
+        system_prompt="system",
+        user_prompt="user",
+        max_output_tokens=128,
+        enable_thinking=False,
+    )
+
+    assert result.content == "fixture answer"
+    assert len(transport.bodies) == 2
+    assert transport.bodies[0]["enable_thinking"] is False
+    assert "enable_thinking" not in transport.bodies[1]
+    assert transport.bodies[1]["reasoning_effort"] == "low"
+    first_request = json.loads(store.read_bytes(result.request_artifact))
+    assert first_request["attempt"] == 2
+    assert first_request["automatic_retry"] is True
+
+
+def test_adapter_keeps_single_call_when_enable_thinking_accepted(tmp_path) -> None:
+    transport = SequencedTransport([response(valid_response())])
+    store = LocalArtifactStore(tmp_path)
+    result = OpenAICompatibleChatAdapter(
+        store,
+        ProviderConfig("https://provider.example/v1", "fixture-secret", "fixture-model"),
+        transport=transport,
+    ).complete(
+        system_prompt="system",
+        user_prompt="user",
+        max_output_tokens=128,
+        enable_thinking=False,
+    )
+
+    assert result.content == "fixture answer"
+    assert len(transport.bodies) == 1
+    assert transport.bodies[0]["enable_thinking"] is False
+
+
+def test_adapter_does_not_retry_for_other_invalid_responses(tmp_path) -> None:
+    transport = SequencedTransport([response({"error": {"message": "boom"}, "choices": []})])
+    store = LocalArtifactStore(tmp_path)
+    with pytest.raises(ProviderPortError) as excinfo:
+        OpenAICompatibleChatAdapter(
+            store,
+            ProviderConfig("https://provider.example/v1", "fixture-secret", "fixture-model"),
+            transport=transport,
+        ).complete(
+            system_prompt="system",
+            user_prompt="user",
+            max_output_tokens=128,
+        )
+
+    assert excinfo.value.code == "provider_response_invalid"
+    assert len(transport.bodies) == 1
+    assert "enable_thinking" not in transport.bodies[0]
+
+
+def test_adapter_retries_when_gateway_rejects_thinking_with_http_400(tmp_path) -> None:
+    transport = SequencedTransport(
+        [
+            ProviderHttpResponse(
+                status_code=400,
+                body=json.dumps(
+                    {"error": {"message": "该模型始终思考，不支持关闭思考；请使用 low、high 或 max。", "code": "1210"}}
+                ).encode(),
+                headers={"Content-Type": "application/json"},
+            ),
+            response(valid_response()),
+        ]
+    )
+    store = LocalArtifactStore(tmp_path)
+    result = OpenAICompatibleChatAdapter(
+        store,
+        ProviderConfig("https://provider.example/v1", "fixture-secret", "fixture-model"),
+        transport=transport,
+    ).complete(
+        system_prompt="system",
+        user_prompt="user",
+        max_output_tokens=128,
+        enable_thinking=False,
+    )
+
+    assert result.content == "fixture answer"
+    assert len(transport.bodies) == 2
+    assert "enable_thinking" not in transport.bodies[1]
+
+
+def test_adapter_does_not_auto_retry_server_errors(tmp_path) -> None:
+    transport = SequencedTransport(
+        [
+            ProviderHttpResponse(status_code=429, body=b"rate limited", headers={}),
+            response(valid_response()),
+        ]
+    )
+    store = LocalArtifactStore(tmp_path)
+    with pytest.raises(ProviderPortError) as excinfo:
+        OpenAICompatibleChatAdapter(
+            store,
+            ProviderConfig("https://provider.example/v1", "fixture-secret", "fixture-model"),
+            transport=transport,
+        ).complete(
+            system_prompt="system",
+            user_prompt="user",
+            max_output_tokens=128,
+            enable_thinking=False,
+        )
+
+    assert excinfo.value.code == "provider_http_failed"
+    assert len(transport.bodies) == 1
