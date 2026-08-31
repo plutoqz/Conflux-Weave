@@ -86,6 +86,9 @@ textarea:focus-visible,
   display: flex;
   align-items: center;
   justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 30;
   border-bottom: 1px solid var(--rule);
   background: var(--chalk);
 }
