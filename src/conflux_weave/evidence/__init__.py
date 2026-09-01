@@ -24,8 +24,13 @@ from conflux_weave.evidence.validation import (
 from conflux_weave.evidence.delivery import (
     AnswerBlock,
     EvidenceSupportStatus,
+    ReferenceEntry,
     SourceTrustLevel,
+    claim_source_keys_union,
+    evidence_reference_key,
+    origin_lane,
     render_evidence_report,
+    render_fused_report,
     render_report_document,
 )
 
@@ -47,8 +52,13 @@ __all__ = [
     "ReportSection",
     "SourceSnapshot",
     "SourceTrustLevel",
+    "origin_lane",
+    "claim_source_keys_union",
+    "evidence_reference_key",
     "render_evidence_report",
+    "render_fused_report",
     "render_report_document",
+    "ReferenceEntry",
     "require_closed_citations",
     "require_closed_report_document",
     "unreferenced_claim_ids",

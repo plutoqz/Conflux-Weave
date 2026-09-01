@@ -79,6 +79,8 @@ class ReportParagraph:
     text: str
     claim_ids: tuple[str, ...]
     unverified: bool = False
+    # W3.5 融合报告：段落引用的网络来源（SourceSnapshot id）；legacy 路径为空。
+    web_source_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

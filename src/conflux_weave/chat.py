@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from conflux_weave.documents import document_page_label, document_title_from_segments
 from conflux_weave.provider import OpenAICompatibleChatAdapter
 from conflux_weave.runtime.artifacts import LocalArtifactStore
 
@@ -272,12 +273,17 @@ class ChatService:
             violations = _check_rag_answer(answer, len(snippets))
             if not violations:
                 break
-        source_lines = [
-            f"- [{item['index']}] chunk `{item['chunk_id']}` · snapshot "
-            f"`{item['source_snapshot_id']}` · 定位 "
-            f"{json.dumps(item['locator'], ensure_ascii=False)}"
-            for item in snippets
-        ]
+        # W3.5：来源脚注压缩为紧凑引用（文档标题+页码），与深度研究报告的
+        # 来源引用同一排版语义；chunk/snapshot/定位 JSON 留在 API citations
+        # 与上下文工件中，不再进入用户视图。
+        source_lines = []
+        for item in snippets:
+            title = document_title_from_segments(
+                self._retrieval.document_by_id, item["chunk_id"], item["chunk_id"]
+            )
+            source_lines.append(
+                f"- [{item['index']}] 《{title}》[本地], {document_page_label(item['locator'])}"
+            )
         if violations:
             source_lines.append(
                 "- ⚠ 回答未通过确定性校验（" + "；".join(violations)

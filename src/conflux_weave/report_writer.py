@@ -24,11 +24,13 @@ from conflux_weave.evidence import (
     ReportSection,
     unreferenced_claim_ids,
 )
+from conflux_weave.engine_narrative import EngineNarrative
+from conflux_weave.merge import MergePlan
 from conflux_weave.provider import OpenAICompatibleChatAdapter
 from conflux_weave.runtime import LocalArtifactStore
 
 
-REPORT_DOCUMENT_SCHEMA = "conflux-weave.research-report-document.v4"
+REPORT_DOCUMENT_SCHEMA = "conflux-weave.research-report-document.v5"
 EVIDENCE_CARDS_SCHEMA = "conflux-weave.evidence-cards.v1"
 PARAGRAPH_AUDITS_SCHEMA = "conflux-weave.writer-paragraph-audits.v1"
 WRITER_PROMPT_VERSION = "writer-zh-cards-v1"
@@ -928,3 +930,499 @@ def _parse_audit_payload(
             "audit rejected paragraph "
             f"section {section_index} paragraph {paragraph_index}: {rationale}"
         )
+
+
+# ---------------------------------------------------------------------------
+# W3.5 融合 Writer：引擎报告为叙事骨架，本地核验证据按段落融入。
+# ---------------------------------------------------------------------------
+
+FUSED_MAX_ATTEMPTS = 3
+FUSED_MAX_PARAGRAPHS_PER_SECTION = 16
+FUSED_MAX_OPEN_QUESTIONS = 8
+FUSED_WEB_SOURCE_CONTENT_CHARS = 2000
+
+FUSED_SYSTEM_PROMPT = (
+    "You are a research report Writer performing evidence fusion. You receive an "
+    "objective, the aggregation engine's report outline (sections with indexed "
+    "paragraphs, narrative synthesized from web sources), a merge plan (which "
+    "web sources back each paragraph; which verified Claims support, qualify, "
+    "contradict or extend it), the verified Claims with their Evidence excerpts, "
+    "and optional Chinese evidence cards. Rewrite EVERY engine paragraph as one "
+    "polished Chinese research-report paragraph: keep the engine paragraph's "
+    "facts and their order, weave its assigned Claims into the same flowing "
+    "text where the relation says (a contradicting Claim must surface as an "
+    "explicit conflicting finding with both sides), and never mention the "
+    "mechanics (no phrases like 本地语料补充说 or 网络来源认为). Keep section "
+    "headings EXACTLY as supplied - same count, same order, no extra sections. "
+    "Every output paragraph must carry web_source_ids (the paragraph's "
+    "attributed web source ids from the plan, copied verbatim) and claim_ids "
+    "(the Claim IDs it actually uses, verbatim from the supplied list). A "
+    "paragraph must have at least one of the two; if the plan gave it no web "
+    "sources and it uses no Claim, mark it {\"unverified\": true} with both "
+    "lists empty - unverified paragraphs must not state specific statistics, "
+    "dates, prices, or benchmark numbers as fact. Do not add facts absent from "
+    "the engine paragraph, its attributed web sources, the Claims, or their "
+    "Evidence. Copy numbers verbatim; every digit you write must literally "
+    "appear in one of those. Do not write citation markers yourself; the "
+    "renderer appends them. open_questions lists what neither the engine "
+    "narrative nor the Claims answer. "
+    "Style rules (mandatory): state the judgment first, then support it; keep "
+    "paragraphs to three to six sentences and mix short narrative paragraphs "
+    "with concise lists; preserve every condition, scope and uncertainty; on "
+    "first mention use the standard Chinese term followed by English in "
+    "parentheses, 中文（English）; short Markdown lists are allowed; Markdown "
+    "tables are forbidden; a paragraph must not mix verified and unverified "
+    "statements. "
+    + WRITER_TRANSLATION_ESE_BANS
+    + " Return EXACTLY this JSON object shape and nothing else: "
+    '{"sections":[{"heading":"一、小节标题","paragraphs":[{"text":"融合后的段落",'
+    '"claim_ids":["claim-0001"],"web_source_ids":["web-0001"]}]}],'
+    '"open_questions":["开放问题"]} '
+    "The root must contain exactly sections and open_questions; every section is "
+    '{"heading": string, "paragraphs": list}; every paragraph is {"text": string, '
+    '"claim_ids": list, "web_source_ids": list, "unverified": optional bool}; '
+    "no extra keys anywhere."
+)
+
+FUSED_AUDIT_SYSTEM_PROMPT = (
+    "You are an independent report faithfulness auditor for a fused research "
+    "report. You receive the objective, the verified Claims with their Evidence "
+    "quotes, closed Citations, the web source contents, and every report "
+    "paragraph flattened with the Claim IDs and web source IDs it cites. For "
+    "every paragraph return exactly this JSON object shape: "
+    '{"audits":[{"section_index":0,"paragraph_index":0,'
+    '"verdict":"supported|unsupported","rationale":"why"}]} '
+    "The root must contain only audits. Judge semantic entailment, not wording: "
+    "supported means every factual assertion in the paragraph is entailed by "
+    "the union of its cited Claims (plus their Evidence quotes) and the "
+    "contents of its cited web sources. Unsupported means the paragraph "
+    "introduces a fact, entity, number, date, causal claim, or evaluation "
+    "absent from that union, or drops a load-bearing qualifier in a way that "
+    "changes the claim. Cover every paragraph exactly once and provide a "
+    "non-empty rationale that quotes the exact offending sentence when "
+    "unsupported."
+)
+
+
+def _parse_fused_paragraph(
+    raw: object,
+    claims: tuple[Claim, ...],
+    web_source_ids: tuple[str, ...],
+    label: str,
+) -> ReportParagraph:
+    if not isinstance(raw, dict) or set(raw) not in (
+        {"text", "claim_ids", "web_source_ids"},
+        {"text", "claim_ids", "web_source_ids", "unverified"},
+    ):
+        raise ValueError(f"writer {label} has an invalid schema")
+    text = raw["text"]
+    if not isinstance(text, str) or not text.strip() or len(text) > MAX_TEXT_CHARS:
+        raise ValueError(f"writer {label} text must be a bounded non-empty string")
+    unverified = raw.get("unverified", False)
+    if not isinstance(unverified, bool):
+        raise ValueError(f"writer {label} unverified must be a boolean")
+    raw_claim_ids = raw["claim_ids"]
+    raw_web_ids = raw["web_source_ids"]
+    if not isinstance(raw_claim_ids, list) or not isinstance(raw_web_ids, list):
+        raise ValueError(f"writer {label} claim_ids and web_source_ids must be lists")
+    claim_ids = tuple(str(value) for value in raw_claim_ids)
+    source_ids = tuple(str(value) for value in raw_web_ids)
+    known_claims = {item.claim_id for item in claims}
+    known_sources = set(web_source_ids)
+    if unverified:
+        if claim_ids or source_ids:
+            raise ValueError(f"writer {label} is unverified and must not cite Claims or web sources")
+        return ReportParagraph(text.strip(), (), unverified=True)
+    if len(claim_ids) > MAX_CLAIMS_PER_PARAGRAPH or len(source_ids) > MAX_CLAIMS_PER_PARAGRAPH:
+        raise ValueError(f"writer {label} exceeds citation limits")
+    if not claim_ids and not source_ids:
+        raise ValueError(f"writer {label} must cite Claims or web sources")
+    if len(claim_ids) != len(set(claim_ids)) or len(source_ids) != len(set(source_ids)):
+        raise ValueError(f"writer {label} repeats a citation reference")
+    unknown_claims = [value for value in claim_ids if value not in known_claims]
+    if unknown_claims:
+        raise ValueError(f"writer {label} references unknown Claims: {', '.join(unknown_claims)}")
+    unknown_sources = [value for value in source_ids if value not in known_sources]
+    if unknown_sources:
+        raise ValueError(f"writer {label} references unknown web sources: {', '.join(unknown_sources)}")
+    return ReportParagraph(text.strip(), claim_ids, web_source_ids=source_ids)
+
+
+def _parse_fused_writer_payload(
+    content: str,
+    claims: tuple[Claim, ...],
+    narrative: EngineNarrative,
+    web_source_ids: tuple[str, ...],
+) -> tuple[tuple[ReportSection, ...], tuple[str, ...]]:
+    """解析融合输出；节标题必须与引擎骨架逐字 1:1。返回 (sections, questions)。"""
+    payload = json.loads(content)
+    if not isinstance(payload, dict) or set(payload) != {"sections", "open_questions"}:
+        raise ValueError("fused writer output must contain exactly sections and open_questions")
+    raw_sections = payload["sections"]
+    expected_headings = [section.heading for section in narrative.sections]
+    if not isinstance(raw_sections, list) or len(raw_sections) != len(expected_headings):
+        raise ValueError(
+            "fused writer must keep the engine section structure: "
+            f"expected {len(expected_headings)} sections"
+        )
+    sections = []
+    for index, raw_section in enumerate(raw_sections):
+        if not isinstance(raw_section, dict) or set(raw_section) != {"heading", "paragraphs"}:
+            raise ValueError(f"writer section {index} has an invalid schema")
+        heading = raw_section["heading"]
+        if not isinstance(heading, str) or heading.strip() != expected_headings[index]:
+            raise ValueError(
+                "fused writer must keep engine headings verbatim and in order: "
+                f"expected {expected_headings[index]!r}, got {heading!r}"
+            )
+        raw_paragraphs = raw_section["paragraphs"]
+        if (
+            not isinstance(raw_paragraphs, list)
+            or not 1 <= len(raw_paragraphs) <= FUSED_MAX_PARAGRAPHS_PER_SECTION
+        ):
+            raise ValueError(
+                f"writer section {index} must contain between 1 and {FUSED_MAX_PARAGRAPHS_PER_SECTION} paragraphs"
+            )
+        paragraphs = tuple(
+            _parse_fused_paragraph(
+                raw_paragraph, claims, web_source_ids, f"section {index} paragraph {paragraph_index}"
+            )
+            for paragraph_index, raw_paragraph in enumerate(raw_paragraphs)
+        )
+        sections.append(ReportSection(heading.strip(), paragraphs))
+    raw_questions = payload["open_questions"]
+    if not isinstance(raw_questions, list) or len(raw_questions) > FUSED_MAX_OPEN_QUESTIONS:
+        raise ValueError(f"fused open_questions must be a list of at most {FUSED_MAX_OPEN_QUESTIONS} items")
+    questions = []
+    for index, question in enumerate(raw_questions):
+        if not isinstance(question, str) or not question.strip() or len(question) > MAX_QUESTION_CHARS:
+            raise ValueError(f"fused open question {index} must be a bounded non-empty string")
+        questions.append(question.strip())
+    return tuple(sections), tuple(questions)
+
+
+def _require_no_fused_digit_drift(
+    document: ReportDocument,
+    claims: tuple[Claim, ...],
+    evidence: tuple[EvidenceRef, ...],
+    citations: tuple[Citation, ...],
+    web_content: dict[str, str],
+) -> None:
+    """C5 扩展（W3.5）：融合段落的每个数字必须出现在所引 Claim、其证据或所引
+    网络来源正文里——引擎叙事同样不许写出无出处的数字。"""
+    claim_by_id = {claim.claim_id: claim for claim in claims}
+    evidence_by_id = {item.evidence_id: item for item in evidence}
+    evidence_by_claim: dict[str, set[str]] = {}
+    for citation in citations:
+        evidence_by_claim.setdefault(citation.claim_id, set()).add(citation.evidence_id)
+    for section_index, section in enumerate(document.sections, 1):
+        for paragraph_index, paragraph in enumerate(section.paragraphs):
+            if paragraph.unverified:
+                continue
+            allowed: set[str] = set()
+            for claim_id in paragraph.claim_ids:
+                allowed.update(DIGIT_PATTERN.findall(claim_by_id[claim_id].text))
+                for evidence_id in evidence_by_claim.get(claim_id, ()):
+                    allowed.update(DIGIT_PATTERN.findall(evidence_by_id[evidence_id].quote))
+            for source_id in paragraph.web_source_ids:
+                allowed.update(DIGIT_PATTERN.findall(web_content.get(source_id, "")))
+            drift = [digit for digit in _digit_runs(paragraph.text) if digit not in allowed]
+            if drift:
+                raise ValueError(
+                    f"digit drift in section {section_index} paragraph {paragraph_index}: {drift[:5]}"
+                )
+
+
+def compose_fused_report_document(
+    store: LocalArtifactStore,
+    chat: OpenAICompatibleChatAdapter,
+    objective: str,
+    narrative: EngineNarrative,
+    claims: tuple[Claim, ...],
+    evidence: tuple[EvidenceRef, ...],
+    citations: tuple[Citation, ...],
+    *,
+    plan: MergePlan,
+    web_content: dict[str, str],
+    cards: tuple[EvidenceCard, ...] = (),
+    writer_step_id: str = "w34-fused-write",
+    audit_step_id: str = "w34-fused-write-audit",
+) -> WriterOutcome:
+    """融合成文：引擎段落逐段改写并融入本地核验证据；失败降级，绝不中断。"""
+    writer_completion = None
+    audit_completion = None
+    try:
+        web_source_ids = tuple(web_content.keys())
+        material = {
+            "objective": objective,
+            "engine_outline": [
+                {
+                    "heading": section.heading,
+                    "paragraphs": [
+                        {"paragraph_index": paragraph_index, "text": text}
+                        for paragraph_index, text in enumerate(section.paragraphs)
+                    ],
+                }
+                for section in narrative.sections
+            ],
+            "merge_plan": plan.payload(),
+            "claims": [{"claim_id": item.claim_id, "text": item.text} for item in claims],
+            "claim_evidence": _claim_evidence_excerpts(claims, evidence, citations),
+            "citations": [
+                {"display_index": item.display_index, "claim_id": item.claim_id, "evidence_id": item.evidence_id}
+                for item in citations
+            ],
+            "web_sources": [
+                {"source_id": source_id, "content": content[:FUSED_WEB_SOURCE_CONTENT_CHARS]}
+                for source_id, content in web_content.items()
+            ],
+        }
+        if cards:
+            material["cards"] = [
+                {
+                    "evidence_id": card.evidence_id,
+                    "zh_summary": card.zh_summary,
+                    "zh_key_points": list(card.zh_key_points),
+                    "terms": [{"en": en, "zh": zh} for en, zh in card.terms],
+                    "scope_limits": card.scope_limits,
+                    "claim_ids": list(card.claim_ids),
+                }
+                for card in cards
+            ]
+        assigned_claims = {
+            entry.claim_id
+            for item in plan.assignments
+            for entry in item.claims
+        }
+        sections: tuple[ReportSection, ...] = ()
+        open_questions: tuple[str, ...] = ()
+        first_violation = ""
+        latest_violation = ""
+        paragraphs: list = []
+        for attempt in range(FUSED_MAX_ATTEMPTS):
+            try:
+                writer_completion = chat.complete(
+                    system_prompt=(
+                        FUSED_SYSTEM_PROMPT
+                        + (
+                            f" Your previous attempt was rejected: {latest_violation} Fix the "
+                            "violation and return ONLY the exact JSON object. Keep the engine "
+                            "section headings verbatim; every paragraph needs web_source_ids "
+                            "or claim_ids; every assigned Claim must be used somewhere."
+                            if attempt
+                            else ""
+                        )
+                    ),
+                    user_prompt=json.dumps(material, ensure_ascii=False),
+                    max_output_tokens=WRITER_MAX_OUTPUT_TOKENS,
+                    temperature=WRITER_TEMPERATURE,
+                    json_object=True,
+                    enable_thinking=False,
+                    producer_step_id=writer_step_id if attempt == 0 else f"{writer_step_id}-repair",
+                )
+                sections, open_questions = _parse_fused_writer_payload(
+                    writer_completion.content, claims, narrative, web_source_ids
+                )
+                draft = ReportDocument(
+                    objective=objective,
+                    summary=ReportParagraph(plan.thesis, tuple(claim.claim_id for claim in claims)),
+                    sections=sections,
+                    open_questions=open_questions,
+                )
+                _require_no_fused_digit_drift(draft, claims, evidence, citations, web_content)
+                referenced = {
+                    claim_id
+                    for section in draft.sections
+                    for paragraph in section.paragraphs
+                    for claim_id in paragraph.claim_ids
+                }
+                omitted = sorted(assigned_claims - referenced)
+                if omitted:
+                    raise ValueError(f"fused writer omitted assigned Claims: {', '.join(omitted)}")
+                paragraphs = _flatten_paragraphs(draft)
+                audit_completion = chat.complete(
+                    system_prompt=FUSED_AUDIT_SYSTEM_PROMPT,
+                    user_prompt=json.dumps(
+                        {
+                            "objective": objective,
+                            "claims": [{"claim_id": item.claim_id, "text": item.text} for item in claims],
+                            "evidence": [
+                                {"evidence_id": item.evidence_id, "quote": item.quote} for item in evidence
+                            ],
+                            "citations": [
+                                {"display_index": item.display_index, "claim_id": item.claim_id, "evidence_id": item.evidence_id}
+                                for item in citations
+                            ],
+                            "web_sources": [
+                                {"source_id": source_id, "content": content[:FUSED_WEB_SOURCE_CONTENT_CHARS]}
+                                for source_id, content in web_content.items()
+                            ],
+                            "paragraphs": [
+                                {
+                                    "section_index": section_index,
+                                    "paragraph_index": paragraph_index,
+                                    "text": paragraph.text,
+                                    "claim_ids": list(paragraph.claim_ids),
+                                    "web_source_ids": list(paragraph.web_source_ids),
+                                }
+                                for section_index, paragraph_index, paragraph in paragraphs
+                            ],
+                        },
+                        ensure_ascii=False,
+                    ),
+                    max_output_tokens=AUDIT_MAX_OUTPUT_TOKENS,
+                    temperature=0.0,
+                    json_object=True,
+                    enable_thinking=False,
+                    producer_step_id=audit_step_id,
+                )
+                _parse_audit_payload(audit_completion.content, paragraphs)
+                break
+            except ValueError as violation:
+                latest_violation = str(violation)[:500]
+                if not first_violation:
+                    first_violation = latest_violation
+                if attempt == FUSED_MAX_ATTEMPTS - 1:
+                    return _fused_fallback_outcome(
+                        store, objective, narrative, plan, claims, first_violation,
+                        writer_completion=writer_completion,
+                    )
+            except Exception:
+                if latest_violation:
+                    return _fused_fallback_outcome(
+                        store, objective, narrative, plan, claims, first_violation or latest_violation,
+                        writer_completion=writer_completion,
+                    )
+                raise
+        document = ReportDocument(
+            objective=objective,
+            summary=ReportParagraph(plan.thesis, tuple(claim.claim_id for claim in claims)),
+            sections=sections,
+            open_questions=open_questions,
+        )
+        document_ref = store.put_json(
+            {
+                "schema_version": REPORT_DOCUMENT_SCHEMA,
+                "writer_prompt_version": "fused-engine-skeleton-v1",
+                "assembly": "engine-fused",
+                "objective": document.objective,
+                "summary": asdict(document.summary),
+                "sections": [
+                    {
+                        "heading": section.heading,
+                        "paragraphs": [asdict(item) for item in section.paragraphs],
+                    }
+                    for section in document.sections
+                ],
+                "open_questions": list(document.open_questions),
+                "warnings": [],
+            },
+            producer_step_id=writer_step_id,
+            schema_version=REPORT_DOCUMENT_SCHEMA,
+        )
+        audits_ref = store.put_json(
+            {
+                "schema_version": PARAGRAPH_AUDITS_SCHEMA,
+                "paragraph_count": len(paragraphs),
+                "content": audit_completion.content,
+            },
+            producer_step_id=audit_step_id,
+            schema_version=PARAGRAPH_AUDITS_SCHEMA,
+        )
+        return WriterOutcome(
+            document=document,
+            status="ok",
+            reason=None,
+            warnings=(),
+            document_artifact_id=document_ref.artifact_id,
+            audit_artifact_id=audits_ref.artifact_id,
+            writer_request_artifact_id=writer_completion.request_artifact.artifact_id,
+            writer_response_artifact_id=writer_completion.response_artifact.artifact_id,
+            audit_request_artifact_id=audit_completion.request_artifact.artifact_id,
+            audit_response_artifact_id=audit_completion.response_artifact.artifact_id,
+        )
+    except Exception as exc:  # noqa: BLE001 - 兜底交付，绝不中断
+        return _fused_fallback_outcome(
+            store, objective, narrative, plan, claims, f"fused writer failed: {exc}",
+            writer_completion=writer_completion,
+        )
+
+
+def _fused_fallback_outcome(
+    store: LocalArtifactStore,
+    objective: str,
+    narrative: EngineNarrative,
+    plan: MergePlan,
+    claims: tuple[Claim, ...],
+    reason: str,
+    *,
+    writer_completion=None,
+) -> WriterOutcome:
+    """确定性融合组装（W3.5 降级第二级）：引擎段落原文 + 匹配 Claim 逐字嵌入。"""
+    document = build_deterministic_fused_document(objective, narrative, plan, claims)
+    document_ref = store.put_json(
+        {
+            "schema_version": REPORT_DOCUMENT_SCHEMA,
+            "writer_prompt_version": "fused-engine-skeleton-v1",
+            "assembly": "deterministic-fused-fallback",
+            "objective": document.objective,
+            "summary": asdict(document.summary),
+            "sections": [
+                {
+                    "heading": section.heading,
+                    "paragraphs": [asdict(item) for item in section.paragraphs],
+                }
+                for section in document.sections
+            ],
+            "open_questions": list(document.open_questions),
+            "warnings": [f"模型融合写作未通过校验（{reason}），已按引擎段落原文+本地核验结论逐字组装。"],
+        },
+        producer_step_id="w34-fused-write-fallback",
+        schema_version=REPORT_DOCUMENT_SCHEMA,
+    )
+    outcome = WriterOutcome(
+        document=document,
+        status="fallback",
+        reason=reason,
+        warnings=(f"模型融合写作未通过校验（{reason}），已按引擎段落原文+本地核验结论逐字组装。",),
+        document_artifact_id=document_ref.artifact_id,
+    )
+    if writer_completion is not None:
+        outcome = replace(
+            outcome,
+            writer_request_artifact_id=writer_completion.request_artifact.artifact_id,
+            writer_response_artifact_id=writer_completion.response_artifact.artifact_id,
+        )
+    return outcome
+
+
+def build_deterministic_fused_document(
+    objective: str,
+    narrative: EngineNarrative,
+    plan: MergePlan,
+    claims: tuple[Claim, ...],
+) -> ReportDocument:
+    """无模型的融合组装：引擎段落原文落位，匹配 Claim 逐字嵌入其段落之后。
+
+    引用闭合由构造保证：引擎段落带 plan 归属的网络来源，Claim 段落自带
+    claim_id；无归属且无 Claim 的引擎段落按未核验车道（○）呈现。
+    """
+    claim_by_id = {claim.claim_id: claim for claim in claims}
+    sections = []
+    for section_index, section in enumerate(narrative.sections):
+        paragraphs: list[ReportParagraph] = []
+        for paragraph_index, text in enumerate(section.paragraphs):
+            web_ids = plan.web_sources_for_paragraph(section_index, paragraph_index)
+            if web_ids:
+                paragraphs.append(ReportParagraph(text, (), web_source_ids=web_ids))
+            else:
+                paragraphs.append(ReportParagraph(text, (), unverified=True))
+            for entry in plan.claims_for_paragraph(section_index, paragraph_index):
+                claim = claim_by_id[entry.claim_id]
+                paragraphs.append(ReportParagraph(claim.text, (claim.claim_id,)))
+        sections.append(ReportSection(section.heading, tuple(paragraphs)))
+    return ReportDocument(
+        objective=objective,
+        summary=ReportParagraph(plan.thesis, tuple(claim.claim_id for claim in claims)),
+        sections=tuple(sections),
+    )

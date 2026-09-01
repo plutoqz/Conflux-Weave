@@ -108,9 +108,14 @@ def _require_closed_paragraph(
             raise ReportDocumentValidationError(
                 f"{label} is unverified and must not register Claims"
             )
+        if paragraph.web_source_ids:
+            raise ReportDocumentValidationError(
+                f"{label} is unverified and must not register web sources"
+            )
         return
-    if not paragraph.claim_ids:
-        raise ReportDocumentValidationError(f"{label} must reference at least one Claim")
+    # W3.5 融合段落：引擎叙事段落可以只引网络来源（本地核验结论按段落融入）。
+    if not paragraph.claim_ids and not paragraph.web_source_ids:
+        raise ReportDocumentValidationError(f"{label} must reference at least one Claim or web source")
     if len(paragraph.claim_ids) != len(set(paragraph.claim_ids)):
         raise ReportDocumentValidationError(f"{label} repeats a Claim reference")
     unknown = [item for item in paragraph.claim_ids if item not in known_claim_ids]

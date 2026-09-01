@@ -356,3 +356,52 @@ def import_pdf_corpus(
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return result
+
+
+def document_title(text: str, fallback: str) -> str:
+    """本地来源标题解析（W3.5 紧凑引用）：文档首行标题，兜底给定名称。
+
+    取首个非空行；Markdown 井号与强调记号剥掉；超过 80 字符或为空视为
+    无有效标题，返回 fallback（调用方传文件名主干或快照 id）。
+    """
+    for line in text.splitlines():
+        candidate = line.strip()
+        if not candidate:
+            continue
+        candidate = candidate.lstrip("#").strip().strip("*").strip()
+        if 0 < len(candidate) <= 80:
+            return candidate
+        break
+    return fallback
+
+
+def document_page_label(locator: dict) -> str:
+    """locator → 页码标签：优先 page 数字，其次 heading 文本，兜底“全文”。"""
+    page = locator.get("page")
+    if page is not None:
+        return f"第{page}页"
+    heading = str(locator.get("heading", "") or "").strip()
+    return heading or "全文"
+
+
+def document_title_from_segments(document_by_id, document_id: str, fallback: str) -> str:
+    """从检索索引的分段表解析文档标题（W3.5 紧凑引用）。
+
+    索引以分段为条目（id 形如 "<文档id>:segment-NNNN"），单段首行往往不是
+    标题；因此聚合同一文档的全部分段，取最小序号段（首页）的首行解析标题，
+    解析不出时返回 fallback。
+    """
+    base = document_id.split(":segment-", 1)[0]
+    candidates = []
+    for key, doc in document_by_id.items():
+        if key != base and not key.startswith(base + ":segment-"):
+            continue
+        tail = key.rsplit("-", 1)[-1]
+        ordinal = int(tail) if tail.isdigit() else 0
+        text = getattr(doc, "text", "") or ""
+        if text.strip():
+            candidates.append((ordinal, text))
+    if not candidates:
+        return fallback
+    candidates.sort()
+    return document_title(candidates[0][1], fallback)

@@ -159,7 +159,7 @@ def test_compose_succeeds_and_stores_structured_document(tmp_path):
             outcome.document_artifact_id.removeprefix("artifact-sha256-")
         ).read_text(encoding="utf-8")
     )
-    assert document["schema_version"] == "conflux-weave.research-report-document.v4"
+    assert document["schema_version"] == "conflux-weave.research-report-document.v5"
     assert len(document["background"]) == 1
     assert document["objective"] == OBJECTIVE
     assert len(transport.requests) == 2
