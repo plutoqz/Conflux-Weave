@@ -69,6 +69,12 @@ class FakeBridge:
             local_chunks=self.local_chunks,
         )
 
+    def local_document_title(self, document_id, fallback):
+        for chunk in self.local_chunks:
+            if chunk.document_id == document_id:
+                return chunk.text.splitlines()[0].strip() or fallback
+        return fallback
+
 
 def build_workflow(tmp_path, chat_payloads, bridge=None):
     store = LocalArtifactStore(tmp_path / "artifacts")
@@ -129,6 +135,43 @@ def test_gpt_researcher_bridge_passes_configured_model_to_all_roles(monkeypatch,
     assert captured["config"]["FAST_LLM"] == "openai:glm-5.3-flash"
     assert captured["config"]["SMART_LLM"] == "openai:glm-5.3-flash"
     assert captured["config"]["STRATEGIC_LLM"] == "openai:glm-5.3-flash"
+
+
+def test_gpt_researcher_bridge_uses_engine_model_for_llm_roles(monkeypatch, tmp_path):
+    captured = {}
+
+    class FakeResearcher:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            captured["config"] = json.loads(Path(kwargs["config_path"]).read_text(encoding="utf-8"))
+
+        async def conduct_research(self, on_progress=None):
+            return None
+
+        async def write_report(self):
+            return "# report"
+
+        def get_research_context(self):
+            return "context"
+
+        def get_research_sources(self):
+            return []
+
+        def get_costs(self):
+            return 0
+
+    monkeypatch.setitem(sys.modules, "gpt_researcher", SimpleNamespace(GPTResearcher=FakeResearcher))
+    config = ProviderConfig(
+        "https://provider.example/v1", "secret", "glm-5.3-flash",
+        engine_model="deepseek-v4-flash-0731",
+    )
+
+    GPTResearcherBridge(config).execute("test objective")
+
+    # 三个引擎角色走 engine_model；embedding 保持在 provider 模型上
+    assert captured["config"]["FAST_LLM"] == "openai:deepseek-v4-flash-0731"
+    assert captured["config"]["SMART_LLM"] == "openai:deepseek-v4-flash-0731"
+    assert captured["config"]["STRATEGIC_LLM"] == "openai:deepseek-v4-flash-0731"
 
 
 def test_deep_workflow_produces_snapshots_ledger_and_v2_report(tmp_path):
@@ -396,3 +439,179 @@ def test_deep_research_endpoint_submits_expected_kind(tmp_path):
 
     assert captured["submission"].task_kind == "deep_research"
     assert captured["submission"].input["objective"] == "研究问题"
+
+
+DRAFT3 = {"claims": [
+    {"text": "Agents use skills to act on the world.", "evidence_ids": ["evidence-0001"]},
+    {"text": "Memory writes are deduplicated by content hash.", "evidence_ids": ["evidence-0002"]},
+    {"text": "Local corpus bundles skills into reusable instructions.", "evidence_ids": ["evidence-0003"]},
+]}
+VERIFY3 = {"assessments": [
+    {"claim_id": "claim-0001", "evidence_ids": ["evidence-0001"], "relation": "supports", "verdict": "accepted", "rationale": "Direct."},
+    {"claim_id": "claim-0002", "evidence_ids": ["evidence-0002"], "relation": "supports", "verdict": "accepted", "rationale": "Direct."},
+    {"claim_id": "claim-0003", "evidence_ids": ["evidence-0003"], "relation": "supports", "verdict": "accepted", "rationale": "Direct."},
+]}
+ENGINE_REPORT = """# 智能体 Skill 机制研究报告
+
+## 封装形态
+技能以文件夹为单位封装程序性知识，包含说明与脚本。
+### 形态细节
+技能包由指令与资源组成。
+
+## 生效条件
+技能只有在模型缺少相关知识且检索命中时才产生收益。
+"""
+MERGE = {"thesis": "技能机制以封装包与按需加载生效，收益取决于知识缺口与检索命中。", "assignments": [
+    {"section_index": 0, "paragraph_index": 0, "web_source_ids": ["web-0001"],
+     "claims": [{"claim_id": "claim-0001", "relation": "supports"}]},
+    {"section_index": 1, "paragraph_index": 0, "web_source_ids": ["web-0002"],
+     "claims": [{"claim_id": "claim-0002", "relation": "qualifies"}]},
+], "research_space": ["claim-0003"], "dropped": []}
+WRITER_FUSED = {"sections": [
+    {"heading": "一、封装形态", "paragraphs": [
+        {"text": "技能以文件夹为单位封装程序性知识，本地语料同样将技能组织为可复用指令包。",
+         "claim_ids": ["claim-0001"], "web_source_ids": ["web-0001"]},
+        {"text": "**形态细节**", "claim_ids": [], "web_source_ids": ["web-0001"]},
+        {"text": "技能包由指令与资源组成。", "claim_ids": [], "web_source_ids": ["web-0001"]},
+    ]},
+    {"heading": "二、生效条件", "paragraphs": [
+        {"text": "技能只有在模型缺少相关知识且检索命中时才产生收益。",
+         "claim_ids": ["claim-0002"], "web_source_ids": ["web-0002"]},
+    ]},
+], "open_questions": ["多轮真实场景下技能机制的效果缺乏证据。"]}
+AUDIT_FUSED = {"audits": [
+    {"section_index": 0, "paragraph_index": 0, "verdict": "supported", "rationale": "Thesis restates claims."},
+    {"section_index": 1, "paragraph_index": 0, "verdict": "supported", "rationale": "Restates claim and source."},
+    {"section_index": 1, "paragraph_index": 1, "verdict": "supported", "rationale": "Subheading from source."},
+    {"section_index": 1, "paragraph_index": 2, "verdict": "supported", "rationale": "Restates source."},
+    {"section_index": 2, "paragraph_index": 0, "verdict": "supported", "rationale": "Restates claim and source."},
+]}
+
+
+def test_deep_workflow_fuses_local_evidence_into_engine_skeleton(tmp_path):
+    local_chunks = (DeepLocalChunk(
+        "snap-local-1", "doc-9", {"page": 1},
+        "SkillCenter 相关工作综述\nLocal corpus: skills bundle instructions. " * 4,
+    ),)
+    workflow, store = build_workflow(tmp_path, [
+        chat_response(DRAFT3, "draft"),
+        chat_response(VERIFY3, "verify"),
+        chat_response(MERGE, "merge"),
+        chat_response({"cards": []}, "distill"),
+        chat_response(WRITER_FUSED, "writer"),
+        chat_response(AUDIT_FUSED, "audit"),
+    ], bridge=FakeBridge(sources=SOURCES, local_chunks=local_chunks, report_markdown=ENGINE_REPORT))
+
+    result = workflow.execute("How do agents use skills and memory?")
+
+    assert result.disposition is DeliveryDisposition.COMPLETE
+    manifest = json.loads(read_artifact(store, result.manifest_artifact_id))
+    assert manifest["delivery_shape"] == "engine-fused"
+    assert manifest["merge"]["status"] == "ok"
+    assert manifest["merge"]["research_space_count"] == 1
+    report = read_artifact(store, result.report_artifact_id)
+    # 引擎骨架即正文主线，不再是附录
+    assert "## 一、封装形态" in report and "## 二、生效条件" in report
+    assert "## 附录" not in report
+    # 问题与来源说明：总体结论 + 车道图例
+    assert "总体结论：技能机制以封装包与按需加载生效" in report
+    assert "[web] 网络来源" in report and "[本地] 本地语料" in report
+    # 无段落对应的本地结论进入研究空间
+    assert "## 可以进一步探索的问题或者研究空间" in report
+    assert "Local corpus bundles skills into reusable instructions." in report
+    # 紧凑来源引用：标题+车道+链接/页码，无快照 id/JSON 定位
+    assert "[1] Source A[web], https://a.example/skill" in report
+    assert "《SkillCenter 相关工作综述》[本地], 第1页" in report
+    assert "SourceSnapshot" not in report and "document-sha256" not in report
+
+
+WRITER3 = {"summary": {"text": "- **技能决定执行，记忆决定状态**：分工明确。", "claim_ids": ["claim-0001", "claim-0002"]}, "sections": [
+    {"heading": "一、技能与记忆的分工", "paragraphs": [{"text": "技能用于动作执行，记忆按内容哈希去重。", "claim_ids": ["claim-0001", "claim-0002"]}]},
+    {"heading": "二、本地语料中的技能封装", "paragraphs": [{"text": "本地语料把技能封装为可复用指令。", "claim_ids": ["claim-0003"]}]},
+], "background": [], "open_questions": ["技能与记忆的性能开销缺少量化数据。"]}
+AUDIT3 = {"audits": [
+    {"section_index": 0, "paragraph_index": 0, "verdict": "supported", "rationale": "Summary restates claims."},
+    {"section_index": 1, "paragraph_index": 0, "verdict": "supported", "rationale": "Paragraph restates claims."},
+    {"section_index": 2, "paragraph_index": 0, "verdict": "supported", "rationale": "Paragraph restates claim."},
+]}
+
+
+def test_deep_workflow_merge_degrades_to_flat_report(tmp_path):
+    local_chunks = (DeepLocalChunk(
+        "snap-local-1", "doc-9", {"page": 1},
+        "SkillCenter 相关工作综述\nLocal corpus: skills bundle instructions. " * 4,
+    ),)
+    workflow, store = build_workflow(tmp_path, [
+        chat_response(DRAFT3, "draft"),
+        chat_response(VERIFY3, "verify"),
+        chat_response("not-json", "merge-bad"),
+        chat_response("still-bad", "merge-bad2"),
+        chat_response({"cards": []}, "distill"),
+        chat_response(WRITER3, "writer"),
+        chat_response(AUDIT3, "audit"),
+    ], bridge=FakeBridge(sources=SOURCES, local_chunks=local_chunks, report_markdown=ENGINE_REPORT))
+
+    result = workflow.execute("How do agents use skills and memory?")
+
+    assert result.disposition is DeliveryDisposition.COMPLETE
+    manifest = json.loads(read_artifact(store, result.manifest_artifact_id))
+    assert manifest["delivery_shape"] == "flat"
+    assert manifest["merge"]["status"] == "degraded"
+    assert len(workflow.chat.transport.requests) == 7  # 规划最多 2 次 + 起草核验写作审计
+    report = read_artifact(store, result.report_artifact_id)
+    assert "## 附录：聚合引擎综合视图（未经本地核验）" in report
+    assert any("证据融合规划" in item for item in result.limitations)
+
+
+def test_deep_workflow_fused_writer_falls_back_to_deterministic_fusion(tmp_path):
+    local_chunks = (DeepLocalChunk(
+        "snap-local-1", "doc-9", {"page": 1},
+        "SkillCenter 相关工作综述\nLocal corpus: skills bundle instructions. " * 4,
+    ),)
+    wrong = {"sections": [
+        {"heading": "一、错误标题", "paragraphs": [
+            {"text": "内容。", "claim_ids": ["claim-0001"], "web_source_ids": ["web-0001"]},
+        ]},
+    ], "open_questions": []}
+    workflow, store = build_workflow(tmp_path, [
+        chat_response(DRAFT3, "draft"),
+        chat_response(VERIFY3, "verify"),
+        chat_response(MERGE, "merge"),
+        chat_response({"cards": []}, "distill"),
+        chat_response(wrong, "writer-1"),
+        chat_response(wrong, "writer-2"),
+        chat_response(wrong, "writer-3"),
+    ], bridge=FakeBridge(sources=SOURCES, local_chunks=local_chunks, report_markdown=ENGINE_REPORT))
+
+    result = workflow.execute("How do agents use skills and memory?")
+
+    assert result.disposition is DeliveryDisposition.COMPLETE
+    manifest = json.loads(read_artifact(store, result.manifest_artifact_id))
+    assert manifest["delivery_shape"] == "engine-fused"
+    assert manifest["writer_status"] == "fallback"
+    report = read_artifact(store, result.report_artifact_id)
+    # 确定性融合组装：引擎段落原文保留，匹配 Claim 逐字嵌入
+    assert "## 一、封装形态" in report and "## 二、生效条件" in report
+    assert "技能以文件夹为单位封装程序性知识，包含说明与脚本。" in report
+    assert "Agents use skills to act on the world." in report
+    assert "Memory writes are deduplicated by content hash." in report
+    assert any("确定性融合组装" in item for item in result.limitations)
+
+
+def test_tavily_adapter_overrides_endpoint_and_adds_bearer(monkeypatch):
+    import os
+
+    from gpt_researcher.retrievers.tavily.tavily_search import TavilySearch
+
+    monkeypatch.setenv("TAVILY_BASE_URL", "https://gateway.example/tavily/search")
+    original = GPTResearcherBridge._install_tavily_adapter()
+    try:
+        searcher = TavilySearch("query")
+        assert searcher.base_url == "https://gateway.example/tavily/search"
+        assert searcher.headers["Authorization"].startswith("Bearer ")
+        # 卸载后恢复硬编码端点
+        GPTResearcherBridge._uninstall_tavily_adapter(original)
+        restored = TavilySearch("query")
+        assert restored.base_url == "https://api.tavily.com/search"
+    finally:
+        GPTResearcherBridge._uninstall_tavily_adapter(original)

@@ -33,6 +33,8 @@ class ProviderConfig:
     provider_name: str = "openai-compatible"
     embedding_model: str | None = None
     reranker_model: str | None = None
+    # 深度研究引擎（GPT Researcher）专用模型；缺省回退到 chat 模型。
+    engine_model: str | None = None
 
     @classmethod
     def from_environment(cls, dotenv_path: Path | None = None) -> ProviderConfig:
@@ -49,6 +51,7 @@ class ProviderConfig:
         model = read_setting("CONFLUX_WEAVE_PROVIDER_MODEL")
         embedding_model = read_setting("CONFLUX_WEAVE_PROVIDER_EMBEDDING_MODEL") or None
         reranker_model = read_setting("CONFLUX_WEAVE_PROVIDER_RERANKER_MODEL") or None
+        engine_model = read_setting("CONFLUX_WEAVE_PROVIDER_ENGINE_MODEL") or None
         missing = [
             name
             for name, value in (
@@ -68,7 +71,8 @@ class ProviderConfig:
                 "CONFLUX_WEAVE_PROVIDER_BASE_URL must be an HTTPS URL"
             )
         return cls(base_url=base_url.rstrip("/"), api_key=api_key, model=model,
-                   embedding_model=embedding_model, reranker_model=reranker_model)
+                   embedding_model=embedding_model, reranker_model=reranker_model,
+                   engine_model=engine_model)
 
 
 @dataclass(frozen=True, slots=True)

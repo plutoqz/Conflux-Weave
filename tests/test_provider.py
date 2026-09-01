@@ -125,6 +125,31 @@ def test_provider_config_loads_ignored_dotenv_without_overriding_environment(
     assert config.model == "environment-model"
 
 
+def test_provider_config_reads_optional_engine_model(tmp_path, monkeypatch) -> None:
+    dotenv_path = tmp_path / ".env"
+    dotenv_path.write_text(
+        "CONFLUX_WEAVE_PROVIDER_BASE_URL=https://provider.example/v1\n"
+        "CONFLUX_WEAVE_PROVIDER_API_KEY=dotenv-secret\n"
+        "CONFLUX_WEAVE_PROVIDER_MODEL=dotenv-model\n"
+        "CONFLUX_WEAVE_PROVIDER_ENGINE_MODEL=deepseek-v4-flash-0731\n",
+        encoding="utf-8",
+    )
+
+    config = ProviderConfig.from_environment(dotenv_path)
+
+    assert config.engine_model == "deepseek-v4-flash-0731"
+    # 未设置该键时保持 None（引擎回退到 chat 模型）
+    monkeypatch.delenv("CONFLUX_WEAVE_PROVIDER_ENGINE_MODEL", raising=False)
+    bare_path = tmp_path / "bare.env"
+    bare_path.write_text(
+        "CONFLUX_WEAVE_PROVIDER_BASE_URL=https://provider.example/v1\n"
+        "CONFLUX_WEAVE_PROVIDER_API_KEY=dotenv-secret\n"
+        "CONFLUX_WEAVE_PROVIDER_MODEL=dotenv-model\n",
+        encoding="utf-8",
+    )
+    assert ProviderConfig.from_environment(bare_path).engine_model is None
+
+
 def test_provider_config_rejects_non_https_endpoint(monkeypatch) -> None:
     monkeypatch.setenv("CONFLUX_WEAVE_PROVIDER_BASE_URL", "http://provider.example/v1")
     monkeypatch.setenv("CONFLUX_WEAVE_PROVIDER_API_KEY", "fixture-secret")

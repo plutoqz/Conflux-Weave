@@ -283,15 +283,28 @@ class DurableResearchRuntime:
             32 if task_kind == DEEP_RESEARCH_TASK else 2 + 6 * max_subquestions
         )
         retrieval_round_limit = (3 if task_kind == VERIFIED_RESEARCH_TASK else (4 if task_kind == DEEP_RESEARCH_TASK else max_subquestions))
-        frozen_budget = budget or BudgetLedger(
-            900,
-            320_000,
-            48_000,
-            "provider-price-not-frozen",
-            provider_call_limit,
-            retrieval_round_limit,
-            1,
-        )
+        # W3.5 融合交付在引擎批次之上新增合并规划与融合写作+审计轮次；
+        # 深度研究的墙钟与 token 预算放宽到 30 分钟量级。
+        if task_kind == DEEP_RESEARCH_TASK:
+            frozen_budget = budget or BudgetLedger(
+                1800,
+                480_000,
+                80_000,
+                "provider-price-not-frozen",
+                provider_call_limit,
+                retrieval_round_limit,
+                1,
+            )
+        else:
+            frozen_budget = budget or BudgetLedger(
+                900,
+                320_000,
+                48_000,
+                "provider-price-not-frozen",
+                provider_call_limit,
+                retrieval_round_limit,
+                1,
+            )
         reservation = BudgetAmount(
             input_tokens=frozen_budget.input_tokens,
             output_tokens=frozen_budget.output_tokens,

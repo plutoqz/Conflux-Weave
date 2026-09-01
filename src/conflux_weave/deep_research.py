@@ -24,6 +24,8 @@ from pathlib import Path
 from typing import Callable
 
 from conflux_weave.core import DeliveryDisposition
+from conflux_weave.documents import document_title_from_segments
+from conflux_weave.engine_narrative import parse_engine_narrative
 from conflux_weave.evidence import (
     AssessmentVerdict,
     Citation,
@@ -31,13 +33,17 @@ from conflux_weave.evidence import (
     EvidenceRef,
     EvidenceRelation,
     SourceTrustLevel,
+    origin_lane,
+    render_fused_report,
     render_report_document,
     require_closed_citations,
 )
+from conflux_weave.merge import plan_merge
 from conflux_weave.provider import OpenAICompatibleChatAdapter, ProviderConfig
 from conflux_weave.report_writer import (
     WriterOutcome,
     build_deterministic_document,
+    compose_fused_report_document,
     compose_report_document,
     distill_evidence_cards,
 )
@@ -46,7 +52,7 @@ from conflux_weave.runtime import LocalArtifactStore
 
 
 DEEP_RESEARCH_SCHEMA = "conflux-weave.deep-research-manifest.v1"
-DEEP_REPORT_SCHEMA = "conflux-weave.deep-research-report.v2"
+DEEP_REPORT_SCHEMA = "conflux-weave.deep-research-report.v3"
 SNAPSHOT_SCHEMA = "conflux-weave.source-snapshot.v1"
 EVIDENCE_CHARS = 6000
 LOCAL_EVIDENCE_CHARS = 3600
@@ -127,21 +133,25 @@ class GPTResearcherBridge:
             raise RuntimeError(f"GPT Researcher is not installed: {exc}") from exc
 
         progress = on_progress or (lambda message: None)
-        model = f"openai/{self._provider_config.model}"
+        # 引擎专用模型（W3.6）：FAST/SMART/STRATEGIC 三角色走 engine_model，
+        # 缺省回退 chat 模型；embedding 保持 provider 模型，引擎内嵌向量
+        # 检索不受引擎 LLM 切换影响。
+        chat_model = self._provider_config.model
+        embedding_model = f"openai/{chat_model}"
         # GPT Researcher expects LLM configuration values as provider:model;
         # keep the slash form only for its OpenAI-compatible embedding env var.
-        engine_model = f"openai:{self._provider_config.model}"
+        engine_llm = f"openai:{self._provider_config.engine_model or chat_model}"
         retriever = self._retriever or ("tavily" if os.environ.get("TAVILY_API_KEY") else "duckduckgo")
         env_patches = {
             "OPENAI_API_KEY": self._provider_config.api_key,
             "OPENAI_BASE_URL": self._provider_config.base_url,
             "EMBEDDING_PROVIDER": "openai",
-            "OPENAI_EMBEDDING_MODEL": model,
+            "OPENAI_EMBEDDING_MODEL": embedding_model,
             # Also set the supported environment keys so a process-level
             # override cannot replace the system-selected model.
-            "FAST_LLM": engine_model,
-            "SMART_LLM": engine_model,
-            "STRATEGIC_LLM": engine_model,
+            "FAST_LLM": engine_llm,
+            "SMART_LLM": engine_llm,
+            "STRATEGIC_LLM": engine_llm,
         }
         saved = {key: os.environ.get(key) for key in env_patches}
         os.environ.update(env_patches)
@@ -149,12 +159,13 @@ class GPTResearcherBridge:
         tracker = _TokenTracker()
         engine_usage = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
         original_capture = self._install_usage_probe(engine_usage)
+        original_tavily_init = self._install_tavily_adapter()
         try:
             local_chunks = self._local_chunks(objective)
             config_payload = {
-                "SMART_LLM": engine_model,
-                "FAST_LLM": engine_model,
-                "STRATEGIC_LLM": engine_model,
+                "SMART_LLM": engine_llm,
+                "FAST_LLM": engine_llm,
+                "STRATEGIC_LLM": engine_llm,
                 "RETRIEVER": retriever,
                 "MAX_SEARCH_RESULTS_PER_QUERY": 4,
                 # 引擎报告随交付附录呈现，中文目标必须产出中文叙事（W3.2.1）。
@@ -204,6 +215,7 @@ class GPTResearcherBridge:
             # 异常路径也要回收回调与探针，避免泄漏进全局状态。
             tracker.consume()
             self._uninstall_usage_probe(original_capture)
+            self._uninstall_tavily_adapter(original_tavily_init)
             for key, value in saved.items():
                 if value is None:
                     os.environ.pop(key, None)
@@ -243,6 +255,43 @@ class GPTResearcherBridge:
             return original
         except Exception:  # noqa: BLE001 - 引擎不可导入时无从记账
             return None
+
+    @staticmethod
+    def _install_tavily_adapter():
+        """Tavily 端点/鉴权适配（W3.6）。
+
+        官方新版 API 要求 ``Authorization: Bearer`` 头鉴权，而 gpt-researcher
+        内置检索器用旧式 body api_key 且把端点硬编码为 api.tavily.com；网关
+        代理平台（key 前缀非 tvly-）的兼容端点需经 TAVILY_BASE_URL 覆盖。
+        补丁仅覆盖本次引擎运行，结束即恢复；失败静默降级为不补。
+        """
+        try:
+            from gpt_researcher.retrievers.tavily import tavily_search as module
+        except Exception:  # noqa: BLE001 - 引擎不可导入时无检索器可补
+            return None
+        original_init = module.TavilySearch.__init__
+
+        def patched_init(self, query, headers=None, topic="general", query_domains=None):
+            original_init(self, query, headers=headers, topic=topic, query_domains=query_domains)
+            base_url = os.environ.get("TAVILY_BASE_URL", "").strip()
+            if base_url:
+                self.base_url = base_url
+            if self.api_key:
+                self.headers["Authorization"] = f"Bearer {self.api_key}"
+
+        module.TavilySearch.__init__ = patched_init
+        return original_init
+
+    @staticmethod
+    def _uninstall_tavily_adapter(original) -> None:
+        if original is None:
+            return
+        try:
+            from gpt_researcher.retrievers.tavily import tavily_search as module
+
+            module.TavilySearch.__init__ = original
+        except Exception:  # noqa: BLE001
+            pass
 
     @staticmethod
     def _uninstall_usage_probe(original) -> None:
@@ -295,9 +344,27 @@ class GPTResearcherBridge:
             )
         return chunks
 
+    def local_document_title(self, document_id: str, fallback: str) -> str:
+        """本地来源标题（W3.5 紧凑引用）：基于检索索引分段表的首页标题。"""
+        if self._retrieval is None:
+            return fallback
+        return document_title_from_segments(self._retrieval.document_by_id, document_id, fallback)
+
 
 def _local_filename(chunk: DeepLocalChunk) -> str:
     return f"local-{(chunk.snapshot_id or chunk.document_id).replace(':', '-')[:40]}.txt"
+
+
+def _web_content_map(evidence: tuple[EvidenceRef, ...]) -> dict[str, str]:
+    """网络快照 → 最长正文（融合 Writer 的数字漂移与审计基准之一）。"""
+    content: dict[str, str] = {}
+    for item in evidence:
+        if origin_lane(item) != "web":
+            continue
+        existing = content.get(item.source_snapshot_id, "")
+        if len(item.quote) > len(existing):
+            content[item.source_snapshot_id] = item.quote
+    return content
 
 
 class _TokenTracker:
@@ -511,49 +578,120 @@ class DeepResearchWorkflow:
         )
         require_closed_citations(accepted_claims, accepted_evidence, citations)
 
+        # W3.5 融合交付：引擎报告解析为叙事骨架，本地核验证据按段落融入。
+        # 引擎无可解析结构或融合规划失败时，回退 legacy claim 组装路径。
+        engine_body = result.report_markdown.strip()
+        narrative = parse_engine_narrative(engine_body) if engine_body else None
+        web_meta = {
+            item["source_id"]: {"title": item["title"], "url": item["url"]}
+            for item in snapshot_records
+            if not item["title_only"]
+        }
+        local_registry = {
+            chunk.snapshot_id: self.bridge.local_document_title(chunk.document_id, chunk.snapshot_id)
+            for chunk in local_chunks
+        }
         limitations = (
             "GPT Researcher 仅用于来源发现与聚合；引用权威为本地 Claim/Evidence 验证链。",
             "来源快照内容为聚合引擎交付正文，未重新爬取页面。",
         )
-        engine_body = result.report_markdown.strip()
-        if engine_body:
-            limitations += (
-                "报告附录为聚合引擎综合视图，未经本地核验，结论请以已验证研究发现为准。",
+        merge = None
+        if narrative is not None:
+            merge = plan_merge(
+                self.store,
+                self.chat,
+                objective,
+                narrative,
+                accepted_claims,
+                accepted_evidence,
+                citations,
+                web_source_ids=tuple(dict.fromkeys(
+                    ref.source_snapshot_id for ref in accepted_evidence if origin_lane(ref) == "web"
+                )),
+                web_source_meta=web_meta,
             )
-        distill = distill_evidence_cards(self.store, self.chat, accepted_claims, accepted_evidence, citations)
-        writer: WriterOutcome = compose_report_document(
-            self.store,
-            self.chat,
-            objective,
-            accepted_claims,
-            accepted_evidence,
-            citations,
-            cards=distill.cards if distill.status == "ok" else (),
-        )
-        if writer.status == "fallback":
-            limitations += ("报告正文为确定性组装的已验证 Claim 原文（模型写作未通过校验轮次），已完整覆盖全部核验结论。",)
-        document = writer.document if writer.document is not None else build_deterministic_document(objective, accepted_claims)
-        report = render_report_document(
-            title=objective,
-            document=document,
-            claims=accepted_claims,
-            evidence=accepted_evidence,
-            citations=citations,
-            evidence_trust={item.evidence_id: SourceTrustLevel.GENERAL_SOURCE for item in accepted_evidence},
-            limitations=limitations,
-        )
-        if engine_body:
-            # 引擎综合视图并入交付（W3.2.1）：与未核验交付同一分层模式——核验
-            # claim 链是骨架，附录内容显式标注"未经本地核验"。v2 质量门均在
-            # 渲染前的 document 上运行，附录不参与、不稀释任何门。
-            report += (
-                "\n\n---\n\n"
-                "## 附录：聚合引擎综合视图（未经本地核验）\n\n"
-                "> 以下内容由 GPT Researcher 生成，未经过本地 Claim/Verifier 链核验；"
-                "结论请以上文「已验证研究发现」为准，来源出处见上方来源清单与快照。\n\n"
-                + engine_body
-                + "\n"
+        fused = merge is not None and merge.status == "ok"
+        if fused:
+            web_content = _web_content_map(accepted_evidence)
+            distill = distill_evidence_cards(self.store, self.chat, accepted_claims, accepted_evidence, citations)
+            writer: WriterOutcome = compose_fused_report_document(
+                self.store,
+                self.chat,
+                objective,
+                narrative,
+                accepted_claims,
+                accepted_evidence,
+                citations,
+                plan=merge.plan,
+                web_content=web_content,
+                cards=distill.cards if distill.status == "ok" else (),
             )
+            document = writer.document
+            if document is None:
+                document = build_deterministic_document(objective, accepted_claims)
+            if writer.status == "fallback":
+                limitations += ("报告正文为确定性融合组装：引擎段落原文+本地核验结论逐字嵌入，未润色。",)
+            note_lines = [f"正文骨架继承聚合引擎报告（{len(narrative.sections)} 节），本地核验结论按段落融入。"]
+            if merge.plan.dropped:
+                note_lines.append(
+                    f"另有 {len(merge.plan.dropped)} 条与目标无直接关系的核验结论未写入正文，完整清单见运行工件。"
+                )
+            research_space = tuple(
+                claim for claim in accepted_claims if claim.claim_id in set(merge.plan.research_space)
+            )
+            report = render_fused_report(
+                title=narrative.title or objective,
+                thesis=merge.plan.thesis,
+                claims=accepted_claims,
+                evidence=accepted_evidence,
+                citations=citations,
+                document=document,
+                research_space_claims=research_space,
+                web_registry=web_meta,
+                local_registry=local_registry,
+                note_lines=tuple(note_lines),
+                warning_lines=writer.warnings,
+            )
+            delivery_shape = "engine-fused"
+            engine_view = "narrative-skeleton"
+        else:
+            if merge is not None and merge.status == "degraded":
+                limitations += (f"证据融合规划未产出可用方案（{merge.reason}），报告按本地核验结论组装交付。",)
+            distill = distill_evidence_cards(self.store, self.chat, accepted_claims, accepted_evidence, citations)
+            writer: WriterOutcome = compose_report_document(
+                self.store,
+                self.chat,
+                objective,
+                accepted_claims,
+                accepted_evidence,
+                citations,
+                cards=distill.cards if distill.status == "ok" else (),
+            )
+            if writer.status == "fallback":
+                limitations += ("报告正文为确定性组装的已验证 Claim 原文（模型写作未通过校验轮次），已完整覆盖全部核验结论。",)
+            document = writer.document if writer.document is not None else build_deterministic_document(objective, accepted_claims)
+            report = render_report_document(
+                title=objective,
+                document=document,
+                claims=accepted_claims,
+                evidence=accepted_evidence,
+                citations=citations,
+                evidence_trust={item.evidence_id: SourceTrustLevel.GENERAL_SOURCE for item in accepted_evidence},
+                limitations=limitations,
+            )
+            if engine_body:
+                # 引擎综合视图并入交付：与未核验交付同一分层模式——核验
+                # claim 链是骨架，附录内容显式标注"未经本地核验"。
+                report += (
+                    "\n\n---\n\n"
+                    "## 附录：聚合引擎综合视图（未经本地核验）\n\n"
+                    "> 以下内容由 GPT Researcher 生成，未经过本地 Claim/Verifier 链核验；"
+                    "结论请以上文「已验证研究发现」为准，来源出处见上方来源清单与快照。\n\n"
+                    + engine_body
+                    + "\n"
+                )
+            delivery_shape = "flat"
+            engine_view = "appended-unverified" if engine_body else "omitted"
         report_ref = self.store.put_bytes(
             report.encode("utf-8"),
             media_type="text/markdown; charset=utf-8",
@@ -584,7 +722,16 @@ class DeepResearchWorkflow:
                 "writer_status": writer.status,
                 "writer_degrade_reason": writer.reason if writer.status == "fallback" else None,
                 "distill_status": distill.status,
-                "engine_view": "appended-unverified" if engine_body else "omitted",
+                "delivery_shape": delivery_shape,
+                "merge": {
+                    "status": merge.status if merge else "skipped",
+                    "reason": merge.reason if merge else "engine narrative has no sections",
+                    "plan_artifact": merge.plan_artifact_id if merge else None,
+                    "assignment_count": len(merge.plan.assignments) if merge and merge.plan else 0,
+                    "research_space_count": len(merge.plan.research_space) if merge and merge.plan else 0,
+                    "dropped_count": len(merge.plan.dropped) if merge and merge.plan else 0,
+                },
+                "engine_view": engine_view,
                 "coverage": {
                     "accepted_claim_count": len(accepted_claims),
                     "candidate_claim_count": len(claims),

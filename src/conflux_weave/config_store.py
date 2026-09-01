@@ -19,6 +19,7 @@ PROVIDER_API_KEY_KEY = "CONFLUX_WEAVE_PROVIDER_API_KEY"
 PROVIDER_MODEL_KEY = "CONFLUX_WEAVE_PROVIDER_MODEL"
 PROVIDER_EMBEDDING_MODEL_KEY = "CONFLUX_WEAVE_PROVIDER_EMBEDDING_MODEL"
 PROVIDER_RERANKER_MODEL_KEY = "CONFLUX_WEAVE_PROVIDER_RERANKER_MODEL"
+PROVIDER_ENGINE_MODEL_KEY = "CONFLUX_WEAVE_PROVIDER_ENGINE_MODEL"
 
 _PROVIDER_KEYS = (
     PROVIDER_BASE_URL_KEY,
@@ -26,6 +27,7 @@ _PROVIDER_KEYS = (
     PROVIDER_MODEL_KEY,
     PROVIDER_EMBEDDING_MODEL_KEY,
     PROVIDER_RERANKER_MODEL_KEY,
+    PROVIDER_ENGINE_MODEL_KEY,
 )
 
 
@@ -41,6 +43,7 @@ class ProviderConfigView:
     model: str
     embedding_model: str
     reranker_model: str
+    engine_model: str
     api_key_configured: bool
     api_key_hint: str | None
 
@@ -48,14 +51,7 @@ class ProviderConfigView:
     def from_env(cls, dotenv_path: Path | None) -> ProviderConfigView:
         values = _read_values(dotenv_path)
         api_key = values[PROVIDER_API_KEY_KEY]
-        return cls(
-            base_url=values[PROVIDER_BASE_URL_KEY],
-            model=values[PROVIDER_MODEL_KEY],
-            embedding_model=values[PROVIDER_EMBEDDING_MODEL_KEY],
-            reranker_model=values[PROVIDER_RERANKER_MODEL_KEY],
-            api_key_configured=bool(api_key),
-            api_key_hint=_mask_key(api_key),
-        )
+        return _view_from_values(values, api_key)
 
 
 def _view_from_dotenv(dotenv_path: Path | None) -> ProviderConfigView:
@@ -67,11 +63,16 @@ def _view_from_dotenv(dotenv_path: Path | None) -> ProviderConfigView:
         value = dotenv_config.get(key)
         values[key] = value.strip() if isinstance(value, str) else ""
     api_key = values[PROVIDER_API_KEY_KEY]
+    return _view_from_values(values, api_key)
+
+
+def _view_from_values(values: dict[str, str], api_key: str) -> ProviderConfigView:
     return ProviderConfigView(
         base_url=values[PROVIDER_BASE_URL_KEY],
         model=values[PROVIDER_MODEL_KEY],
         embedding_model=values[PROVIDER_EMBEDDING_MODEL_KEY],
         reranker_model=values[PROVIDER_RERANKER_MODEL_KEY],
+        engine_model=values[PROVIDER_ENGINE_MODEL_KEY],
         api_key_configured=bool(api_key),
         api_key_hint=_mask_key(api_key),
     )
@@ -118,6 +119,7 @@ def update_provider(
     model: str,
     embedding_model: str | None,
     reranker_model: str | None,
+    engine_model: str | None = None,
 ) -> ProviderConfigView:
     """Persist Provider keys into the dotenv file, preserving unrelated lines.
 
@@ -132,6 +134,7 @@ def update_provider(
         PROVIDER_MODEL_KEY: model.strip(),
         PROVIDER_EMBEDDING_MODEL_KEY: (embedding_model or "").strip(),
         PROVIDER_RERANKER_MODEL_KEY: (reranker_model or "").strip(),
+        PROVIDER_ENGINE_MODEL_KEY: (engine_model or "").strip(),
     }
     if api_key is not None and api_key.strip():
         updates[PROVIDER_API_KEY_KEY] = api_key.strip()

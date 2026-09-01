@@ -281,6 +281,7 @@ class ProviderConfigResponse(_ApiModel):
     model: str
     embedding_model: str
     reranker_model: str
+    engine_model: str = ""
     api_key_configured: bool
     api_key_hint: str | None = None
 
@@ -291,6 +292,7 @@ class ProviderConfigUpdateRequest(_ApiModel):
     model: str = Field(min_length=1, max_length=200)
     embedding_model: str | None = Field(default=None, max_length=200)
     reranker_model: str | None = Field(default=None, max_length=200)
+    engine_model: str | None = Field(default=None, max_length=200)
 
     @field_validator("base_url")
     @classmethod

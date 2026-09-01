@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import mimetypes
+import os
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -13,6 +14,7 @@ from typing import Any
 from uuid import uuid4
 import subprocess
 
+from dotenv import dotenv_values
 from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -499,13 +501,14 @@ def create_app(
         if view is None:
             return ProviderConfigResponse(
                 base_url="", model="", embedding_model="", reranker_model="",
-                api_key_configured=False, api_key_hint=None,
+                engine_model="", api_key_configured=False, api_key_hint=None,
             )
         return ProviderConfigResponse(
             base_url=view.base_url,
             model=view.model,
             embedding_model=view.embedding_model,
             reranker_model=view.reranker_model,
+            engine_model=view.engine_model,
             api_key_configured=view.api_key_configured,
             api_key_hint=view.api_key_hint,
         )
@@ -536,6 +539,7 @@ def create_app(
                 model=request.model,
                 embedding_model=request.embedding_model,
                 reranker_model=request.reranker_model,
+                engine_model=request.engine_model,
             )
             return ProviderConfigUpdateResponse(
                 provider=ProviderConfigResponse(
@@ -543,6 +547,7 @@ def create_app(
                     model=view.model,
                     embedding_model=view.embedding_model,
                     reranker_model=view.reranker_model,
+                    engine_model=view.engine_model,
                     api_key_configured=view.api_key_configured,
                     api_key_hint=view.api_key_hint,
                 ),
@@ -640,6 +645,23 @@ def _code_revision() -> str:
     return f"{head}{'-dirty' if dirty else ''}"
 
 
+def _inject_third_party_keys(dotenv_path: Path | None) -> None:
+    """把 dotenv 里的第三方服务 key（TAVILY_API_KEY 等）注入进程环境。
+
+    GPT Researcher 的检索器直接读 os.environ，而这些 key 不属于
+    ProviderConfig；只注入进程尚未设置的键（已有环境变量优先），不触碰
+    CONFLUX_WEAVE_PROVIDER_*（那套走 dotenv_values 显式读取）。
+    """
+    if dotenv_path is None or not dotenv_path.exists():
+        return
+    for key in ("TAVILY_API_KEY", "TAVILY_BASE_URL"):
+        if os.environ.get(key):
+            continue
+        value = (dotenv_values(dotenv_path) or {}).get(key)
+        if isinstance(value, str) and value.strip():
+            os.environ[key] = value.strip()
+
+
 def build_local_app(
     *,
     database: Path = Path("var") / "db" / "conflux-weave.sqlite3",
@@ -652,6 +674,7 @@ def build_local_app(
     """Construct the production-shaped local app; no external call occurs here."""
     store = LocalArtifactStore(artifact_root)
     repository = SQLiteRuntimeRepository(database, store)
+    _inject_third_party_keys(dotenv_path)
     workspace = LocalWorkspaceAdapter(
         workspace_root,
         Path(__file__).with_name("system"),
@@ -738,6 +761,10 @@ def build_local_app(
                     store,
                     VerifiedWorkflowExecutorAdapter(store, verified, managed, deep_workflow),
                     code_revision=_code_revision(),
+                    # W3.5 融合交付的深度研究批次（引擎+规划+融合写作+审计）
+                    # 可超过 15 分钟；本地单 worker 下放宽租约，避免长批次
+                    # 被判为 worker 失联进入 needs_attention。
+                    lease_seconds=3600,
                 ),
                 deep_research_enabled=deep_enabled,
             )
