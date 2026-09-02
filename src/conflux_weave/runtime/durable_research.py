@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import hashlib
 import json
 from typing import Any, Protocol
@@ -63,6 +63,7 @@ class DurableResearchExecution:
     disposition: DeliveryDisposition = DeliveryDisposition.COMPLETE
     limitations: tuple[str, ...] = ()
     unmet_criteria: tuple[str, ...] = ()
+    timings_ms: dict[str, int] = field(default_factory=dict)
 
 
 class ResearchExecutor(Protocol):
@@ -154,6 +155,7 @@ class VerifiedWorkflowExecutorAdapter:
             disposition=getattr(result, "disposition", DeliveryDisposition.COMPLETE),
             limitations=tuple(getattr(result, "limitations", ())),
             unmet_criteria=tuple(getattr(result, "unmet_criteria", ())),
+            timings_ms=dict(getattr(result, "timings_ms", {}) or {}),
         )
 
     def _collect_usage(self, root_artifact_id: str) -> tuple[int, int, int]:
