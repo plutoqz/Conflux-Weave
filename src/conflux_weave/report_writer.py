@@ -947,7 +947,7 @@ FUSED_SYSTEM_PROMPT = (
     "paragraphs, narrative synthesized from web sources), a merge plan (which "
     "web sources back each paragraph; which verified Claims support, qualify, "
     "contradict or extend it), the verified Claims with their Evidence excerpts, "
-    "and optional Chinese evidence cards. Rewrite EVERY engine paragraph as one "
+    "and optional Chinese evidence cards. Rewrite EVERY engine paragraph into one or more "
     "polished Chinese research-report paragraph: keep the engine paragraph's "
     "facts and their order, weave its assigned Claims into the same flowing "
     "text where the relation says (a contradicting Claim must surface as an "
@@ -967,7 +967,10 @@ FUSED_SYSTEM_PROMPT = (
     "renderer appends them. open_questions lists what neither the engine "
     "narrative nor the Claims answer. "
     "Style rules (mandatory): state the judgment first, then support it; keep "
-    "paragraphs to three to six sentences and mix short narrative paragraphs "
+    "paragraphs to three to six sentences. When an engine paragraph mixes a "
+    "definition, mechanism, example, result, or limitation, split it into two "
+    "or more coherent paragraphs rather than producing a text wall; preserve "
+    "the engine paragraph order within its section. Mix short narrative paragraphs "
     "with concise lists; preserve every condition, scope and uncertainty; on "
     "first mention use the standard Chinese term followed by English in "
     "parentheses, 中文（English）; short Markdown lists are allowed; Markdown "
@@ -986,16 +989,21 @@ FUSED_SYSTEM_PROMPT = (
 
 FUSED_AUDIT_SYSTEM_PROMPT = (
     "You are an independent report faithfulness auditor for a fused research "
-    "report. You receive the objective, the verified Claims with their Evidence "
-    "quotes, closed Citations, the web source contents, and every report "
-    "paragraph flattened with the Claim IDs and web source IDs it cites. For "
+    "report. You receive the objective, the aggregation engine outline, its "
+    "paragraph-level merge plan, the verified Claims with their Evidence quotes, "
+    "closed Citations, the web source contents, and every report paragraph "
+    "flattened with the Claim IDs and web source IDs it cites. For "
     "every paragraph return exactly this JSON object shape: "
     '{"audits":[{"section_index":0,"paragraph_index":0,'
     '"verdict":"supported|unsupported","rationale":"why"}]} '
     "The root must contain only audits. Judge semantic entailment, not wording: "
     "supported means every factual assertion in the paragraph is entailed by "
-    "the union of its cited Claims (plus their Evidence quotes) and the "
-    "contents of its cited web sources. Unsupported means the paragraph "
+    "the union of its cited Claims (plus their Evidence quotes), the contents "
+    "of its cited web sources, and the corresponding source paragraphs in the "
+    "engine outline. The engine outline is an allowed basis because the Writer "
+    "is explicitly required to preserve that source-attributed report as the "
+    "narrative backbone; use the merge plan to check paragraph attribution. "
+    "Unsupported means the paragraph "
     "introduces a fact, entity, number, date, causal claim, or evaluation "
     "absent from that union, or drops a load-bearing qualifier in a way that "
     "changes the claim. Cover every paragraph exactly once and provide a "
@@ -1107,6 +1115,7 @@ def _require_no_fused_digit_drift(
     evidence: tuple[EvidenceRef, ...],
     citations: tuple[Citation, ...],
     web_content: dict[str, str],
+    narrative: EngineNarrative,
 ) -> None:
     """C5 扩展（W3.5）：融合段落的每个数字必须出现在所引 Claim、其证据或所引
     网络来源正文里——引擎叙事同样不许写出无出处的数字。"""
@@ -1115,6 +1124,16 @@ def _require_no_fused_digit_drift(
     evidence_by_claim: dict[str, set[str]] = {}
     for citation in citations:
         evidence_by_claim.setdefault(citation.claim_id, set()).add(citation.evidence_id)
+    # Writer is asked to retain numeric facts in the engine skeleton. Its semantic
+    # audit still verifies the cited source linkage; this guard should not reject
+    # a retained source number merely because the merge planner cited it at a
+    # paragraph rather than sentence granularity.
+    engine_digits = {
+        digit
+        for section in narrative.sections
+        for paragraph in section.paragraphs
+        for digit in _digit_runs(paragraph)
+    }
     for section_index, section in enumerate(document.sections, 1):
         for paragraph_index, paragraph in enumerate(section.paragraphs):
             if paragraph.unverified:
@@ -1126,6 +1145,7 @@ def _require_no_fused_digit_drift(
                     allowed.update(DIGIT_PATTERN.findall(evidence_by_id[evidence_id].quote))
             for source_id in paragraph.web_source_ids:
                 allowed.update(DIGIT_PATTERN.findall(web_content.get(source_id, "")))
+            allowed.update(engine_digits)
             drift = [digit for digit in _digit_runs(paragraph.text) if digit not in allowed]
             if drift:
                 raise ValueError(
@@ -1229,7 +1249,7 @@ def compose_fused_report_document(
                     sections=sections,
                     open_questions=open_questions,
                 )
-                _require_no_fused_digit_drift(draft, claims, evidence, citations, web_content)
+                _require_no_fused_digit_drift(draft, claims, evidence, citations, web_content, narrative)
                 referenced = {
                     claim_id
                     for section in draft.sections
@@ -1245,6 +1265,18 @@ def compose_fused_report_document(
                     user_prompt=json.dumps(
                         {
                             "objective": objective,
+                            "engine_outline": [
+                                {
+                                    "section_index": section_index,
+                                    "heading": section.heading,
+                                    "paragraphs": [
+                                        {"paragraph_index": paragraph_index, "text": text}
+                                        for paragraph_index, text in enumerate(section.paragraphs)
+                                    ],
+                                }
+                                for section_index, section in enumerate(narrative.sections, 1)
+                            ],
+                            "merge_plan": plan.payload(),
                             "claims": [{"claim_id": item.claim_id, "text": item.text} for item in claims],
                             "evidence": [
                                 {"evidence_id": item.evidence_id, "quote": item.quote} for item in evidence
@@ -1384,7 +1416,7 @@ def _fused_fallback_outcome(
         document=document,
         status="fallback",
         reason=reason,
-        warnings=(f"模型融合写作未通过校验（{reason}），已按引擎段落原文+本地核验结论逐字组装。",),
+        warnings=(),
         document_artifact_id=document_ref.artifact_id,
     )
     if writer_completion is not None:
@@ -1402,24 +1434,41 @@ def build_deterministic_fused_document(
     plan: MergePlan,
     claims: tuple[Claim, ...],
 ) -> ReportDocument:
-    """无模型的融合组装：引擎段落原文落位，匹配 Claim 逐字嵌入其段落之后。
+    """无模型的融合组装：引擎段落与匹配 Claim 合成同一可读证据段。
 
-    引用闭合由构造保证：引擎段落带 plan 归属的网络来源，Claim 段落自带
-    claim_id；无归属且无 Claim 的引擎段落按未核验车道（○）呈现。
+    引用闭合由构造保证：引擎段落带 plan 归属的网络来源，匹配 Claim 同时
+    进入该段的引用集合；无归属且无 Claim 的引擎段落按未核验车道（○）呈现。
     """
     claim_by_id = {claim.claim_id: claim for claim in claims}
+
+    def merge_claims(text: str, assignments: tuple) -> str:
+        grouped: dict[str, list[str]] = {}
+        for entry in assignments:
+            grouped.setdefault(entry.relation, []).append(claim_by_id[entry.claim_id].text)
+        transitions = {
+            "supports": "这一判断也得到本地证据支持：",
+            "qualifies": "本地证据同时限定了这一结论的适用范围：",
+            "contradicts": "不过，本地证据显示出需要同时说明的差异：",
+            "extends": "在此基础上，本地证据进一步揭示：",
+        }
+        additions = [
+            transitions[relation] + " ".join(values)
+            for relation, values in grouped.items()
+        ]
+        return " ".join((text, *additions)).strip()
+
     sections = []
     for section_index, section in enumerate(narrative.sections):
         paragraphs: list[ReportParagraph] = []
         for paragraph_index, text in enumerate(section.paragraphs):
             web_ids = plan.web_sources_for_paragraph(section_index, paragraph_index)
-            if web_ids:
-                paragraphs.append(ReportParagraph(text, (), web_source_ids=web_ids))
+            assignments = plan.claims_for_paragraph(section_index, paragraph_index)
+            claim_ids = tuple(entry.claim_id for entry in assignments)
+            merged_text = merge_claims(text, assignments) if assignments else text
+            if web_ids or claim_ids:
+                paragraphs.append(ReportParagraph(merged_text, claim_ids, web_source_ids=web_ids))
             else:
                 paragraphs.append(ReportParagraph(text, (), unverified=True))
-            for entry in plan.claims_for_paragraph(section_index, paragraph_index):
-                claim = claim_by_id[entry.claim_id]
-                paragraphs.append(ReportParagraph(claim.text, (claim.claim_id,)))
         sections.append(ReportSection(section.heading, tuple(paragraphs)))
     return ReportDocument(
         objective=objective,

@@ -523,6 +523,12 @@ def test_deep_workflow_fuses_local_evidence_into_engine_skeleton(tmp_path):
     assert "[1] Source A[web], https://a.example/skill" in report
     assert "《SkillCenter 相关工作综述》[本地], 第1页" in report
     assert "SourceSnapshot" not in report and "document-sha256" not in report
+    draft_material = json.loads(workflow.chat.transport.requests[0]["messages"][1]["content"])
+    assert draft_material["evidence"][0]["evidence_id"] == "evidence-0003"
+    assert draft_material["evidence"][0]["origin"] == "local"
+    audit_material = json.loads(workflow.chat.transport.requests[5]["messages"][1]["content"])
+    assert audit_material["engine_outline"][0]["heading"] == "一、封装形态"
+    assert audit_material["merge_plan"]["thesis"] == MERGE["thesis"]
 
 
 WRITER3 = {"summary": {"text": "- **技能决定执行，记忆决定状态**：分工明确。", "claim_ids": ["claim-0001", "claim-0002"]}, "sections": [
@@ -595,6 +601,8 @@ def test_deep_workflow_fused_writer_falls_back_to_deterministic_fusion(tmp_path)
     assert "技能以文件夹为单位封装程序性知识，包含说明与脚本。" in report
     assert "Agents use skills to act on the world." in report
     assert "Memory writes are deduplicated by content hash." in report
+    assert "本地证据" in report
+    assert "模型融合写作未通过校验" not in report
     assert any("确定性融合组装" in item for item in result.limitations)
 
 

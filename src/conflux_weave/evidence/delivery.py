@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Mapping
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 from conflux_weave.evidence.contracts import (
     Citation,
@@ -49,6 +51,35 @@ TRUST_MARKERS = {
     SourceTrustLevel.UNVERIFIED_SOURCE: "?",
 }
 LANE_MARKERS = {"web": "[web]", "local": "[本地]"}
+MARKDOWN_LINK = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
+PARENTHETICAL_MARKDOWN_LINK = re.compile(
+    r"[（(]\s*\[[^\]]+\]\([^)\s]+\)\s*[）)]"
+)
+STANDALONE_BOLD = re.compile(r"^\*\*(.+?)\*\*$")
+
+
+def _normalized_url(value: str) -> str:
+    try:
+        parsed = urlsplit(unquote(value.strip()))
+    except ValueError:
+        return unquote(value.strip()).rstrip("/")
+    return urlunsplit(
+        (
+            parsed.scheme.lower(),
+            parsed.netloc.lower(),
+            parsed.path.rstrip("/"),
+            parsed.query,
+            "",
+        )
+    )
+
+
+def _clean_fused_text(text: str) -> str:
+    """最终报告使用统一编号引用，正文不重复保留引擎原始链接。"""
+    cleaned = PARENTHETICAL_MARKDOWN_LINK.sub("", text)
+    cleaned = MARKDOWN_LINK.sub(lambda match: match.group(1), cleaned)
+    cleaned = re.sub(r"[ \t]+([,.;:!?，。；：！？])", r"\1", cleaned)
+    return cleaned.strip()
 
 
 def origin_lane(item: EvidenceRef) -> str:
@@ -324,6 +355,33 @@ def render_fused_report(
     citations_by_claim: dict[str, list[Citation]] = {}
     for citation in citations:
         citations_by_claim.setdefault(citation.claim_id, []).append(citation)
+    web_key_by_url = {
+        _normalized_url(str(meta.get("url", ""))): source_id
+        for source_id, meta in web_registry.items()
+        if str(meta.get("url", "")).strip()
+    }
+
+    def inline_source_keys(text: str) -> list[str]:
+        keys: list[str] = []
+        for match in MARKDOWN_LINK.finditer(text):
+            target = match.group(2)
+            if target.startswith(("http://", "https://")):
+                key = web_key_by_url.get(_normalized_url(target))
+            elif target.startswith("local-document-"):
+                local_prefix = target.removeprefix("local-").removesuffix(".txt")
+                key = next(
+                    (
+                        snapshot_id
+                        for snapshot_id in local_registry
+                        if snapshot_id.startswith(local_prefix)
+                    ),
+                    None,
+                )
+            else:
+                key = None
+            if key and key not in keys:
+                keys.append(key)
+        return keys
 
     def claim_source_keys(claim_id: str) -> list[str]:
         keys = []
@@ -345,14 +403,33 @@ def render_fused_report(
 
     # 编号：摘要 → 正文各段 → 研究空间，按首次出现顺序分配
     ordered_keys: list[str] = []
+    key_aliases: dict[str, str] = {}
+
+    def canonical_key(key: str) -> str:
+        if key not in web_registry:
+            return key
+        title = str(web_registry[key].get("title", "")).strip().casefold()
+        if not title:
+            return key
+        for existing in ordered_keys:
+            if existing in web_registry and str(
+                web_registry[existing].get("title", "")
+            ).strip().casefold() == title:
+                return existing
+        return key
 
     def register_keys(keys: list[str] | tuple[str, ...]) -> None:
         for key in keys:
-            if key not in ordered_keys:
-                ordered_keys.append(key)
+            canonical = canonical_key(key)
+            key_aliases[key] = canonical
+            if canonical not in ordered_keys:
+                ordered_keys.append(canonical)
 
     def paragraph_keys(paragraph: ReportParagraph) -> list[str]:
         keys: list[str] = []
+        for key in inline_source_keys(paragraph.text):
+            if key not in keys:
+                keys.append(key)
         for claim_id in paragraph.claim_ids:
             for key in claim_source_keys(claim_id):
                 if key not in keys:
@@ -365,14 +442,14 @@ def render_fused_report(
     register_keys(claim_source_keys_union(document.summary.claim_ids, citations_by_claim, evidence_by_id))
     for section in document.sections:
         for paragraph in section.paragraphs:
-            if not paragraph.unverified:
-                register_keys(paragraph_keys(paragraph))
+            register_keys(paragraph_keys(paragraph))
     for claim in research_space_claims:
         register_keys(claim_source_keys(claim.claim_id))
     numbers = {key: index + 1 for index, key in enumerate(ordered_keys)}
 
     def markers(keys: list[str] | tuple[str, ...]) -> str:
-        return "".join(f"[{number}]" for number in sorted(numbers[key] for key in keys))
+        indexes = {numbers[key_aliases.get(key, key)] for key in keys}
+        return "".join(f"[{number}]" for number in sorted(indexes))
 
     lines = [f"# {title}", ""]
     lines.extend(("## 问题与来源说明", ""))
@@ -390,10 +467,17 @@ def render_fused_report(
     for section in document.sections:
         lines.extend((f"## {section.heading}", ""))
         for paragraph in section.paragraphs:
-            if paragraph.unverified:
-                lines.append(f"○ {paragraph.text}")
+            text = _clean_fused_text(paragraph.text)
+            if not text or text == "---":
+                continue
+            subheading = STANDALONE_BOLD.match(text)
+            if subheading and "\n" not in text:
+                lines.append(f"### {subheading.group(1)}")
             else:
-                lines.append(f"{paragraph.text} {markers(paragraph_keys(paragraph))}".rstrip())
+                lines.append(f"{text} {markers(paragraph_keys(paragraph))}".rstrip())
+            # Markdown 以空行定义段落。没有这行时，前端安全渲染器会把同一
+            # 小节的所有非空行合并到同一个 <p> 中。
+            lines.append("")
         lines.append("")
     orphans = [claim for claim in research_space_claims if claim.text.strip()]
     if orphans or document.open_questions:

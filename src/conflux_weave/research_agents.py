@@ -10,7 +10,8 @@ from conflux_weave.core import BudgetLedger, DeliveryDisposition
 from conflux_weave.evidence import (
     AnswerBlock, AssessmentVerdict, Citation, Claim, ClaimAssessment,
     EvidenceRef, EvidenceRelation, EvidenceSupportStatus, SourceTrustLevel,
-    render_evidence_report, render_report_document, require_closed_citations,
+    origin_lane, render_evidence_report, render_report_document,
+    require_closed_citations,
 )
 from conflux_weave.harness import (
     AgentProfile, AgentResult, AgentResultStatus, AgentTask, ContextBundle,
@@ -336,9 +337,28 @@ class VerifiedResearchWorkflow:
         return tuple(evidence)
 
     def _draft(self, objective: str, evidence: tuple[EvidenceRef, ...], *, repair: bool, prior_claims=(), assessments=(), fix_note=None):
-        context = {"objective": objective, "evidence": [{"evidence_id": item.evidence_id, "quote": item.quote} for item in evidence]}
+        context = {
+            "objective": objective,
+            "evidence": [
+                {
+                    "evidence_id": item.evidence_id,
+                    "origin": origin_lane(item),
+                    "quote": item.quote,
+                }
+                for item in evidence
+            ],
+        }
         if repair: context.update({"prior_claims": [asdict(item) for item in prior_claims], "assessments": [asdict(item) for item in assessments]})
-        system_prompt = "Return JSON {claims:[{text,evidence_ids}]}. Every claim must be directly entailed by cited evidence. Do not use model knowledge. Extract every distinct supportable finding, mechanism, comparison, and example. Keep at most 10 claims." if not repair else "Repair the claims once. Return JSON {claims:[{text,evidence_ids}]}; remove or narrow every rejected/uncertain claim using only supplied evidence."
+        system_prompt = (
+            "Return JSON {claims:[{text,evidence_ids}]}. Every claim must be directly "
+            "entailed by cited evidence. Do not use model knowledge. Extract every "
+            "distinct supportable finding, mechanism, comparison, and example. When "
+            "the evidence spans web and local origins, include directly supportable "
+            "findings from both origins instead of spending all claim slots on one. "
+            "Keep at most 10 claims."
+            if not repair
+            else "Repair the claims once. Return JSON {claims:[{text,evidence_ids}]}; remove or narrow every rejected/uncertain claim using only supplied evidence."
+        )
         if fix_note:
             # 一次 schema 修复重试（W3.2.1，深度研究专用）：起草输出契约违规时带上
             # 具体违规反馈再试一次，两次都失败由调用方落入未核验交付。

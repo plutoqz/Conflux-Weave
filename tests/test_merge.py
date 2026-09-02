@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from conflux_weave.engine_narrative import parse_engine_narrative
-from conflux_weave.evidence import Citation, Claim, EvidenceRef
+from conflux_weave.evidence import Citation, Claim, EvidenceRef, render_fused_report
 from conflux_weave.merge import plan_merge
 from conflux_weave.provider import (
     OpenAICompatibleChatAdapter,
@@ -98,6 +98,34 @@ def test_parse_engine_narrative_structure_and_fallback():
     assert parse_engine_narrative("# 只有标题\n正文没有小节。") is None
 
 
+def test_parse_engine_narrative_groups_wrapped_lines_until_a_blank_line():
+    parsed = parse_engine_narrative(
+        "# 标题\n\n## 小节\n同一段的第一行。\n同一段的第二行。\n\n下一自然段。\n"
+    )
+
+    assert parsed is not None
+    assert parsed.sections[0].paragraphs == ("同一段的第一行。\n同一段的第二行。", "下一自然段。")
+
+
+def test_parse_engine_narrative_excludes_trailing_reference_section():
+    parsed = parse_engine_narrative(
+        "# 标题\n\n## 研究发现\n正文。\n\n## 八、参考文献\nSource A. https://a.example\n"
+    )
+
+    assert parsed is not None
+    assert [section.heading for section in parsed.sections] == ["一、研究发现"]
+
+
+def test_parse_engine_narrative_renumbers_mixed_headings_and_reference_sources():
+    parsed = parse_engine_narrative(
+        "# 标题\n\n## 引言\n引言。\n\n## 一、机制\n机制。\n\n"
+        "## 十、参考来源\n1. local-document-sha256-deadbeef.txt\n"
+    )
+
+    assert parsed is not None
+    assert [section.heading for section in parsed.sections] == ["一、引言", "二、机制"]
+
+
 def test_plan_merge_ok_assigns_all_claims(tmp_path):
     store, chat, transport = build_service(tmp_path, [chat_response(PLAN_OK, "plan")])
 
@@ -155,13 +183,107 @@ def test_deterministic_fused_document_embeds_claims_after_engine_paragraphs(tmp_
 
     assert document.summary.text == PLAN_OK["thesis"]
     first = document.sections[0].paragraphs
-    # 引擎段落原文（带归属）+ 匹配 Claim 逐字段
+    # fallback 也应把原引擎段落和匹配 Claim 合为一个段落，避免逐条 Claim 散落。
     assert first[0].web_source_ids == ("web-0001",)
-    assert first[1].claim_ids == ("claim-0001",)
-    assert first[1].text == CLAIMS[0].text
-    assert first[2].claim_ids == ("claim-0003",)
-    # 无归属且无 Claim 的引导段按未核验车道呈现
-    assert first[3].unverified is True
+    assert first[0].claim_ids == ("claim-0001", "claim-0003")
+    assert CLAIMS[0].text in first[0].text
+    assert CLAIMS[2].text in first[0].text
+    # 无归属且无 Claim 的引导段按未核验车道呈现。
+    assert first[1].unverified is True
+
+
+def test_fused_renderer_separates_each_report_paragraph_with_markdown_blank_lines(tmp_path):
+    from conflux_weave.merge import _parse_plan
+
+    parsed_plan = _parse_plan(json.dumps(PLAN_OK), CLAIMS, narrative(), ("web-0001", "web-0002"))
+    document = build_deterministic_fused_document("目标", narrative(), parsed_plan, CLAIMS)
+    report = render_fused_report(
+        title="融合报告标题",
+        thesis=PLAN_OK["thesis"],
+        claims=CLAIMS,
+        evidence=EVIDENCE,
+        citations=CITATIONS,
+        document=document,
+        research_space_claims=(),
+        web_registry=WEB_META,
+        local_registry={"snap-local-1": "本地技能综述"},
+    )
+
+    first = document.sections[0].paragraphs[0].text
+    assert f"{first} [1][3]\n\n" in report
+    assert "### 形态细节" in report
+    assert "○ " not in report
+
+
+def test_fused_renderer_normalizes_engine_links_into_the_single_reference_space():
+    from conflux_weave.evidence import ReportDocument, ReportParagraph, ReportSection
+
+    document = ReportDocument(
+        objective="目标",
+        summary=ReportParagraph("总结。", ("claim-0001",)),
+        sections=(
+            ReportSection(
+                "一、发现",
+                (
+                    ReportParagraph(
+                        "引擎事实（[Source B](https://b.example/memory)）。",
+                        (),
+                        unverified=True,
+                    ),
+                ),
+            ),
+        ),
+        open_questions=(),
+    )
+    report = render_fused_report(
+        title="融合报告",
+        thesis="总结。",
+        claims=CLAIMS,
+        evidence=EVIDENCE,
+        citations=CITATIONS,
+        document=document,
+        research_space_claims=(),
+        web_registry=WEB_META,
+        local_registry={"snap-local-1": "本地技能综述"},
+    )
+
+    body, references = report.split("## 来源引用", 1)
+    assert "https://b.example/memory" not in body
+    assert "引擎事实。 [2]" in body
+    assert references.count("Source B[web]") == 1
+
+
+def test_fused_renderer_deduplicates_same_title_web_variants():
+    from conflux_weave.evidence import ReportDocument, ReportParagraph, ReportSection
+
+    document = ReportDocument(
+        objective="目标",
+        summary=ReportParagraph("总结。", (), web_source_ids=("web-a",)),
+        sections=(
+            ReportSection(
+                "一、发现",
+                (ReportParagraph("补充。", (), web_source_ids=("web-b",)),),
+            ),
+        ),
+        open_questions=(),
+    )
+    report = render_fused_report(
+        title="融合报告",
+        thesis="总结。",
+        claims=(),
+        evidence=(),
+        citations=(),
+        document=document,
+        research_space_claims=(),
+        web_registry={
+            "web-a": {"title": "同一文章", "url": "https://example.test/article.html"},
+            "web-b": {"title": "同一文章", "url": "https://example.test/article"},
+        },
+        local_registry={},
+    )
+
+    assert report.count("同一文章[web]") == 1
+    assert "补充。 [1]" in report
 
 
 def test_merge_skips_without_narrative_or_claims(tmp_path):

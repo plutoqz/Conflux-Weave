@@ -535,7 +535,11 @@ class DeepResearchWorkflow:
 
         disposition = DeliveryDisposition.COMPLETE
         unmet: tuple[str, ...] = ()
-        claims, _draft_refs = self._draft_with_retry(objective, evidence)
+        # GPT Researcher already supplies the web narrative backbone. Put local
+        # RAG Evidence first for Claim drafting so the bounded Claim budget is
+        # available for the material that must be woven into that backbone.
+        draft_evidence = local_evidence + tuple(web_evidence)
+        claims, _draft_refs = self._draft_with_retry(objective, draft_evidence)
         if not claims:
             return self._unverified_delivery(
                 objective, snapshot_records, result, "起草未产出任何候选结论", usage, provider_call_count

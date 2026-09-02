@@ -7,7 +7,8 @@
 claim 组装路径。
 
 预算（冻结）：小节 ≤12、每节段落 ≤12、段落正文 >1600 字符时在句子
-边界确定性切分；H3 子标题折叠为该节的引导段落（加粗独立段）。
+边界确定性切分；H3 子标题折叠为该节的引导段落（加粗独立段）。Markdown
+正文以空行划分段落，不能把源报告的物理换行误当作段落边界。
 """
 
 from __future__ import annotations
@@ -25,6 +26,11 @@ HEADING_H3 = re.compile(r"^###\s+(?!#)\s*(.+?)\s*$")
 HEADING_H1 = re.compile(r"^#\s+(?!#)\s*(.+?)\s*$")
 # 引擎自带的 "一、" 序号避免重复添加
 ORDINAL_PREFIX = re.compile(r"^[一二三四五六七八九十]+、")
+REFERENCE_SECTION = re.compile(
+    r"^(?:[一二三四五六七八九十]+、\s*)?"
+    r"(?:参考文献|参考资料|参考来源|来源引用|引用来源|references|bibliography|sources)\s*$",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,8 +51,7 @@ def _ordinal(index: int) -> str:
 
 def _section_heading(raw: str, index: int) -> str:
     heading = raw.strip().strip("*# ")
-    if ORDINAL_PREFIX.match(heading):
-        return heading
+    heading = ORDINAL_PREFIX.sub("", heading).strip()
     return f"{_ordinal(index)}、{heading}"
 
 
@@ -74,14 +79,27 @@ def parse_engine_narrative(markdown: str) -> EngineNarrative | None:
     sections: list[EngineSection] = []
     current_heading: str | None = None
     current_paragraphs: list[str] = []
+    paragraph_lines: list[str] = []
     pending_subheading = ""
+
+    def flush_paragraph() -> None:
+        nonlocal paragraph_lines
+        if paragraph_lines:
+            current_paragraphs.append("\n".join(paragraph_lines).strip())
+            paragraph_lines = []
+
+    def flush_subheading() -> None:
+        nonlocal pending_subheading
+        if pending_subheading:
+            flush_paragraph()
+            current_paragraphs.append(f"**{pending_subheading}**")
+            pending_subheading = ""
 
     def flush() -> None:
         nonlocal current_paragraphs, pending_subheading, current_heading
         if current_heading is not None and len(sections) < ENGINE_MAX_SECTIONS:
-            if pending_subheading:
-                current_paragraphs.append(f"**{pending_subheading}**")
-                pending_subheading = ""
+            flush_subheading()
+            flush_paragraph()
             paragraphs: list[str] = []
             for paragraph in current_paragraphs:
                 paragraphs.extend(_split_long_paragraph(paragraph))
@@ -101,21 +119,24 @@ def parse_engine_narrative(markdown: str) -> EngineNarrative | None:
         h3 = HEADING_H3.match(line)
         h1 = HEADING_H1.match(line)
         if h2:
+            if REFERENCE_SECTION.match(h2.group(1).strip().strip("*# ")):
+                flush()
+                break
             flush()
             current_heading = h2.group(1)
         elif h3:
-            if pending_subheading:
-                current_paragraphs.append(f"**{pending_subheading}**")
+            flush_subheading()
+            flush_paragraph()
             pending_subheading = h3.group(1).strip().strip("*# ")
         elif h1:
             if not title:
                 title = h1.group(1).strip()
         elif line.strip():
-            if pending_subheading:
-                current_paragraphs.append(f"**{pending_subheading}**")
-                pending_subheading = ""
-            current_paragraphs.append(line.strip())
-        # 空行只是段落分隔；首个 H2 之前的引言段落没有归属小节，按预算丢弃
+            flush_subheading()
+            paragraph_lines.append(line.strip())
+        else:
+            flush_paragraph()
+        # 首个 H2 之前的引言段落没有归属小节，按预算丢弃。
     flush()
     if not sections:
         return None
