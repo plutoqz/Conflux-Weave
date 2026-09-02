@@ -940,6 +940,8 @@ FUSED_MAX_ATTEMPTS = 3
 FUSED_MAX_PARAGRAPHS_PER_SECTION = 16
 FUSED_MAX_OPEN_QUESTIONS = 8
 FUSED_WEB_SOURCE_CONTENT_CHARS = 2000
+FUSED_WRITER_MAX_OUTPUT_TOKENS = 16384
+FUSED_AUDIT_MAX_OUTPUT_TOKENS = 4096
 
 FUSED_SYSTEM_PROMPT = (
     "You are a research report Writer performing evidence fusion. You receive an "
@@ -1234,7 +1236,7 @@ def compose_fused_report_document(
                         )
                     ),
                     user_prompt=json.dumps(material, ensure_ascii=False),
-                    max_output_tokens=WRITER_MAX_OUTPUT_TOKENS,
+                    max_output_tokens=FUSED_WRITER_MAX_OUTPUT_TOKENS,
                     temperature=WRITER_TEMPERATURE,
                     json_object=True,
                     enable_thinking=False,
@@ -1302,7 +1304,7 @@ def compose_fused_report_document(
                         },
                         ensure_ascii=False,
                     ),
-                    max_output_tokens=AUDIT_MAX_OUTPUT_TOKENS,
+                    max_output_tokens=FUSED_AUDIT_MAX_OUTPUT_TOKENS,
                     temperature=0.0,
                     json_object=True,
                     enable_thinking=False,
@@ -1390,7 +1392,7 @@ def _fused_fallback_outcome(
     *,
     writer_completion=None,
 ) -> WriterOutcome:
-    """确定性融合组装（W3.5 降级第二级）：引擎段落原文 + 匹配 Claim 逐字嵌入。"""
+    """确定性融合组装：保留引擎事实，并以关系化衔接句嵌入核验结论。"""
     document = build_deterministic_fused_document(objective, narrative, plan, claims)
     document_ref = store.put_json(
         {
@@ -1407,7 +1409,7 @@ def _fused_fallback_outcome(
                 for section in document.sections
             ],
             "open_questions": list(document.open_questions),
-            "warnings": [f"模型融合写作未通过校验（{reason}），已按引擎段落原文+本地核验结论逐字组装。"],
+            "warnings": [f"模型融合写作未通过校验（{reason}），已按引擎段落与证据关系完成确定性组装。"],
         },
         producer_step_id="w34-fused-write-fallback",
         schema_version=REPORT_DOCUMENT_SCHEMA,
@@ -1446,16 +1448,22 @@ def build_deterministic_fused_document(
         for entry in assignments:
             grouped.setdefault(entry.relation, []).append(claim_by_id[entry.claim_id].text)
         transitions = {
-            "supports": "这一判断也得到本地证据支持：",
+            "supports": "这一判断得到本地证据的进一步支持：",
             "qualifies": "本地证据同时限定了这一结论的适用范围：",
-            "contradicts": "不过，本地证据显示出需要同时说明的差异：",
+            "contradicts": "不过，本地证据显示出需要并列说明的差异：",
             "extends": "在此基础上，本地证据进一步揭示：",
         }
         additions = [
-            transitions[relation] + " ".join(values)
+            transitions[relation] + "；".join(values)
             for relation, values in grouped.items()
         ]
-        return " ".join((text, *additions)).strip()
+        # 统一句末标点，避免引擎碎片与 Claim 原文直接相撞形成文本墙。
+        base = text.strip()
+        if base and base[-1] not in "。！？；.!?;":
+            base += "。"
+        polished = [base] if base else []
+        polished.extend(item if item.endswith(("。", "！", "？", ".", "!", "?")) else item + "。" for item in additions)
+        return " ".join(polished).strip()
 
     sections = []
     for section_index, section in enumerate(narrative.sections):

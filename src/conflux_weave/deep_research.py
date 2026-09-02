@@ -648,7 +648,7 @@ class DeepResearchWorkflow:
             if document is None:
                 document = build_deterministic_document(objective, accepted_claims)
             if writer.status == "fallback":
-                limitations += ("报告正文为确定性融合组装：引擎段落原文+本地核验结论逐字嵌入，未润色。",)
+                limitations += ("报告正文为确定性融合组装：保留引擎事实，并按证据关系组织本地核验结论。",)
             note_lines = [f"正文骨架继承聚合引擎报告（{len(narrative.sections)} 节），本地核验结论按段落融入。"]
             if merge.plan.dropped:
                 note_lines.append(
