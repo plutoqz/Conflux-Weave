@@ -1,5 +1,7 @@
 import json
 import sys
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -40,6 +42,35 @@ class SequenceTransport:
         return ProviderHttpResponse(200, json.dumps(payload).encode(), {"Content-Type": "application/json"})
 
 
+class ParallelRoutingTransport(SequenceTransport):
+    """Thread-safe fixture transport that routes the two parallel prep calls."""
+
+    supports_concurrent_requests = True
+
+    def __init__(self, payloads):
+        super().__init__(payloads)
+        self._lock = threading.Lock()
+        self._active = 0
+        self.max_active = 0
+
+    def post(self, *args, **kwargs):
+        body = json.loads(kwargs["body"])
+        system = body["messages"][0]["content"]
+        if "evidence-merge planner" in system or "bilingual research distiller" in system:
+            with self._lock:
+                self.requests.append(body)
+                self._active += 1
+                self.max_active = max(self.max_active, self._active)
+            try:
+                time.sleep(0.05)
+                payload = MERGE if "evidence-merge planner" in system else {"cards": []}
+                return ProviderHttpResponse(200, json.dumps(chat_response(payload, "parallel")).encode(), {"Content-Type": "application/json"})
+            finally:
+                with self._lock:
+                    self._active -= 1
+        return super().post(*args, **kwargs)
+
+
 def chat_response(content, response_id):
     return {
         "id": response_id,
@@ -76,10 +107,10 @@ class FakeBridge:
         return fallback
 
 
-def build_workflow(tmp_path, chat_payloads, bridge=None):
+def build_workflow(tmp_path, chat_payloads, bridge=None, transport=None):
     store = LocalArtifactStore(tmp_path / "artifacts")
     config = ProviderConfig("https://provider.example/v1", "secret", "chat")
-    chat = OpenAICompatibleChatAdapter(store, config, transport=SequenceTransport(chat_payloads))
+    chat = OpenAICompatibleChatAdapter(store, config, transport=transport or SequenceTransport(chat_payloads))
     workflow = DeepResearchWorkflow(store, chat, bridge or FakeBridge(), code_revision="test")
     return workflow, store
 
@@ -451,6 +482,11 @@ VERIFY3 = {"assessments": [
     {"claim_id": "claim-0002", "evidence_ids": ["evidence-0002"], "relation": "supports", "verdict": "accepted", "rationale": "Direct."},
     {"claim_id": "claim-0003", "evidence_ids": ["evidence-0003"], "relation": "supports", "verdict": "accepted", "rationale": "Direct."},
 ]}
+DISTILL3 = {"cards": [
+    {"evidence_id": f"evidence-{index:04d}", "zh_summary": f"事实{index}",
+     "zh_key_points": [f"事实{index}"], "terms": [], "scope_limits": ""}
+    for index in range(1, 4)
+]}
 ENGINE_REPORT = """# 智能体 Skill 机制研究报告
 
 ## 封装形态
@@ -497,7 +533,7 @@ def test_deep_workflow_fuses_local_evidence_into_engine_skeleton(tmp_path):
         chat_response(DRAFT3, "draft"),
         chat_response(VERIFY3, "verify"),
         chat_response(MERGE, "merge"),
-        chat_response({"cards": []}, "distill"),
+        chat_response(DISTILL3, "distill"),
         chat_response(WRITER_FUSED, "writer"),
         chat_response(AUDIT_FUSED, "audit"),
     ], bridge=FakeBridge(sources=SOURCES, local_chunks=local_chunks, report_markdown=ENGINE_REPORT))
@@ -520,15 +556,48 @@ def test_deep_workflow_fuses_local_evidence_into_engine_skeleton(tmp_path):
     assert "## 可以进一步探索的问题或者研究空间" in report
     assert "Local corpus bundles skills into reusable instructions." in report
     # 紧凑来源引用：标题+车道+链接/页码，无快照 id/JSON 定位
-    assert "[1] Source A[web], https://a.example/skill" in report
+    assert "[1](https://a.example/skill) Source A[web]" in report
     assert "《SkillCenter 相关工作综述》[本地], 第1页" in report
     assert "SourceSnapshot" not in report and "document-sha256" not in report
     draft_material = json.loads(workflow.chat.transport.requests[0]["messages"][1]["content"])
     assert draft_material["evidence"][0]["evidence_id"] == "evidence-0003"
     assert draft_material["evidence"][0]["origin"] == "local"
-    audit_material = json.loads(workflow.chat.transport.requests[5]["messages"][1]["content"])
+    audit_request = next(
+        request for request in workflow.chat.transport.requests
+        if "faithfulness auditor for a fused research report" in request["messages"][0]["content"]
+    )
+    audit_material = json.loads(audit_request["messages"][1]["content"])
     assert audit_material["engine_outline"][0]["heading"] == "一、封装形态"
     assert audit_material["merge_plan"]["thesis"] == MERGE["thesis"]
+
+
+def test_deep_workflow_parallelizes_merge_and_distill_when_transport_allows(tmp_path):
+    local_chunks = (DeepLocalChunk(
+        "snap-local-1", "doc-9", {"page": 1},
+        "SkillCenter 相关工作综述\nLocal corpus: skills bundle instructions. " * 4,
+    ),)
+    transport = ParallelRoutingTransport([
+        chat_response(DRAFT3, "draft"),
+        chat_response(VERIFY3, "verify"),
+        chat_response(WRITER_FUSED, "writer"),
+        chat_response(AUDIT_FUSED, "audit"),
+    ])
+    workflow, store = build_workflow(
+        tmp_path,
+        [],
+        bridge=FakeBridge(sources=SOURCES, local_chunks=local_chunks, report_markdown=ENGINE_REPORT),
+        transport=transport,
+    )
+
+    result = workflow.execute("How do agents use skills and memory?")
+
+    manifest = json.loads(read_artifact(store, result.manifest_artifact_id))
+    assert result.disposition is DeliveryDisposition.COMPLETE
+    assert manifest["parallel_mode"] == "parallel"
+    assert manifest["timings_ms"]["distill"] >= 0
+    assert manifest["timings_ms"]["merge_distill_wall"] >= 0
+    assert transport.max_active >= 2
+    assert manifest["delivery_shape"] == "engine-fused"
 
 
 WRITER3 = {"summary": {"text": "- **技能决定执行，记忆决定状态**：分工明确。", "claim_ids": ["claim-0001", "claim-0002"]}, "sections": [
@@ -563,7 +632,7 @@ def test_deep_workflow_merge_degrades_to_flat_report(tmp_path):
     manifest = json.loads(read_artifact(store, result.manifest_artifact_id))
     assert manifest["delivery_shape"] == "flat"
     assert manifest["merge"]["status"] == "degraded"
-    assert len(workflow.chat.transport.requests) == 7  # 规划最多 2 次 + 起草核验写作审计
+    assert len(workflow.chat.transport.requests) == 8  # 规划最多 2 次 + 失败批次重试 + 起草核验写作审计
     report = read_artifact(store, result.report_artifact_id)
     assert "## 附录：聚合引擎综合视图（未经本地核验）" in report
     assert any("证据融合规划" in item for item in result.limitations)
@@ -601,7 +670,7 @@ def test_deep_workflow_fused_writer_falls_back_to_deterministic_fusion(tmp_path)
     assert "技能以文件夹为单位封装程序性知识，包含说明与脚本。" in report
     assert "Agents use skills to act on the world." in report
     assert "Memory writes are deduplicated by content hash." in report
-    assert "本地证据" in report
+    assert "核验结果" in report
     assert "模型融合写作未通过校验" not in report
     assert any("确定性融合组装" in item for item in result.limitations)
 

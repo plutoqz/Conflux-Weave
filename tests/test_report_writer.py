@@ -25,6 +25,7 @@ from conflux_weave.provider import (
 from conflux_weave.report_writer import (
     EvidenceCard,
     _digit_runs,
+    _parse_fused_paragraph,
     _parse_audit_payload,
     _parse_writer_payload,
     build_deterministic_document,
@@ -331,6 +332,91 @@ def test_distill_parses_and_stores_cards(tmp_path):
     )
     assert document["schema_version"] == "conflux-weave.evidence-cards.v1"
     assert transport.requests[0]["messages"][0]["content"].count("zh_summary") >= 1
+
+
+def test_distill_batches_large_evidence_sets(tmp_path):
+    evidence = tuple(
+        EvidenceRef(f"evidence-{index:04d}", "paper-a", {"page": index}, f"Fact {index}.", "fixture")
+        for index in range(1, 6)
+    )
+    payload = {
+        "cards": [
+            {
+                "evidence_id": item.evidence_id,
+                "zh_summary": f"事实{item.locator['page']}",
+                "zh_key_points": [f"事实{item.locator['page']}"],
+                "terms": [],
+                "scope_limits": "",
+            }
+            for item in evidence[:4]
+        ]
+    }
+    second_payload = {
+        "cards": [
+            {
+                "evidence_id": "evidence-0005",
+                "zh_summary": "事实5",
+                "zh_key_points": ["事实5"],
+                "terms": [],
+                "scope_limits": "",
+            }
+        ]
+    }
+    chat, transport = make_chat(
+        tmp_path,
+        [chat_response(payload, "distill-1"), chat_response(second_payload, "distill-2")],
+    )
+
+    outcome = distill_evidence_cards(LocalArtifactStore(tmp_path / "store"), chat, CLAIMS, evidence, ())
+
+    assert outcome.status == "ok"
+    assert len(outcome.cards) == 5
+    assert len(transport.requests) == 2
+
+
+def test_distill_recovers_failed_batch_with_single_evidence_calls(tmp_path):
+    evidence = (
+        EvidenceRef("evidence-0001", "paper-a", {"page": 1}, "Fact one.", "fixture"),
+        EvidenceRef("evidence-0002", "paper-a", {"page": 2}, "Fact two.", "fixture"),
+    )
+    card = lambda evidence_id, text: {
+        "cards": [{
+            "evidence_id": evidence_id,
+            "zh_summary": text,
+            "zh_key_points": [text],
+            "terms": [],
+            "scope_limits": "",
+        }]
+    }
+    chat, transport = make_chat(
+        tmp_path,
+        [
+            chat_response("", "bad-1a"),
+            chat_response("", "bad-1b"),
+            chat_response("", "bad-2a"),
+            chat_response("", "bad-2b"),
+            chat_response(card("evidence-0001", "事实一"), "single-1"),
+            chat_response(card("evidence-0002", "事实二"), "single-2"),
+        ],
+    )
+
+    outcome = distill_evidence_cards(LocalArtifactStore(tmp_path / "store"), chat, CLAIMS, evidence, ())
+
+    assert outcome.status == "ok"
+    assert tuple(item.evidence_id for item in outcome.cards) == ("evidence-0001", "evidence-0002")
+    assert len(transport.requests) == 6
+
+
+def test_fused_paragraph_infers_unverified_lane_from_empty_references():
+    paragraph = _parse_fused_paragraph(
+        {"text": "过渡标题。", "claim_ids": [], "web_source_ids": []},
+        CLAIMS,
+        ("web-0001",),
+        "section 0 paragraph 0",
+    )
+
+    assert paragraph.unverified is True
+    assert paragraph.claim_ids == () and paragraph.web_source_ids == ()
 
 
 @pytest.mark.parametrize(

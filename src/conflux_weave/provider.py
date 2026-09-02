@@ -94,6 +94,10 @@ class ProviderHttpTransport(Protocol):
 
 
 class UrllibProviderTransport:
+    # 每次请求都创建独立 urllib Request；内置传输没有可变请求状态，
+    # 允许深度研究在同一适配器上并发提交彼此独立的准备阶段调用。
+    supports_concurrent_requests = True
+
     def post(
         self,
         url: str,
@@ -325,6 +329,12 @@ class OpenAICompatibleChatAdapter:
                     if key != "enable_thinking"
                 }
                 retry_payload["reasoning_effort"] = "low"
+                # 某些思考型兼容网关会让 reasoning_tokens 吃满 max_tokens，
+                # 以 finish_reason=length + content="" 返回。仅在首次响应合同无效时
+                # 扩一档预算，给最终 JSON/正文留空间；正常调用不增加成本。
+                requested_tokens = retry_payload.get("max_tokens")
+                if isinstance(requested_tokens, int) and requested_tokens > 0:
+                    retry_payload["max_tokens"] = min(requested_tokens * 2, 16384)
                 return _attempt(retry_payload, attempt=2, automatic_retry=True)
             raise
 

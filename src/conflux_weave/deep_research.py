@@ -19,6 +19,7 @@ import os
 import shutil
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -609,28 +610,53 @@ class DeepResearchWorkflow:
             "GPT Researcher 仅用于来源发现与聚合；引用权威为本地 Claim/Evidence 验证链。",
             "来源快照内容为聚合引擎交付正文，未重新爬取页面。",
         )
-        merge_started = time.monotonic()
-        merge = None
-        if narrative is not None:
-            merge = plan_merge(
-                self.store,
-                self.chat,
-                objective,
-                narrative,
-                accepted_claims,
-                accepted_evidence,
-                citations,
-                web_source_ids=tuple(dict.fromkeys(
-                    ref.source_snapshot_id for ref in accepted_evidence if origin_lane(ref) == "web"
-                )),
-                web_source_meta=web_meta,
+        web_source_ids = tuple(dict.fromkeys(
+            ref.source_snapshot_id for ref in accepted_evidence if origin_lane(ref) == "web"
+        ))
+
+        def run_merge() -> tuple[object, int]:
+            merge_started = time.monotonic()
+            outcome = None
+            if narrative is not None:
+                outcome = plan_merge(
+                    self.store,
+                    self.chat,
+                    objective,
+                    narrative,
+                    accepted_claims,
+                    accepted_evidence,
+                    citations,
+                    web_source_ids=web_source_ids,
+                    web_source_meta=web_meta,
+                )
+            return outcome, int((time.monotonic() - merge_started) * 1000)
+
+        def run_distill() -> tuple[object, int]:
+            distill_started = time.monotonic()
+            outcome = distill_evidence_cards(
+                self.store, self.chat, accepted_claims, accepted_evidence, citations
             )
-        merge_ms = int((time.monotonic() - merge_started) * 1000)
+            return outcome, int((time.monotonic() - distill_started) * 1000)
+
+        # merge planning 与证据卡片整理只读同一批已核验材料，且各自写入独立工件。
+        # 未声明线程安全的自定义 Transport 保持串行，避免改变其既有调用语义。
+        parallel_started = time.monotonic()
+        if getattr(self.chat.transport, "supports_concurrent_requests", False):
+            with ThreadPoolExecutor(max_workers=2, thread_name_prefix="cw-deep-prep") as pool:
+                merge_future = pool.submit(run_merge)
+                distill_future = pool.submit(run_distill)
+                merge, merge_ms = merge_future.result()
+                distill, distill_ms = distill_future.result()
+            parallel_mode = "parallel"
+        else:
+            merge, merge_ms = run_merge()
+            distill, distill_ms = run_distill()
+            parallel_mode = "serial-transport"
+        parallel_stage_ms = int((time.monotonic() - parallel_started) * 1000)
         fused = merge is not None and merge.status == "ok"
         if fused:
             web_content = _web_content_map(accepted_evidence)
             write_started = time.monotonic()
-            distill = distill_evidence_cards(self.store, self.chat, accepted_claims, accepted_evidence, citations)
             writer: WriterOutcome = compose_fused_report_document(
                 self.store,
                 self.chat,
@@ -677,7 +703,7 @@ class DeepResearchWorkflow:
         else:
             if merge is not None and merge.status == "degraded":
                 limitations += (f"证据融合规划未产出可用方案（{merge.reason}），报告按本地核验结论组装交付。",)
-            distill = distill_evidence_cards(self.store, self.chat, accepted_claims, accepted_evidence, citations)
+            write_started = time.monotonic()
             writer: WriterOutcome = compose_report_document(
                 self.store,
                 self.chat,
@@ -687,6 +713,7 @@ class DeepResearchWorkflow:
                 citations,
                 cards=distill.cards if distill.status == "ok" else (),
             )
+            write_ms = int((time.monotonic() - write_started) * 1000)
             if writer.status == "fallback":
                 limitations += ("报告正文为确定性组装的已验证 Claim 原文（模型写作未通过校验轮次），已完整覆盖全部核验结论。",)
             document = writer.document if writer.document is not None else build_deterministic_document(objective, accepted_claims)
@@ -724,7 +751,9 @@ class DeepResearchWorkflow:
             "draft": draft_ms,
             "verify": verify_ms,
             "merge": merge_ms,
-            "write": write_ms if fused else 0,
+            "distill": distill_ms,
+            "merge_distill_wall": parallel_stage_ms,
+            "write": write_ms,
             "render": render_ms if fused else 0,
             "total": int((time.monotonic() - started) * 1000),
         }
@@ -752,6 +781,7 @@ class DeepResearchWorkflow:
                 "writer_status": writer.status,
                 "writer_degrade_reason": writer.reason if writer.status == "fallback" else None,
                 "distill_status": distill.status,
+                "parallel_mode": parallel_mode,
                 "delivery_shape": delivery_shape,
                 "merge": {
                     "status": merge.status if merge else "skipped",

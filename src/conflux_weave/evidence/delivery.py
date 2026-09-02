@@ -327,6 +327,14 @@ def _local_page_detail(item: EvidenceRef) -> str:
     return heading or "全文"
 
 
+def _clean_reference_title(title: str) -> str:
+    """压缩网络来源标题，去掉平台前后缀但保留文章/项目名称。"""
+    value = re.sub(r"^\s*GitHub\s*[-|:]\s*", "", title.strip(), flags=re.IGNORECASE)
+    value = re.sub(r"\s*[·|｜]\s*(?:GitHub|知乎|CSDN|Medium)\s*$", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\s+[-|:]\s*(?:GitHub|知乎|CSDN|Medium)\s*$", "", value, flags=re.IGNORECASE)
+    return value.strip(" \t-|") or title.strip()
+
+
 def render_fused_report(
     *,
     title: str,
@@ -399,7 +407,12 @@ def render_fused_report(
             page = key.split("#p", 1)[1] if "#p" in key else ""
             return ReferenceEntry(key, "local", title_local, f"第{page}页" if page else "全文")
         meta = web_registry.get(key, {})
-        return ReferenceEntry(key, "web", str(meta.get("title", key)), str(meta.get("url", "")))
+        return ReferenceEntry(
+            key,
+            "web",
+            _clean_reference_title(str(meta.get("title", key))),
+            str(meta.get("url", "")),
+        )
 
     # 编号：摘要 → 正文各段 → 研究空间，按首次出现顺序分配
     ordered_keys: list[str] = []
@@ -483,17 +496,23 @@ def render_fused_report(
     if orphans or document.open_questions:
         lines.extend((f"## {RESEARCH_SPACE_HEADING}", ""))
         for claim in orphans:
-            lines.append(f"- {claim.text} {markers(claim_source_keys(claim.claim_id))}".rstrip())
+            # 将未能嵌入引擎骨架的 Claim 改写成待研究问题，避免把召回句原样堆成清单。
+            question = claim.text.strip().rstrip("。！？!?；;")
+            if question:
+                question = f"仍需进一步验证：{question}在不同条件下的适用边界与稳健性"
+                lines.append(f"- {question}。 {markers(claim_source_keys(claim.claim_id))}".rstrip())
         for question in document.open_questions:
-            lines.append(f"- {question}")
+            text = question.strip().rstrip("。！？!?；;")
+            if text:
+                lines.append(f"- 待进一步回答：{text}。")
         lines.append("")
     lines.extend(("## 来源引用", ""))
     for key in ordered_keys:
         entry = reference_entry(key)
         if entry.lane == "web":
-            lines.append(f"[{numbers[key]}] {entry.title}[web], {entry.detail}")
+            lines.append(f"[{numbers[key]}]({entry.detail}) {entry.title}[web]")
         else:
-            lines.append(f"[{numbers[key]}] 《{entry.title}》[本地], {entry.detail}")
+            lines.append(f"[{numbers[key]}]《{entry.title}》[本地], {entry.detail}")
     return "\n".join(lines).rstrip() + "\n"
 
 

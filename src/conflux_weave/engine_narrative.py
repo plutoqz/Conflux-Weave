@@ -26,6 +26,7 @@ HEADING_H3 = re.compile(r"^###\s+(?!#)\s*(.+?)\s*$")
 HEADING_H1 = re.compile(r"^#\s+(?!#)\s*(.+?)\s*$")
 # 引擎自带的 "一、" 序号避免重复添加
 ORDINAL_PREFIX = re.compile(r"^[一二三四五六七八九十]+、")
+NUMERIC_PREFIX = re.compile(r"^\d+[.)、]\s*")
 REFERENCE_SECTION = re.compile(
     r"^(?:[一二三四五六七八九十]+、\s*)?"
     r"(?:参考文献|参考资料|参考来源|来源引用|引用来源|references|bibliography|sources)\s*$",
@@ -52,6 +53,7 @@ def _ordinal(index: int) -> str:
 def _section_heading(raw: str, index: int) -> str:
     heading = raw.strip().strip("*# ")
     heading = ORDINAL_PREFIX.sub("", heading).strip()
+    heading = NUMERIC_PREFIX.sub("", heading).strip()
     return f"{_ordinal(index)}、{heading}"
 
 
@@ -71,6 +73,30 @@ def _split_long_paragraph(text: str) -> list[str]:
     if current.strip():
         chunks.append(current)
     return chunks or [text[:ENGINE_MAX_PARAGRAPH_CHARS]]
+
+
+def _is_incomplete_tail(line: str) -> bool:
+    """识别聚合引擎在输出上限处留下的孤立半句/半个链接。"""
+
+    value = line.strip()
+    if not value:
+        return False
+    if len(value) <= 12 and any(token in value for token in ("[", "（", "(", "【", "{")):
+        return True
+    if value.endswith(("[", "（", "(", "【", "{", "：", ":", "—", "-")):
+        return True
+    if value.count("[") > value.count("]") or value.count("(") > value.count(")"):
+        return True
+    return False
+
+
+def _sanitize_paragraph(text: str) -> str:
+    """删除引擎截断后遗留的尾部碎片，保留此前完整句子。"""
+
+    lines = text.splitlines()
+    while lines and _is_incomplete_tail(lines[-1]):
+        lines.pop()
+    return "\n".join(lines).strip()
 
 
 def parse_engine_narrative(markdown: str) -> EngineNarrative | None:
@@ -102,7 +128,9 @@ def parse_engine_narrative(markdown: str) -> EngineNarrative | None:
             flush_paragraph()
             paragraphs: list[str] = []
             for paragraph in current_paragraphs:
-                paragraphs.extend(_split_long_paragraph(paragraph))
+                cleaned = _sanitize_paragraph(paragraph)
+                if cleaned:
+                    paragraphs.extend(_split_long_paragraph(cleaned))
             paragraphs = [item for item in paragraphs if item.strip()]
             if paragraphs:
                 sections.append(

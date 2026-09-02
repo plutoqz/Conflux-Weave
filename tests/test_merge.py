@@ -1,9 +1,9 @@
 import json
 from pathlib import Path
 
-from conflux_weave.engine_narrative import parse_engine_narrative
+from conflux_weave.engine_narrative import EngineNarrative, EngineSection, parse_engine_narrative
 from conflux_weave.evidence import Citation, Claim, EvidenceRef, render_fused_report
-from conflux_weave.merge import plan_merge
+from conflux_weave.merge import MergePlan, plan_merge
 from conflux_weave.provider import (
     OpenAICompatibleChatAdapter,
     ProviderConfig,
@@ -250,7 +250,7 @@ def test_fused_renderer_normalizes_engine_links_into_the_single_reference_space(
     body, references = report.split("## 来源引用", 1)
     assert "https://b.example/memory" not in body
     assert "引擎事实。 [2]" in body
-    assert references.count("Source B[web]") == 1
+    assert references.count("[2](https://b.example/memory) Source B[web]") == 1
 
 
 def test_fused_renderer_deduplicates_same_title_web_variants():
@@ -293,3 +293,29 @@ def test_merge_skips_without_narrative_or_claims(tmp_path):
         web_source_ids=("web-0001",), web_source_meta=WEB_META,
     )
     assert outcome.status == "skipped" and transport.requests == []
+
+
+def test_engine_parser_drops_truncated_tail_fragment():
+    narrative = parse_engine_narrative("# 报告\n\n## 第一节\n完整句子。\n\n（[范桂")
+
+    assert narrative is not None
+    assert narrative.sections[0].paragraphs == ("完整句子。",)
+
+
+def test_engine_parser_normalizes_numeric_section_prefix():
+    narrative = parse_engine_narrative("# 报告\n\n## 1. 引言\n正文。")
+
+    assert narrative is not None
+    assert narrative.sections[0].heading == "一、引言"
+
+
+def test_deterministic_fallback_keeps_empty_engine_section_deliverable():
+    narrative = EngineNarrative(
+        "报告",
+        (EngineSection("一、空节", ("（[范桂",)),),
+    )
+    document = build_deterministic_fused_document("目标", narrative, MergePlan("目标", (), (), ()), ())
+
+    assert document.sections[0].paragraphs
+    assert document.sections[0].paragraphs[0].unverified is True
+    assert document.sections[0].paragraphs[0].text.endswith("实质性结论。")

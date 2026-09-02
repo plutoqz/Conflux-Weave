@@ -24,9 +24,9 @@ from conflux_weave.evidence import (
     ReportSection,
     unreferenced_claim_ids,
 )
-from conflux_weave.engine_narrative import EngineNarrative
+from conflux_weave.engine_narrative import EngineNarrative, _sanitize_paragraph
 from conflux_weave.merge import MergePlan
-from conflux_weave.provider import OpenAICompatibleChatAdapter
+from conflux_weave.provider import OpenAICompatibleChatAdapter, ProviderPortError
 from conflux_weave.runtime import LocalArtifactStore
 
 
@@ -39,6 +39,8 @@ WRITER_MAX_OUTPUT_TOKENS = 8192
 WRITER_MAX_ATTEMPTS = 3
 AUDIT_MAX_OUTPUT_TOKENS = 2000
 DISTILL_MAX_OUTPUT_TOKENS = 4096
+DISTILL_MAX_EVIDENCE_PER_CALL = 4
+DISTILL_MAX_ATTEMPTS = 2
 WRITER_TEMPERATURE = 0.2
 MAX_SECTIONS = 8
 MAX_PARAGRAPHS_PER_SECTION = 8
@@ -170,37 +172,74 @@ def distill_evidence_cards(
 ) -> DistillOutcome:
     """Distill Chinese fact cards; every failure degrades to quote-fed writing."""
 
-    completion = None
+    completions = []
     try:
-        completion = chat.complete(
-            system_prompt=DISTILL_SYSTEM_PROMPT,
-            user_prompt=json.dumps(
+        cards = []
+
+        def request_batch(
+            evidence_batch: tuple[EvidenceRef, ...],
+            batch_citations: tuple[Citation, ...],
+            batch_label: str,
+            *,
+            attempts: int = DISTILL_MAX_ATTEMPTS,
+        ) -> tuple[EvidenceCard, ...]:
+            material = json.dumps(
                 {
-                    "claims": [
-                        {"claim_id": item.claim_id, "text": item.text} for item in claims
-                    ],
-                    "evidence": [
-                        {"evidence_id": item.evidence_id, "quote": item.quote}
-                        for item in evidence
-                    ],
+                    "claims": [{"claim_id": item.claim_id, "text": item.text} for item in claims],
+                    "evidence": [{"evidence_id": item.evidence_id, "quote": item.quote} for item in evidence_batch],
                     "citations": [
-                        {
-                            "display_index": item.display_index,
-                            "claim_id": item.claim_id,
-                            "evidence_id": item.evidence_id,
-                        }
-                        for item in citations
+                        {"display_index": item.display_index, "claim_id": item.claim_id, "evidence_id": item.evidence_id}
+                        for item in batch_citations
                     ],
                 },
                 ensure_ascii=False,
-            ),
-            max_output_tokens=DISTILL_MAX_OUTPUT_TOKENS,
-            temperature=0.0,
-            json_object=True,
-            enable_thinking=False,
-            producer_step_id=step_id,
-        )
-        cards = _parse_cards(completion.content, evidence)
+            )
+            batch_error = ""
+            last_error: Exception | None = None
+            for attempt in range(attempts):
+                try:
+                    completion = chat.complete(
+                        system_prompt=(
+                            DISTILL_SYSTEM_PROMPT
+                            + (f" Previous output was rejected: {batch_error}. Return only valid JSON." if attempt else "")
+                        ),
+                        user_prompt=material,
+                        max_output_tokens=DISTILL_MAX_OUTPUT_TOKENS,
+                        temperature=0.0,
+                        json_object=True,
+                        enable_thinking=False,
+                        producer_step_id=batch_label + ("-repair" if attempt else ""),
+                    )
+                    completions.append(completion)
+                    return _parse_cards(completion.content, evidence_batch)
+                except Exception as exc:  # noqa: BLE001 - bounded retry, then singleton recovery
+                    last_error = exc
+                    batch_error = str(exc)[:400]
+            assert last_error is not None
+            raise last_error
+
+        for offset in range(0, len(evidence), DISTILL_MAX_EVIDENCE_PER_CALL):
+            evidence_batch = evidence[offset : offset + DISTILL_MAX_EVIDENCE_PER_CALL]
+            evidence_ids = {item.evidence_id for item in evidence_batch}
+            batch_citations = tuple(item for item in citations if item.evidence_id in evidence_ids)
+            batch_label = step_id if offset == 0 else f"{step_id}-batch-{offset // DISTILL_MAX_EVIDENCE_PER_CALL + 1}"
+            try:
+                cards.extend(request_batch(evidence_batch, batch_citations, batch_label))
+            except Exception as exc:
+                if len(evidence_batch) == 1 or not isinstance(exc, ProviderPortError):
+                    raise
+                # 大批 JSON 仍不稳定时缩到单 Evidence；不生成模型未确认的卡片。
+                for item in evidence_batch:
+                    item_citations = tuple(citation for citation in batch_citations if citation.evidence_id == item.evidence_id)
+                    cards.extend(
+                        request_batch(
+                            (item,),
+                            item_citations,
+                            f"{batch_label}-{item.evidence_id}",
+                            attempts=1,
+                        )
+                    )
+        cards = tuple(cards)
         claims_by_evidence: dict[str, list[str]] = {}
         for citation in citations:
             ids = claims_by_evidence.setdefault(citation.evidence_id, [])
@@ -232,16 +271,16 @@ def distill_evidence_cards(
             cards=cards,
             status="ok",
             cards_artifact_id=cards_ref.artifact_id,
-            request_artifact_id=completion.request_artifact.artifact_id,
-            response_artifact_id=completion.response_artifact.artifact_id,
+            request_artifact_id=completions[0].request_artifact.artifact_id,
+            response_artifact_id=completions[-1].response_artifact.artifact_id,
         )
     except Exception as exc:  # noqa: BLE001 - 卡片失败回退引文直读，不阻断交付
         outcome = DistillOutcome(cards=(), status="failed", reason=f"evidence card distillation failed: {exc}")
-        if completion is not None:
+        if completions:
             outcome = replace(
                 outcome,
-                request_artifact_id=completion.request_artifact.artifact_id,
-                response_artifact_id=completion.response_artifact.artifact_id,
+                request_artifact_id=completions[0].request_artifact.artifact_id,
+                response_artifact_id=completions[-1].response_artifact.artifact_id,
             )
         return outcome
 
@@ -941,7 +980,10 @@ FUSED_MAX_PARAGRAPHS_PER_SECTION = 16
 FUSED_MAX_OPEN_QUESTIONS = 8
 FUSED_WEB_SOURCE_CONTENT_CHARS = 2000
 FUSED_WRITER_MAX_OUTPUT_TOKENS = 16384
-FUSED_AUDIT_MAX_OUTPUT_TOKENS = 4096
+# 思考型 Provider 可能先消耗 reasoning budget；审计需留出足够空间返回
+# 每段一个 verdict，避免 content 为空而误触发整份报告兜底。
+FUSED_AUDIT_MAX_OUTPUT_TOKENS = 8192
+FUSED_MAX_SECTIONS_PER_CALL = 2
 
 FUSED_SYSTEM_PROMPT = (
     "You are a research report Writer performing evidence fusion. You receive an "
@@ -1046,7 +1088,9 @@ def _parse_fused_paragraph(
     if len(claim_ids) > MAX_CLAIMS_PER_PARAGRAPH or len(source_ids) > MAX_CLAIMS_PER_PARAGRAPH:
         raise ValueError(f"writer {label} exceeds citation limits")
     if not claim_ids and not source_ids:
-        raise ValueError(f"writer {label} must cite Claims or web sources")
+        # 模型偶尔遗漏显式 unverified=true；空引用集合本身足以确定该车道，
+        # 自动归类不增加任何事实权威，也避免因一个标题/过渡段降级整份报告。
+        return ReportParagraph(text.strip(), (), unverified=True)
     if len(claim_ids) != len(set(claim_ids)) or len(source_ids) != len(set(source_ids)):
         raise ValueError(f"writer {label} repeats a citation reference")
     unknown_claims = [value for value in claim_ids if value not in known_claims]
@@ -1174,22 +1218,174 @@ def compose_fused_report_document(
     writer_completion = None
     audit_completion = None
     try:
-        web_source_ids = tuple(web_content.keys())
-        material = {
+        assigned_claims = {
+            entry.claim_id
+            for item in plan.assignments
+            for entry in item.claims
+        }
+        all_sections: list[ReportSection] = []
+        all_questions: list[str] = []
+        for batch_start in range(0, len(narrative.sections), FUSED_MAX_SECTIONS_PER_CALL):
+            batch_sections = narrative.sections[batch_start : batch_start + FUSED_MAX_SECTIONS_PER_CALL]
+            batch_narrative = EngineNarrative(narrative.title, tuple(batch_sections))
+            batch_indexes = set(range(batch_start, batch_start + len(batch_sections)))
+            batch_assignments = tuple(item for item in plan.assignments if item.section_index in batch_indexes)
+            batch_claim_ids = {
+                entry.claim_id for item in batch_assignments for entry in item.claims
+            }
+            batch_claims = tuple(item for item in claims if item.claim_id in batch_claim_ids)
+            batch_evidence_ids = {
+                citation.evidence_id
+                for citation in citations
+                if citation.claim_id in batch_claim_ids
+            }
+            batch_evidence = tuple(item for item in evidence if item.evidence_id in batch_evidence_ids)
+            batch_citations = tuple(item for item in citations if item.evidence_id in batch_evidence_ids)
+            batch_web_ids = tuple(
+                dict.fromkeys(source_id for item in batch_assignments for source_id in item.web_source_ids)
+            )
+            batch_web_content = {
+                source_id: web_content[source_id]
+                for source_id in batch_web_ids
+                if source_id in web_content
+            }
+            batch_cards = tuple(card for card in cards if card.evidence_id in batch_evidence_ids)
+            batch_plan = {
+                "thesis": plan.thesis,
+                "assignments": [item for item in plan.payload()["assignments"] if item["section_index"] in batch_indexes],
+                "research_space": [],
+                "dropped": [],
+            }
+            material = {
+                "objective": objective,
+                "engine_outline": [
+                    {
+                        "heading": section.heading,
+                        "paragraphs": [
+                            {"paragraph_index": paragraph_index, "text": text}
+                            for paragraph_index, text in enumerate(section.paragraphs)
+                        ],
+                    }
+                    for section in batch_narrative.sections
+                ],
+                "merge_plan": batch_plan,
+                "claims": [{"claim_id": item.claim_id, "text": item.text} for item in batch_claims],
+                "claim_evidence": _claim_evidence_excerpts(batch_claims, batch_evidence, batch_citations),
+                "citations": [
+                    {"display_index": item.display_index, "claim_id": item.claim_id, "evidence_id": item.evidence_id}
+                    for item in batch_citations
+                ],
+                "web_sources": [
+                    {"source_id": source_id, "content": content[:FUSED_WEB_SOURCE_CONTENT_CHARS]}
+                    for source_id, content in batch_web_content.items()
+                ],
+            }
+            if batch_cards:
+                material["cards"] = [
+                    {
+                        "evidence_id": card.evidence_id,
+                        "zh_summary": card.zh_summary,
+                        "zh_key_points": list(card.zh_key_points),
+                        "terms": [{"en": en, "zh": zh} for en, zh in card.terms],
+                        "scope_limits": card.scope_limits,
+                        "claim_ids": list(card.claim_ids),
+                    }
+                    for card in batch_cards
+                ]
+            first_violation = ""
+            latest_violation = ""
+            batch_result = None
+            for attempt in range(FUSED_MAX_ATTEMPTS):
+                try:
+                    writer_completion = chat.complete(
+                        system_prompt=(
+                            FUSED_SYSTEM_PROMPT
+                            + (
+                                f" Your previous attempt was rejected: {latest_violation} Fix the "
+                                "violation and return ONLY the exact JSON object. Keep the engine "
+                                "section headings verbatim; every paragraph needs web_source_ids "
+                                "or claim_ids; every assigned Claim must be used somewhere."
+                                if attempt
+                                else ""
+                            )
+                        ),
+                        user_prompt=json.dumps(material, ensure_ascii=False),
+                        max_output_tokens=FUSED_WRITER_MAX_OUTPUT_TOKENS,
+                        temperature=WRITER_TEMPERATURE,
+                        json_object=True,
+                        enable_thinking=False,
+                        producer_step_id=writer_step_id if attempt == 0 else f"{writer_step_id}-repair",
+                    )
+                    if writer_completion.finish_reason == "length":
+                        raise ValueError("fused writer response was truncated at the output limit")
+                    batch_sections_result, batch_questions = _parse_fused_writer_payload(
+                        writer_completion.content, batch_claims, batch_narrative, batch_web_ids
+                    )
+                    batch_result = ReportDocument(
+                        objective=objective,
+                        summary=ReportParagraph(plan.thesis, tuple(item.claim_id for item in batch_claims)),
+                        sections=batch_sections_result,
+                        open_questions=batch_questions,
+                    )
+                    _require_no_fused_digit_drift(
+                        batch_result, batch_claims, batch_evidence, batch_citations, batch_web_content, batch_narrative
+                    )
+                    referenced = {
+                        claim_id
+                        for section in batch_result.sections
+                        for paragraph in section.paragraphs
+                        for claim_id in paragraph.claim_ids
+                    }
+                    omitted = sorted(batch_claim_ids - referenced)
+                    if omitted:
+                        raise ValueError(f"fused writer omitted assigned Claims: {', '.join(omitted)}")
+                    break
+                except ValueError as violation:
+                    latest_violation = str(violation)[:500]
+                    if not first_violation:
+                        first_violation = latest_violation
+                    if attempt == FUSED_MAX_ATTEMPTS - 1:
+                        return _fused_fallback_outcome(
+                            store, objective, narrative, plan, claims, first_violation,
+                            writer_completion=writer_completion,
+                        )
+            if batch_result is None:
+                return _fused_fallback_outcome(
+                    store, objective, narrative, plan, claims,
+                    first_violation or "fused writer returned no document",
+                    writer_completion=writer_completion,
+                )
+            all_sections.extend(batch_result.sections)
+            for question in batch_result.open_questions:
+                if question not in all_questions and len(all_questions) < FUSED_MAX_OPEN_QUESTIONS:
+                    all_questions.append(question)
+
+        sections = tuple(all_sections)
+        open_questions = tuple(all_questions)
+        document = ReportDocument(
+            objective=objective,
+            summary=ReportParagraph(plan.thesis, tuple(claim.claim_id for claim in claims)),
+            sections=sections,
+            open_questions=open_questions,
+        )
+        _require_complete_fused_document(document, narrative)
+        paragraphs = _flatten_paragraphs(document)
+        audit_material = {
             "objective": objective,
             "engine_outline": [
                 {
+                    "section_index": section_index,
                     "heading": section.heading,
                     "paragraphs": [
                         {"paragraph_index": paragraph_index, "text": text}
                         for paragraph_index, text in enumerate(section.paragraphs)
                     ],
                 }
-                for section in narrative.sections
+                for section_index, section in enumerate(narrative.sections, 1)
             ],
             "merge_plan": plan.payload(),
             "claims": [{"claim_id": item.claim_id, "text": item.text} for item in claims],
-            "claim_evidence": _claim_evidence_excerpts(claims, evidence, citations),
+            "evidence": [{"evidence_id": item.evidence_id, "quote": item.quote} for item in evidence],
             "citations": [
                 {"display_index": item.display_index, "claim_id": item.claim_id, "evidence_id": item.evidence_id}
                 for item in citations
@@ -1198,142 +1394,45 @@ def compose_fused_report_document(
                 {"source_id": source_id, "content": content[:FUSED_WEB_SOURCE_CONTENT_CHARS]}
                 for source_id, content in web_content.items()
             ],
-        }
-        if cards:
-            material["cards"] = [
+            "paragraphs": [
                 {
-                    "evidence_id": card.evidence_id,
-                    "zh_summary": card.zh_summary,
-                    "zh_key_points": list(card.zh_key_points),
-                    "terms": [{"en": en, "zh": zh} for en, zh in card.terms],
-                    "scope_limits": card.scope_limits,
-                    "claim_ids": list(card.claim_ids),
+                    "section_index": section_index,
+                    "paragraph_index": paragraph_index,
+                    "text": paragraph.text,
+                    "claim_ids": list(paragraph.claim_ids),
+                    "web_source_ids": list(paragraph.web_source_ids),
                 }
-                for card in cards
-            ]
-        assigned_claims = {
-            entry.claim_id
-            for item in plan.assignments
-            for entry in item.claims
+                for section_index, paragraph_index, paragraph in paragraphs
+            ],
         }
-        sections: tuple[ReportSection, ...] = ()
-        open_questions: tuple[str, ...] = ()
-        first_violation = ""
-        latest_violation = ""
-        paragraphs: list = []
+        audit_violation = ""
         for attempt in range(FUSED_MAX_ATTEMPTS):
             try:
-                writer_completion = chat.complete(
-                    system_prompt=(
-                        FUSED_SYSTEM_PROMPT
-                        + (
-                            f" Your previous attempt was rejected: {latest_violation} Fix the "
-                            "violation and return ONLY the exact JSON object. Keep the engine "
-                            "section headings verbatim; every paragraph needs web_source_ids "
-                            "or claim_ids; every assigned Claim must be used somewhere."
-                            if attempt
-                            else ""
-                        )
-                    ),
-                    user_prompt=json.dumps(material, ensure_ascii=False),
-                    max_output_tokens=FUSED_WRITER_MAX_OUTPUT_TOKENS,
-                    temperature=WRITER_TEMPERATURE,
-                    json_object=True,
-                    enable_thinking=False,
-                    producer_step_id=writer_step_id if attempt == 0 else f"{writer_step_id}-repair",
-                )
-                sections, open_questions = _parse_fused_writer_payload(
-                    writer_completion.content, claims, narrative, web_source_ids
-                )
-                draft = ReportDocument(
-                    objective=objective,
-                    summary=ReportParagraph(plan.thesis, tuple(claim.claim_id for claim in claims)),
-                    sections=sections,
-                    open_questions=open_questions,
-                )
-                _require_no_fused_digit_drift(draft, claims, evidence, citations, web_content, narrative)
-                referenced = {
-                    claim_id
-                    for section in draft.sections
-                    for paragraph in section.paragraphs
-                    for claim_id in paragraph.claim_ids
-                }
-                omitted = sorted(assigned_claims - referenced)
-                if omitted:
-                    raise ValueError(f"fused writer omitted assigned Claims: {', '.join(omitted)}")
-                paragraphs = _flatten_paragraphs(draft)
                 audit_completion = chat.complete(
-                    system_prompt=FUSED_AUDIT_SYSTEM_PROMPT,
-                    user_prompt=json.dumps(
-                        {
-                            "objective": objective,
-                            "engine_outline": [
-                                {
-                                    "section_index": section_index,
-                                    "heading": section.heading,
-                                    "paragraphs": [
-                                        {"paragraph_index": paragraph_index, "text": text}
-                                        for paragraph_index, text in enumerate(section.paragraphs)
-                                    ],
-                                }
-                                for section_index, section in enumerate(narrative.sections, 1)
-                            ],
-                            "merge_plan": plan.payload(),
-                            "claims": [{"claim_id": item.claim_id, "text": item.text} for item in claims],
-                            "evidence": [
-                                {"evidence_id": item.evidence_id, "quote": item.quote} for item in evidence
-                            ],
-                            "citations": [
-                                {"display_index": item.display_index, "claim_id": item.claim_id, "evidence_id": item.evidence_id}
-                                for item in citations
-                            ],
-                            "web_sources": [
-                                {"source_id": source_id, "content": content[:FUSED_WEB_SOURCE_CONTENT_CHARS]}
-                                for source_id, content in web_content.items()
-                            ],
-                            "paragraphs": [
-                                {
-                                    "section_index": section_index,
-                                    "paragraph_index": paragraph_index,
-                                    "text": paragraph.text,
-                                    "claim_ids": list(paragraph.claim_ids),
-                                    "web_source_ids": list(paragraph.web_source_ids),
-                                }
-                                for section_index, paragraph_index, paragraph in paragraphs
-                            ],
-                        },
-                        ensure_ascii=False,
+                    system_prompt=(
+                        FUSED_AUDIT_SYSTEM_PROMPT
+                        + (f" Your previous audit was rejected: {audit_violation}. Return only the exact JSON object."
+                           if attempt else "")
                     ),
+                    user_prompt=json.dumps(audit_material, ensure_ascii=False),
                     max_output_tokens=FUSED_AUDIT_MAX_OUTPUT_TOKENS,
                     temperature=0.0,
                     json_object=True,
                     enable_thinking=False,
                     producer_step_id=audit_step_id,
                 )
+                if audit_completion.finish_reason == "length":
+                    raise ValueError("fused audit response was truncated at the output limit")
                 _parse_audit_payload(audit_completion.content, paragraphs)
                 break
             except ValueError as violation:
-                latest_violation = str(violation)[:500]
-                if not first_violation:
-                    first_violation = latest_violation
+                audit_violation = str(violation)[:500]
                 if attempt == FUSED_MAX_ATTEMPTS - 1:
                     return _fused_fallback_outcome(
-                        store, objective, narrative, plan, claims, first_violation,
+                        store, objective, narrative, plan, claims, audit_violation,
                         writer_completion=writer_completion,
+                        audit_completion=audit_completion,
                     )
-            except Exception:
-                if latest_violation:
-                    return _fused_fallback_outcome(
-                        store, objective, narrative, plan, claims, first_violation or latest_violation,
-                        writer_completion=writer_completion,
-                    )
-                raise
-        document = ReportDocument(
-            objective=objective,
-            summary=ReportParagraph(plan.thesis, tuple(claim.claim_id for claim in claims)),
-            sections=sections,
-            open_questions=open_questions,
-        )
         document_ref = store.put_json(
             {
                 "schema_version": REPORT_DOCUMENT_SCHEMA,
@@ -1382,6 +1481,27 @@ def compose_fused_report_document(
         )
 
 
+def _require_complete_fused_document(
+    document: ReportDocument,
+    narrative: EngineNarrative,
+) -> None:
+    """兜底与正常写作共用的结构完整性门，禁止残缺段落进入交付。"""
+
+    if len(document.sections) != len(narrative.sections):
+        raise ValueError("fused document section count does not match engine narrative")
+    for index, (section, expected) in enumerate(zip(document.sections, narrative.sections)):
+        if section.heading != expected.heading or not section.paragraphs:
+            raise ValueError(f"fused document section {index} is incomplete")
+        for paragraph_index, paragraph in enumerate(section.paragraphs):
+            text = paragraph.text.strip()
+            if not text:
+                raise ValueError(f"fused document section {index} paragraph {paragraph_index} is empty")
+            if text.endswith(("[", "（", "(", "【", "{", "：", ":", "—", "-")):
+                raise ValueError(f"fused document section {index} paragraph {paragraph_index} is truncated")
+            if text.count("[") > text.count("]") or text.count("(") > text.count(")"):
+                raise ValueError(f"fused document section {index} paragraph {paragraph_index} has unclosed markup")
+
+
 def _fused_fallback_outcome(
     store: LocalArtifactStore,
     objective: str,
@@ -1391,9 +1511,11 @@ def _fused_fallback_outcome(
     reason: str,
     *,
     writer_completion=None,
+    audit_completion=None,
 ) -> WriterOutcome:
     """确定性融合组装：保留引擎事实，并以关系化衔接句嵌入核验结论。"""
     document = build_deterministic_fused_document(objective, narrative, plan, claims)
+    _require_complete_fused_document(document, narrative)
     document_ref = store.put_json(
         {
             "schema_version": REPORT_DOCUMENT_SCHEMA,
@@ -1427,6 +1549,12 @@ def _fused_fallback_outcome(
             writer_request_artifact_id=writer_completion.request_artifact.artifact_id,
             writer_response_artifact_id=writer_completion.response_artifact.artifact_id,
         )
+    if audit_completion is not None:
+        outcome = replace(
+            outcome,
+            audit_request_artifact_id=audit_completion.request_artifact.artifact_id,
+            audit_response_artifact_id=audit_completion.response_artifact.artifact_id,
+        )
     return outcome
 
 
@@ -1443,26 +1571,29 @@ def build_deterministic_fused_document(
     """
     claim_by_id = {claim.claim_id: claim for claim in claims}
 
+    def _claim_sentence(value: str) -> str:
+        value = _sanitize_paragraph(value).strip()
+        if not value:
+            return ""
+        return value if value.endswith(("。", "！", "？", ".", "!", "?")) else value + "。"
+
     def merge_claims(text: str, assignments: tuple) -> str:
         grouped: dict[str, list[str]] = {}
         for entry in assignments:
             grouped.setdefault(entry.relation, []).append(claim_by_id[entry.claim_id].text)
         transitions = {
-            "supports": "这一判断得到本地证据的进一步支持：",
-            "qualifies": "本地证据同时限定了这一结论的适用范围：",
-            "contradicts": "不过，本地证据显示出需要并列说明的差异：",
-            "extends": "在此基础上，本地证据进一步揭示：",
+            "supports": "核验结果与上述判断一致，进一步表明",
+            "qualifies": "但该判断需要限定在以下范围内：",
+            "contradicts": "同时需要并列看待另一项结果：",
+            "extends": "相关材料还补充了一个重要方面：",
         }
         additions = [
-            transitions[relation] + "；".join(values)
+            transitions[relation] + "" + "；".join(_claim_sentence(value) for value in values)
             for relation, values in grouped.items()
         ]
-        # 统一句末标点，避免引擎碎片与 Claim 原文直接相撞形成文本墙。
-        base = text.strip()
-        if base and base[-1] not in "。！？；.!?;":
-            base += "。"
+        base = _claim_sentence(text)
         polished = [base] if base else []
-        polished.extend(item if item.endswith(("。", "！", "？", ".", "!", "?")) else item + "。" for item in additions)
+        polished.extend(item for item in additions if item.strip())
         return " ".join(polished).strip()
 
     sections = []
@@ -1472,11 +1603,22 @@ def build_deterministic_fused_document(
             web_ids = plan.web_sources_for_paragraph(section_index, paragraph_index)
             assignments = plan.claims_for_paragraph(section_index, paragraph_index)
             claim_ids = tuple(entry.claim_id for entry in assignments)
-            merged_text = merge_claims(text, assignments) if assignments else text
+            base_text = _sanitize_paragraph(text)
+            if not base_text:
+                continue
+            merged_text = merge_claims(base_text, assignments) if assignments else base_text
             if web_ids or claim_ids:
                 paragraphs.append(ReportParagraph(merged_text, claim_ids, web_source_ids=web_ids))
             else:
-                paragraphs.append(ReportParagraph(text, (), unverified=True))
+                paragraphs.append(ReportParagraph(base_text, (), unverified=True))
+        if not paragraphs:
+            paragraphs.append(
+                ReportParagraph(
+                    "本节未形成可核验的完整段落，暂不作实质性结论。",
+                    (),
+                    unverified=True,
+                )
+            )
         sections.append(ReportSection(section.heading, tuple(paragraphs)))
     return ReportDocument(
         objective=objective,

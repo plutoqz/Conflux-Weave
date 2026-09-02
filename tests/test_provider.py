@@ -198,6 +198,7 @@ def test_adapter_retries_once_without_enable_thinking_when_model_rejects_it(tmp_
     assert transport.bodies[0]["enable_thinking"] is False
     assert "enable_thinking" not in transport.bodies[1]
     assert transport.bodies[1]["reasoning_effort"] == "low"
+    assert transport.bodies[1]["max_tokens"] == 256
     first_request = json.loads(store.read_bytes(result.request_artifact))
     assert first_request["attempt"] == 2
     assert first_request["automatic_retry"] is True
