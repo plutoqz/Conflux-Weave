@@ -11,6 +11,7 @@ chat_messages 表。模式 A 问题原样发送到 LLM，回答即模型知识�
 from __future__ import annotations
 
 import json
+import time
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -171,7 +172,10 @@ class ChatService:
         if len(normalized) > MAX_QUESTION_CHARS:
             raise ValueError(f"question must be at most {MAX_QUESTION_CHARS} characters")
         conversation = (conversation_id or "").strip() or f"conv-{uuid4().hex}"
+        started = time.monotonic()
+        history_started = time.monotonic()
         history = self.conversation(conversation, limit=HISTORY_MESSAGE_LIMIT)
+        history_ms = int((time.monotonic() - history_started) * 1000)
 
         now = _utc_now()
         self._append(
@@ -181,6 +185,7 @@ class ChatService:
         context_blocks = [
             f"{message.role}: {message.content}" for message in history
         ] + [f"user: {normalized}"]
+        provider_started = time.monotonic()
         completion = self._chat.complete(
             system_prompt=DIRECT_SYSTEM_PROMPT,
             user_prompt="\n\n".join(context_blocks),
@@ -190,11 +195,14 @@ class ChatService:
             enable_thinking=False,
             producer_step_id="chat-direct",
         )
+        provider_ms = int((time.monotonic() - provider_started) * 1000)
         answer = (completion.content or "").strip()[:MAX_CONTENT_CHARS] or "(空回答)"
         assistant = ChatMessage(
             f"msg-{uuid4().hex}", conversation, "assistant", "direct", answer, _utc_now()
         )
+        persist_started = time.monotonic()
         self._append(assistant)
+        persist_ms = int((time.monotonic() - persist_started) * 1000)
         return {
             "message_id": assistant.message_id,
             "conversation_id": conversation,
@@ -204,6 +212,12 @@ class ChatService:
             "created_at": assistant.created_at,
             "provider_response_id": completion.response_id,
             "verification": VERIFICATION_MODEL_KNOWLEDGE,
+            "timings_ms": {
+                "history": history_ms,
+                "provider": provider_ms,
+                "persist": persist_ms,
+                "total": int((time.monotonic() - started) * 1000),
+            },
         }
 
     def rag_answer(self, question: str, conversation_id: str | None) -> dict:
@@ -217,7 +231,10 @@ class ChatService:
             raise ValueError(f"question must be at most {MAX_QUESTION_CHARS} characters")
         conversation = (conversation_id or "").strip() or f"conv-{uuid4().hex}"
 
+        started = time.monotonic()
+        retrieval_started = time.monotonic()
         run = self._retrieval.search(normalized)
+        retrieval_ms = int((time.monotonic() - retrieval_started) * 1000)
         hits = run.final.hits[:RAG_SNIPPET_LIMIT]
         snippets = []
         for index, hit in enumerate(hits, 1):
@@ -235,11 +252,13 @@ class ChatService:
         if not snippets:
             raise ValueError("knowledge corpus returned no matching chunks")
 
+        input_persist_started = time.monotonic()
         self._append(
             ChatMessage(
                 f"msg-{uuid4().hex}", conversation, "user", "rag", normalized, _utc_now()
             )
         )
+        input_persist_ms = int((time.monotonic() - input_persist_started) * 1000)
         history = self.conversation(conversation, limit=HISTORY_MESSAGE_LIMIT)
         context_blocks = [f"{message.role}: {message.content}" for message in history]
         snippet_blocks = [
@@ -256,7 +275,10 @@ class ChatService:
         violations: tuple[str, ...] = ()
         completion = None
         answer = ""
+        provider_started = time.monotonic()
+        provider_attempts = 0
         for attempt in range(RAG_MAX_ATTEMPTS):
+            provider_attempts += 1
             completion = self._chat.complete(
                 system_prompt=RAG_SYSTEM_PROMPT,
                 user_prompt=(
@@ -273,6 +295,7 @@ class ChatService:
             violations = _check_rag_answer(answer, len(snippets))
             if not violations:
                 break
+        provider_ms = int((time.monotonic() - provider_started) * 1000)
         # W3.5：来源脚注压缩为紧凑引用（文档标题+页码），与深度研究报告的
         # 来源引用同一排版语义；chunk/snapshot/定位 JSON 留在 API citations
         # 与上下文工件中，不再进入用户视图。
@@ -295,6 +318,7 @@ class ChatService:
             + "\n".join(source_lines)
         )
         context_artifact_id = None
+        context_started = time.monotonic()
         if self._store is not None:
             context_ref = self._store.put_json(
                 {
@@ -315,11 +339,14 @@ class ChatService:
                 schema_version="conflux-weave.chat-rag-context.v1",
             )
             context_artifact_id = context_ref.artifact_id
+        context_ms = int((time.monotonic() - context_started) * 1000)
         assistant = ChatMessage(
             f"msg-{uuid4().hex}", conversation, "assistant", "rag", content, _utc_now(),
             context_artifact_id,
         )
+        output_persist_started = time.monotonic()
         self._append(assistant)
+        output_persist_ms = int((time.monotonic() - output_persist_started) * 1000)
         return {
             "message_id": assistant.message_id,
             "conversation_id": conversation,
@@ -342,6 +369,15 @@ class ChatService:
                 }
                 for item in snippets
             ],
+            "timings_ms": {
+                "retrieval": retrieval_ms,
+                "input_persist": input_persist_ms,
+                "provider": provider_ms,
+                "provider_attempts": provider_attempts,
+                "context_persist": context_ms,
+                "output_persist": output_persist_ms,
+                "total": int((time.monotonic() - started) * 1000),
+            },
         }
 
     def history(self, limit: int = 20) -> list[ChatMessage]:

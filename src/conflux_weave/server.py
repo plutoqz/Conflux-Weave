@@ -281,6 +281,7 @@ def create_app(
                 if result.get("checks")
                 else None
             ),
+            timings_ms=result.get("timings_ms", {}),
             citations=tuple(
                 ChatCitationRecord(
                     index=item["index"],

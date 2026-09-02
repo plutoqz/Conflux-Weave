@@ -531,6 +531,7 @@ class DurableResearchRuntime:
                 "evidence": list(execution.evidence_records),
                 "usage": asdict(execution.usage),
                 "provider_call_count": execution.provider_call_count,
+                "timings_ms": dict(execution.timings_ms),
                 "usage_granularity": "aggregate_research_batch",
                 "disposition": execution.disposition.value,
                 "limitations": list(execution.limitations),

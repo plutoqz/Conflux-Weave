@@ -114,6 +114,8 @@ class ChatAnswerResponse(ChatMessageRecord):
     # 证据基准标记：direct = 模型知识（无证据），rag = 检索聚合（未经核验）。
     verification: Literal["model-knowledge", "unverified-aggregation"]
     checks: ChatAnswerChecks | None = None
+    # 阶段级耗时（毫秒）；保留在 API 响应中供性能诊断使用。
+    timings_ms: dict[str, int] = Field(default_factory=dict)
 
 
 class ChatHistoryResponse(_ApiModel):

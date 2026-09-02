@@ -18,6 +18,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -108,6 +109,7 @@ class DeepResearchExecution:
     limitations: tuple[str, ...] = ()
     unmet_criteria: tuple[str, ...] = ()
     disposition: DeliveryDisposition = DeliveryDisposition.COMPLETE
+    timings_ms: dict[str, int] = field(default_factory=dict)
 
 
 class GPTResearcherBridge:
@@ -438,7 +440,10 @@ class DeepResearchWorkflow:
         if not normalized:
             raise ValueError("objective must not be empty")
         step_id = "w32-deep-research"
+        started = time.monotonic()
+        bridge_started = time.monotonic()
         result = self.bridge.execute(normalized)
+        bridge_ms = int((time.monotonic() - bridge_started) * 1000)
         sources = list(result.sources)
 
         # 来源分级：带正文的来源进证据台账（截到 max_sources）；仅标题来源只留
@@ -521,6 +526,7 @@ class DeepResearchWorkflow:
         )
         evidence = tuple(web_evidence) + local_evidence
 
+        evidence_ms = int((time.monotonic() - bridge_started) * 1000) - bridge_ms
         local_call_count = 1 if local_chunks else 0
         provider_call_count = len(snapshot_records) + local_call_count + 1
         usage = {
@@ -539,11 +545,14 @@ class DeepResearchWorkflow:
         # RAG Evidence first for Claim drafting so the bounded Claim budget is
         # available for the material that must be woven into that backbone.
         draft_evidence = local_evidence + tuple(web_evidence)
+        draft_started = time.monotonic()
         claims, _draft_refs = self._draft_with_retry(objective, draft_evidence)
+        draft_ms = int((time.monotonic() - draft_started) * 1000)
         if not claims:
             return self._unverified_delivery(
                 objective, snapshot_records, result, "起草未产出任何候选结论", usage, provider_call_count
             )
+        verify_started = time.monotonic()
         assessments, _verify_refs = self._verified._verify(claims, evidence, round_number=0)
         repair_rounds = 0
         if any(item.verdict is not AssessmentVerdict.ACCEPTED for item in assessments):
@@ -552,6 +561,7 @@ class DeepResearchWorkflow:
                 objective, evidence, repair=True, prior_claims=claims, assessments=assessments
             )
             assessments, _reverify_refs = self._verified._verify(claims, evidence, round_number=1)
+        verify_ms = int((time.monotonic() - verify_started) * 1000)
         accepted_ids = {
             item.claim_id
             for item in assessments
@@ -599,6 +609,7 @@ class DeepResearchWorkflow:
             "GPT Researcher 仅用于来源发现与聚合；引用权威为本地 Claim/Evidence 验证链。",
             "来源快照内容为聚合引擎交付正文，未重新爬取页面。",
         )
+        merge_started = time.monotonic()
         merge = None
         if narrative is not None:
             merge = plan_merge(
@@ -614,9 +625,11 @@ class DeepResearchWorkflow:
                 )),
                 web_source_meta=web_meta,
             )
+        merge_ms = int((time.monotonic() - merge_started) * 1000)
         fused = merge is not None and merge.status == "ok"
         if fused:
             web_content = _web_content_map(accepted_evidence)
+            write_started = time.monotonic()
             distill = distill_evidence_cards(self.store, self.chat, accepted_claims, accepted_evidence, citations)
             writer: WriterOutcome = compose_fused_report_document(
                 self.store,
@@ -630,6 +643,7 @@ class DeepResearchWorkflow:
                 web_content=web_content,
                 cards=distill.cards if distill.status == "ok" else (),
             )
+            write_ms = int((time.monotonic() - write_started) * 1000)
             document = writer.document
             if document is None:
                 document = build_deterministic_document(objective, accepted_claims)
@@ -643,6 +657,7 @@ class DeepResearchWorkflow:
             research_space = tuple(
                 claim for claim in accepted_claims if claim.claim_id in set(merge.plan.research_space)
             )
+            render_started = time.monotonic()
             report = render_fused_report(
                 title=narrative.title or objective,
                 thesis=merge.plan.thesis,
@@ -656,6 +671,7 @@ class DeepResearchWorkflow:
                 note_lines=tuple(note_lines),
                 warning_lines=writer.warnings,
             )
+            render_ms = int((time.monotonic() - render_started) * 1000)
             delivery_shape = "engine-fused"
             engine_view = "narrative-skeleton"
         else:
@@ -702,6 +718,16 @@ class DeepResearchWorkflow:
             producer_step_id=step_id,
             schema_version=DEEP_REPORT_SCHEMA,
         )
+        timings_ms = {
+            "engine": bridge_ms,
+            "evidence": evidence_ms,
+            "draft": draft_ms,
+            "verify": verify_ms,
+            "merge": merge_ms,
+            "write": write_ms if fused else 0,
+            "render": render_ms if fused else 0,
+            "total": int((time.monotonic() - started) * 1000),
+        }
         secondary_ref = self.store.put_bytes(
             ("# GPT Researcher 原始报告（第二视图，非交付）\n\n" + result.report_markdown).encode("utf-8"),
             media_type="text/markdown; charset=utf-8",
@@ -749,6 +775,7 @@ class DeepResearchWorkflow:
                 "limitations": list(limitations),
                 "unmet_criteria": list(unmet),
                 "budget_semantics": "batch-opaque: internal engine calls are not individually checkpointed",
+                "timings_ms": timings_ms,
             },
             producer_step_id=step_id,
             schema_version=DEEP_RESEARCH_SCHEMA,
@@ -765,6 +792,7 @@ class DeepResearchWorkflow:
             limitations=limitations,
             unmet_criteria=unmet,
             disposition=disposition,
+            timings_ms=timings_ms,
         )
 
     def _draft_with_retry(self, objective: str, evidence: tuple[EvidenceRef, ...]):
