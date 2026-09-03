@@ -28,6 +28,10 @@ from conflux_weave.api_contracts import (
     ChatHistoryResponse,
     ChatMessageRecord,
     ChatMessageRequest,
+    ConversationDetail,
+    ConversationListResponse,
+    ConversationSummary,
+    ResearchConversationMessageRequest,
     DeepResearchTaskRequest,
     ApiErrorResponse,
     ArtifactContentResponse,
@@ -311,17 +315,41 @@ def create_app(
             )
         )
 
+    @app.get("/api/v1/conversations", response_model=ConversationListResponse)
+    async def list_conversations(limit: int = Query(default=50, ge=1, le=100)):
+        if chat_service is None:
+            return ConversationListResponse(items=())
+        return ConversationListResponse(items=tuple(ConversationSummary(**item) for item in chat_service.conversations(limit)))
+
+    @app.get("/api/v1/conversations/{conversation_id}", response_model=ConversationDetail)
+    async def get_conversation(conversation_id: str):
+        if chat_service is None:
+            return JSONResponse(status_code=404, content={"code": "conversation_not_found", "message": "对话记录不存在。"})
+        record = chat_service.conversation_record(conversation_id)
+        messages = tuple(ChatMessageRecord(message_id=m.message_id, conversation_id=m.conversation_id, role=m.role, mode=m.mode, content=m.content, created_at=m.created_at) for m in record.pop("messages", ()))
+        return ConversationDetail(**record, messages=messages)
+
+    @app.post("/api/v1/conversations/{conversation_id}/messages", response_model=ChatMessageRecord)
+    async def record_research_message(conversation_id: str, request: ResearchConversationMessageRequest):
+        if chat_service is None:
+            return JSONResponse(status_code=503, content={"code": "provider_not_configured", "message": "对话记录不可用。"})
+        message = chat_service.record_research_message(conversation_id, request.role, request.content, request.run_id, mode=request.mode)
+        return ChatMessageRecord(message_id=message.message_id, conversation_id=message.conversation_id, role=message.role, mode=message.mode, content=message.content, created_at=message.created_at)
+
     @app.post("/api/v1/tasks/deep-research", response_model=ResearchTaskAcceptedResponse)
     async def submit_deep_research(request: DeepResearchTaskRequest):
         """W3.2 模式 C：GPT Researcher 发现聚合 + 本地证据链（durable Run）。"""
         try:
+            conversation_id = request.conversation_id or f"conv-{uuid4().hex}"
             result = orchestrator.submit(
                 TaskSubmission(
                     task_kind="deep_research",
-                    input={"objective": request.objective},
+                    input={"objective": request.objective, "conversation_id": conversation_id},
                     requested_agent="durable_verified_research@v1",
                 )
             )
+            if chat_service is not None:
+                chat_service.record_research_message(conversation_id, "user", request.objective, result.run_id)
             state = query_service.get_run(result.run_id).state
             return ResearchTaskAcceptedResponse(
                 task_id=result.task_id,
@@ -396,6 +424,7 @@ def create_app(
             if task.kind not in {
                 "verified_paper_research",
                 "managed_verified_research",
+                "deep_research",
             }:
                 raise ValueError("follow-up requires a verified research Run")
             original = task.input.get("objective")
@@ -413,10 +442,14 @@ def create_app(
                         "max_subquestions": task.input.get("max_subquestions", 4),
                         "parent_run_id": run_id,
                         "follow_up_question": request.question,
+                        "conversation_id": task.input.get("conversation_id"),
                     },
                     idempotency_key=f"follow-up:{run_id}:{uuid4().hex}",
                 )
             )
+            conversation_id = task.input.get("conversation_id")
+            if task.kind == "deep_research" and isinstance(conversation_id, str) and chat_service is not None:
+                chat_service.record_research_message(conversation_id, "user", request.question, result.run_id)
             state = query_service.get_run(result.run_id).state
             return ResearchTaskAcceptedResponse(
                 task_id=result.task_id,

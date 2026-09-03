@@ -6,8 +6,8 @@
     <meta name="color-scheme" content="light">
     <link rel="icon" href="data:,">
     <title>Conflux Weave</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=v0.3-ux1-6">
-    <script type="module" src="/assets/app.js?v=v0.3-ux1-6"></script>
+    <link rel="stylesheet" href="/assets/styles.css?v=v0.3-chat-3">
+    <script type="module" src="/assets/app.js?v=v0.3-chat-3"></script>
   </head>
   <body>
     <header class="topbar">
@@ -121,20 +121,15 @@
         </section>
 
         <section id="chat-view" class="chat-view" hidden>
+          <aside id="chat-history" class="chat-history" hidden>
+            <div class="chat-history-bar"><span class="chat-history-title">对话记录</span><button type="button" id="chat-new-thread" class="quiet-button">新对话</button></div>
+            <div id="chat-history-threads"></div>
+          </aside>
+          <main class="chat-main">
           <div id="chat-thread-empty" class="chat-empty">
             <p class="eyebrow">Ask · 01</p>
             <h1>直接提问</h1>
             <p>问题会创建为一次核验研究：结果带引用证据，运行过程实时可见。</p>
-          </div>
-          <div id="chat-history" class="chat-history" hidden>
-            <div class="chat-history-bar">
-              <span class="chat-history-title">历史线程</span>
-              <div class="chat-history-actions">
-                <button type="button" id="chat-new-thread" class="quiet-button">新对话</button>
-                <a href="#/research" class="quiet-button chat-history-link">查看全部研究</a>
-              </div>
-            </div>
-            <div id="chat-history-threads"></div>
           </div>
           <div id="chat-thread" class="chat-thread" aria-live="polite"></div>
           <form id="chat-form" class="chat-composer" aria-label="发送问题">
@@ -172,6 +167,11 @@
               <button id="chat-send" class="primary-button" type="submit">发送</button>
             </div>
           </form>
+          </main>
+          <aside id="chat-turn-nav" class="chat-turn-nav" aria-label="当前对话轮次" hidden>
+            <div class="chat-history-title">当前对话</div>
+            <nav id="chat-turn-list"></nav>
+          </aside>
         </section>
 
         <section id="settings-view" class="settings-view" hidden>

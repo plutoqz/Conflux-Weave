@@ -210,6 +210,7 @@ class DurableResearchRuntimeAdapter:
             idempotency_key=submission.idempotency_key,
             parent_run_id=submission.input.get("parent_run_id"),
             follow_up_question=submission.input.get("follow_up_question"),
+            conversation_id=submission.input.get("conversation_id"),
         )
 
     def work_once(self, *, now: str | None = None) -> Any:

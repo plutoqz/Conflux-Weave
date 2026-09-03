@@ -157,6 +157,21 @@ def test_plan_merge_rejects_incomplete_partition_then_repairs(tmp_path):
     assert "claim-0002" in transport.requests[1]["messages"][0]["content"]
 
 
+def test_plan_merge_normalizes_duplicate_claim_without_relaxing_contract(tmp_path):
+    duplicate = {**PLAN_OK, "assignments": [
+        {**PLAN_OK["assignments"][0], "claims": PLAN_OK["assignments"][0]["claims"] + [
+            {"claim_id": "claim-0001", "relation": "supports"}
+        ]},
+        PLAN_OK["assignments"][1],
+    ]}
+    store, chat, _ = build_service(tmp_path, [chat_response(duplicate, "duplicate")])
+    outcome = plan_merge(store, chat, "目标", narrative(), CLAIMS, EVIDENCE, CITATIONS,
+                         web_source_ids=("web-0001", "web-0002"), web_source_meta=WEB_META)
+    assert outcome.status == "ok"
+    assert outcome.normalization_warnings
+    assert [item.claim_id for item in outcome.plan.assignments[0].claims] == ["claim-0001", "claim-0003"]
+
+
 def test_plan_merge_degrades_after_double_rejection(tmp_path):
     store, chat, _ = build_service(tmp_path, [chat_response("not-json", "b1"), chat_response("still", "b2")])
 

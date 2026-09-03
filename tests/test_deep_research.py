@@ -166,6 +166,8 @@ def test_gpt_researcher_bridge_passes_configured_model_to_all_roles(monkeypatch,
     assert captured["config"]["FAST_LLM"] == "openai:glm-5.3-flash"
     assert captured["config"]["SMART_LLM"] == "openai:glm-5.3-flash"
     assert captured["config"]["STRATEGIC_LLM"] == "openai:glm-5.3-flash"
+    assert result.model == "glm-5.3-flash"
+    assert result.retriever in {"tavily", "duckduckgo"}
 
 
 def test_gpt_researcher_bridge_uses_engine_model_for_llm_roles(monkeypatch, tmp_path):
@@ -424,6 +426,46 @@ def test_bridge_usage_probe_accumulates_engine_tokens():
     finally:
         GPTResearcherBridge._uninstall_usage_probe(original)
     assert GenericLLMProvider._capture_response_metadata is original
+
+
+def test_bridge_usage_probe_deduplicates_repeated_stream_usage_metadata():
+    from gpt_researcher.llm_provider.generic.base import GenericLLMProvider
+    from conflux_weave.deep_research import GPTResearcherBridge
+
+    engine_usage = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
+    original = GPTResearcherBridge._install_usage_probe(engine_usage)
+    try:
+        provider = GenericLLMProvider(None)
+        message = SimpleNamespace(
+            usage_metadata={"input_tokens": 100, "output_tokens": 20},
+            response_metadata=None,
+        )
+        provider._capture_response_metadata(message)
+        provider._capture_response_metadata(message)
+        provider._capture_response_metadata(SimpleNamespace(
+            usage_metadata={"input_tokens": 140, "output_tokens": 30},
+            response_metadata=None,
+        ))
+        assert engine_usage == {"input_tokens": 140, "output_tokens": 30, "calls": 2}
+    finally:
+        GPTResearcherBridge._uninstall_usage_probe(original)
+
+
+def test_bridge_utf8_document_loader_reads_chinese_txt(tmp_path):
+    import asyncio
+    from gpt_researcher.document.document import DocumentLoader
+    from conflux_weave.deep_research import GPTResearcherBridge
+
+    path = tmp_path / "中文语料.txt"
+    path.write_text("中文本地证据", encoding="utf-8")
+    from gpt_researcher.document import document as module
+    original = GPTResearcherBridge._install_utf8_document_loader()
+    try:
+        docs = asyncio.run(DocumentLoader(str(tmp_path)).load())
+        assert docs[0]["raw_content"] == "中文本地证据"
+    finally:
+        GPTResearcherBridge._uninstall_utf8_document_loader(original)
+        assert module.TextLoader is original
 
 
 def test_executor_adapter_dispatches_deep_research(tmp_path):

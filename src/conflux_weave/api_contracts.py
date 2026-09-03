@@ -85,6 +85,32 @@ class ChatMessageRequest(_ApiModel):
     mode: Literal["direct", "rag"] = "direct"
 
 
+class ConversationSummary(_ApiModel):
+    conversation_id: str
+    title: str
+    created_at: str
+    updated_at: str
+    last_message_preview: str = ""
+    message_count: int = 0
+    active_mode: str = "direct"
+    archived_at: str | None = None
+
+
+class ConversationDetail(ConversationSummary):
+    messages: tuple["ChatMessageRecord", ...] = ()
+
+
+class ConversationListResponse(_ApiModel):
+    items: tuple[ConversationSummary, ...] = ()
+
+
+class ResearchConversationMessageRequest(_ApiModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=100_000)
+    run_id: str = Field(min_length=1, max_length=200)
+    mode: Literal["deep"] = "deep"
+
+
 class ChatCitationRecord(_ApiModel):
     index: int
     chunk_id: str
@@ -130,6 +156,7 @@ class VerifiedResearchTaskRequest(_ApiModel):
 
 class DeepResearchTaskRequest(_ApiModel):
     objective: str = Field(min_length=1, max_length=4_000)
+    conversation_id: str | None = Field(default=None, max_length=64)
 
     @field_validator("objective")
     @classmethod
@@ -178,7 +205,8 @@ class BudgetResponse(_ApiModel):
 
 
 class ResearchRunContextResponse(_ApiModel):
-    mode: Literal["discovery", "single", "managed", "fixture"]
+    conversation_id: str | None = None
+    mode: Literal["discovery", "single", "managed", "fixture", "deep"]
     corpus_scope: str
     max_subquestions: int | None = Field(default=None, ge=2, le=4)
     parent_run_id: str | None = None
@@ -724,11 +752,15 @@ def _research_context(task_kind: str, task_input: dict[str, Any]) -> ResearchRun
     elif task_kind == "research_fixture":
         mode = "fixture"
         corpus_scope = "离线 Harness fixture"
+    elif task_kind == "deep_research":
+        mode = "deep"
+        corpus_scope = "网络 + 本地语料混合深度研究"
     else:
         mode = "discovery"
         corpus_scope = "外部论文发现"
     max_subquestions = task_input.get("max_subquestions")
     return ResearchRunContextResponse(
+        conversation_id=(task_input.get("conversation_id") if isinstance(task_input.get("conversation_id"), str) else None),
         mode=mode,
         corpus_scope=corpus_scope,
         max_subquestions=(max_subquestions if isinstance(max_subquestions, int) else None),
@@ -809,6 +841,10 @@ __all__ = [
     "ChatAnswerChecks",
     "ChatAnswerResponse",
     "ChatHistoryResponse",
+    "ConversationSummary",
+    "ConversationDetail",
+    "ConversationListResponse",
+    "ResearchConversationMessageRequest",
     "ChatMessageRecord",
     "ChatMessageRequest",
     "DeepResearchTaskRequest",

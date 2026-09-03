@@ -130,6 +130,52 @@ class MergeOutcome:
     plan_artifact_id: str | None = None
     request_artifact_id: str | None = None
     response_artifact_id: str | None = None
+    normalization_warnings: tuple[str, ...] = ()
+
+
+def _normalize_duplicate_claim_assignments(content: str) -> tuple[str, tuple[str, ...]] | None:
+    """Remove only repeated Claim occurrences, leaving all other schema errors strict."""
+    try:
+        payload = json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or not isinstance(payload.get("assignments"), list):
+        return None
+    seen: set[str] = set()
+    removed: list[str] = []
+    for assignment in payload["assignments"]:
+        if not isinstance(assignment, dict) or not isinstance(assignment.get("claims"), list):
+            continue
+        kept = []
+        for entry in assignment["claims"]:
+            claim_id = entry.get("claim_id") if isinstance(entry, dict) else None
+            normalizable = (
+                isinstance(entry, dict)
+                and set(entry) == {"claim_id", "relation"}
+                and entry.get("relation") in MERGE_RELATIONS
+            )
+            if normalizable and claim_id in seen:
+                removed.append(str(claim_id))
+                continue
+            if claim_id is not None:
+                seen.add(claim_id)
+            kept.append(entry)
+        assignment["claims"] = kept
+    for label in ("research_space", "dropped"):
+        values = payload.get(label)
+        if not isinstance(values, list):
+            continue
+        kept = []
+        for claim_id in values:
+            if claim_id in seen:
+                removed.append(str(claim_id))
+                continue
+            seen.add(claim_id)
+            kept.append(claim_id)
+        payload[label] = kept
+    if not removed:
+        return None
+    return json.dumps(payload, ensure_ascii=False), tuple(dict.fromkeys(removed))
 
 
 def _claim_evidence_input(
@@ -286,6 +332,7 @@ def plan_merge(
         valid_ids = ", ".join(claim.claim_id for claim in claims)
         plan = None
         violation = ""
+        normalization_warnings: tuple[str, ...] = ()
         for attempt in range(MERGE_MAX_ATTEMPTS):
             completion = chat.complete(
                 system_prompt=(
@@ -312,6 +359,18 @@ def plan_merge(
             except ValueError as error:
                 violation = str(error)[:500]
                 plan = None
+                normalized = _normalize_duplicate_claim_assignments(completion.content)
+                if normalized is not None and "re-assigns Claim" in violation:
+                    normalized_content, removed = normalized
+                    try:
+                        plan = _parse_plan(normalized_content, claims, narrative, web_source_ids)
+                        normalization_warnings = tuple(
+                            f"removed duplicate Claim occurrence during merge normalization: {claim_id}"
+                            for claim_id in removed
+                        )
+                        break
+                    except ValueError:
+                        plan = None
         if plan is None:
             return MergeOutcome(
                 plan=None,
@@ -319,6 +378,7 @@ def plan_merge(
                 reason=f"merge plan rejected twice: {violation}",
                 request_artifact_id=completion.request_artifact.artifact_id,
                 response_artifact_id=completion.response_artifact.artifact_id,
+                normalization_warnings=normalization_warnings,
             )
         plan_ref = store.put_json(
             {"schema_version": MERGE_SCHEMA, "objective": objective, **plan.payload()},
@@ -331,6 +391,7 @@ def plan_merge(
             plan_artifact_id=plan_ref.artifact_id,
             request_artifact_id=completion.request_artifact.artifact_id,
             response_artifact_id=completion.response_artifact.artifact_id,
+            normalization_warnings=normalization_warnings,
         )
     except Exception as exc:  # noqa: BLE001 - 编排失败降级为无融合交付
         return MergeOutcome(

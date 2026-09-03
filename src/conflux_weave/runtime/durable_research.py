@@ -257,6 +257,7 @@ class DurableResearchRuntime:
         idempotency_key: str | None = None,
         parent_run_id: str | None = None,
         follow_up_question: str | None = None,
+        conversation_id: str | None = None,
     ) -> SubmissionResult:
         normalized = objective.strip()
         if not normalized:
@@ -329,6 +330,7 @@ class DurableResearchRuntime:
             "automatic_replay_after_unknown_outcome": False,
             "parent_run_id": parent_run_id,
             "follow_up_question": follow_up_question,
+            "conversation_id": conversation_id,
         }
         config = self.artifact_store.put_json(
             {

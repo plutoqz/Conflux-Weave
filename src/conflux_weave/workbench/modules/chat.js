@@ -15,6 +15,8 @@ const thread = document.getElementById("chat-thread");
 const threadEmpty = document.getElementById("chat-thread-empty");
 const historyPanel = document.getElementById("chat-history");
 const historyThreads = document.getElementById("chat-history-threads");
+const turnNav = document.getElementById("chat-turn-nav");
+const turnList = document.getElementById("chat-turn-list");
 const input = document.getElementById("chat-input");
 const errorNode = document.getElementById("chat-error");
 const sendButton = document.getElementById("chat-send");
@@ -81,6 +83,7 @@ function showChatError(message) {
 function appendUserMessage(text, time, label = "你", parent = thread) {
   const article = document.createElement("article");
   article.className = "chat-msg user";
+  article.id = `turn-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const header = document.createElement("header");
   const labelNode = document.createElement("span");
   labelNode.className = "chat-msg-label";
@@ -93,7 +96,67 @@ function appendUserMessage(text, time, label = "你", parent = thread) {
   body.textContent = text;
   article.append(header, body);
   parent.append(article);
+  if (parent === thread) refreshTurnNav();
   return article;
+}
+
+function normalModeLabel(mode) {
+  if (mode === "rag") return "知识库问答";
+  if (mode === "deep") return "深度研究";
+  return "直接问答";
+}
+
+function renderConversationList(items, selectedId) {
+  historyThreads.replaceChildren(...items.map((item) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `chat-conversation-item${selectedId === item.conversation_id ? " active" : ""}`;
+    const title = document.createElement("span");
+    title.className = "chat-conversation-title";
+    title.textContent = item.title || "新对话";
+    title.title = item.last_message_preview || item.title || "新对话";
+    const mode = document.createElement("span");
+    mode.className = `chat-conversation-mode ${item.active_mode === "rag" ? "rag" : "direct"}`;
+    mode.textContent = normalModeLabel(item.active_mode);
+    const count = document.createElement("span");
+    count.className = "chat-conversation-count";
+    count.textContent = `${item.message_count || 0} 条`;
+    button.append(title, mode, count);
+    button.addEventListener("click", () => {
+      window.location.hash = `#/chat/${encodeURIComponent(item.conversation_id)}`;
+      loadConversation(item.conversation_id);
+    });
+    return button;
+  }));
+  historyPanel.hidden = !items.length;
+}
+
+async function refreshConversationList(selectedId = directConversationId) {
+  const conversations = await api("/api/v1/conversations?limit=50").catch(() => ({ items: [] }));
+  renderConversationList(conversations.items || [], selectedId);
+}
+
+function refreshTurnNav() {
+  const turns = [...thread.querySelectorAll(":scope > .chat-msg.user")];
+  turnList.replaceChildren();
+  turnNav.hidden = turns.length === 0;
+  turns.forEach((turn, index) => {
+    const link = document.createElement("a");
+    link.href = `#${turn.id}`;
+    link.className = "chat-turn-link";
+    link.dataset.turnTarget = turn.id;
+    link.textContent = `${index + 1}. ${(turn.querySelector(".chat-msg-body")?.textContent || "").trim()}`;
+    link.title = link.textContent;
+    link.addEventListener("click", (event) => { event.preventDefault(); turn.scrollIntoView({ behavior: "smooth", block: "start" }); });
+    turnList.append(link);
+  });
+  if (window.__chatTurnObserver) window.__chatTurnObserver.disconnect();
+  window.__chatTurnObserver = new IntersectionObserver((entries) => {
+    const visible = entries.filter((entry) => entry.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
+    if (!visible) return;
+    turnList.querySelectorAll(".chat-turn-link").forEach((link) => link.classList.toggle("active", link.dataset.turnTarget === visible.target.id));
+  }, { rootMargin: "-15% 0px -70% 0px", threshold: 0 });
+  turns.forEach((turn) => window.__chatTurnObserver.observe(turn));
 }
 
 function appendAssistantMessage(content, mode = "direct") {
@@ -102,7 +165,7 @@ function appendAssistantMessage(content, mode = "direct") {
   const header = document.createElement("header");
   const label = document.createElement("span");
   label.className = "chat-msg-label";
-  label.textContent = mode === "rag" ? "知识库问答 · 未核验聚合" : "直接问答 · 模型知识（未核验）";
+  label.textContent = mode === "rag" ? "知识库问答 · 未核验聚合" : mode === "deep" ? "深度研究 · 完整报告" : "直接问答 · 模型知识（未核验）";
   const stamp = document.createElement("time");
   stamp.textContent = formatDate(new Date().toISOString(), true);
   header.append(label, stamp);
@@ -198,7 +261,7 @@ function renderFinal(agent, detail) {
     window.location.hash = `#/research/${encodeURIComponent(detail.run_id)}`;
   });
   actions.append(openRun);
-  if (delivery && VERIFIED_FAMILIES.has(detail.task_family)) {
+  if (delivery && (VERIFIED_FAMILIES.has(detail.task_family) || detail.task_family === "deep_research")) {
     const follow = document.createElement("button");
     follow.type = "button";
     follow.className = "quiet-button";
@@ -341,6 +404,7 @@ async function loadHistory() {
   thread.replaceChildren();
   historyThreads.replaceChildren();
   historyPanel.hidden = true;
+  turnNav.hidden = true;
   threadEmpty.hidden = true;
   const loading = document.createElement("div");
   loading.className = "skeleton";
@@ -353,38 +417,12 @@ async function loadHistory() {
   historyPanel.hidden = false;
   historyThreads.append(loading);
   try {
-    const page = await api(`/api/v1/runs?limit=${HISTORY_RUN_LIMIT}`);
-    const candidates = (page.items || [])
-      .filter((item) => VERIFIED_FAMILIES.has(item.task_family))
-      .slice(0, HISTORY_DETAIL_LIMIT);
-    const details = [];
-    for (const item of candidates) {
-      try {
-        details.push(await api(`/api/v1/runs/${encodeURIComponent(item.run_id)}`));
-      } catch { continue; }
-    }
-    const chatPage = await api("/api/v1/chat/messages?limit=20").catch(() => ({ items: [] }));
-    for (const message of chatPage.items || []) {
-      if (message.role === "user") {
-        appendUserMessage(message.content, message.created_at);
-      } else {
-        appendAssistantMessage(message.content, message.mode);
-      }
-    }
-    if ((chatPage.items || []).length) threadEmpty.hidden = true;
-    const threads = buildThreads(details);
-    if (!threads.length) {
-      if (!(chatPage.items || []).length) {
-        historyPanel.hidden = true;
-        threadEmpty.hidden = false;
-      }
-      return;
-    }
-    historyThreads.replaceChildren(
-      ...threads.map((threadData, index) => renderThreadItem(threadData, index === 0))
-    );
-    historyPanel.hidden = false;
-    threadEmpty.hidden = true;
+    const conversations = await api("/api/v1/conversations?limit=50").catch(() => ({ items: [] }));
+    const requested = (window.location.hash.match(/^#\/chat\/([^?]+)/) || [])[1];
+    const selected = conversations.items?.find((item) => item.conversation_id === decodeURIComponent(requested || "")) || conversations.items?.[0];
+    renderConversationList(conversations.items || [], selected?.conversation_id);
+    if (selected) await loadConversation(selected.conversation_id);
+    if (!selected) { historyPanel.hidden = !(conversations.items || []).length; threadEmpty.hidden = false; }
   } catch (error) {
     historyPanel.hidden = true;
     threadEmpty.hidden = false;
@@ -394,10 +432,24 @@ async function loadHistory() {
   }
 }
 
+async function loadConversation(conversationId) {
+  const record = await api(`/api/v1/conversations/${encodeURIComponent(conversationId)}`);
+  directConversationId = conversationId;
+  if (record.active_mode === "direct" || record.active_mode === "rag") setChatMode(record.active_mode);
+  thread.replaceChildren();
+  for (const message of record.messages || []) {
+    if (message.role === "user") appendUserMessage(message.content, message.created_at);
+    else appendAssistantMessage(message.content, message.mode);
+  }
+  threadEmpty.hidden = Boolean(record.messages?.length);
+  refreshTurnNav();
+}
+
 function startNewThread() {
   for (const { close } of [...watches.values()]) close();
   watches.clear();
   directConversationId = null;
+  window.location.hash = "#/chat";
   thread.replaceChildren();
   threadEmpty.hidden = false;
   clearFollow();
@@ -432,9 +484,19 @@ function watchRun(runId, agent, handle) {
     for (const kind of ["progress", "status", "recovery"]) {
       source.addEventListener(kind, receive);
     }
-    source.onerror = () => {
+    source.onerror = async () => {
       source.close();
       if (closed) return;
+      // A terminal run makes the backend close SSE intentionally; do not
+      // reopen that completed stream as though it were a network failure.
+      try {
+        const detail = await api(`/api/v1/runs/${encodeURIComponent(runId)}`);
+        if (TERMINAL_STATES.has(detail.state)) {
+          await renderFinalInto(agent, detail);
+          cleanup();
+          return;
+        }
+      } catch { /* retry below when the status endpoint is also unavailable */ }
       timer = setTimeout(open, 500);
     };
   };
@@ -465,7 +527,17 @@ async function renderFinalInto(agent, detail) {
   if (detail.delivery) {
     try {
       const answer = await fetchAnswerText(detail);
-      if (answer) renderAnswer(agent.body, answer.content, answer.mediaType);
+      if (answer) {
+        renderAnswer(agent.body, answer.content, answer.mediaType);
+        const conversationId = detail.research_context?.conversation_id;
+        if (conversationId) {
+          await api(`/api/v1/conversations/${encodeURIComponent(conversationId)}/messages`, {
+            method: "POST",
+            body: JSON.stringify({ role: "assistant", content: answer.content, run_id: detail.run_id, mode: "deep" }),
+          });
+          await refreshConversationList(conversationId);
+        }
+      }
     } catch {
       agent.body.textContent = "交付结果暂时不可读。";
     }
@@ -510,11 +582,14 @@ async function submit() {
         body: JSON.stringify({ question, conversation_id: directConversationId, mode }),
       });
       directConversationId = answer.conversation_id;
+      await refreshConversationList(directConversationId);
+      window.history.replaceState(null, "", `#/chat/${encodeURIComponent(directConversationId)}`);
       appendAssistantMessage(answer.content, answer.mode);
       scrollThread();
       return;
     }
     let accepted;
+    if (!directConversationId) directConversationId = `conv-${crypto.randomUUID()}`;
     if (followParent) {
       accepted = await api(`/api/v1/runs/${encodeURIComponent(followParent)}/follow-up`, {
         method: "POST",
@@ -524,7 +599,7 @@ async function submit() {
     } else {
       accepted = await api("/api/v1/tasks/deep-research", {
         method: "POST",
-        body: JSON.stringify({ objective: question }),
+        body: JSON.stringify({ objective: question, conversation_id: directConversationId }),
       });
     }
     input.value = "";
@@ -563,7 +638,13 @@ document.getElementById("chat-clear-follow").addEventListener("click", clearFoll
 document.getElementById("chat-new-thread").addEventListener("click", startNewThread);
 
 registerView("chat", {
-  mount: loadHistory,
+  mount: async (conversationId) => {
+    await loadHistory();
+    if (conversationId) await loadConversation(conversationId);
+  },
+  onParam: async (conversationId) => {
+    if (conversationId) await loadConversation(conversationId);
+  },
   unmount: async () => {
     for (const { close } of [...watches.values()]) close();
     watches.clear();

@@ -64,7 +64,7 @@ export function showToast(message) {
 }
 
 function appendInlineMarkdown(parent, value) {
-  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[([^\]]+)\]\((https?:\/\/[^\s)]+)\))/g;
+  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[(\d+)\]|\[([^\]]+)\]\((https?:\/\/[^\s)]+)\))/g;
   let cursor = 0;
   for (const match of value.matchAll(pattern)) {
     if (match.index > cursor) parent.append(document.createTextNode(value.slice(cursor, match.index)));
@@ -81,12 +81,20 @@ function appendInlineMarkdown(parent, value) {
       const emphasis = document.createElement("em");
       emphasis.textContent = token.slice(1, -1);
       parent.append(emphasis);
+    } else if (match[2]) {
+      const link = document.createElement("a");
+      link.href = `#citation-${match[2]}`;
+      link.dataset.citationIndex = match[2];
+      link.className = "citation-link";
+      link.textContent = `[${match[2]}]`;
+      link.setAttribute("aria-label", `打开引用 ${match[2]}`);
+      parent.append(link);
     } else {
       const link = document.createElement("a");
-      link.href = match[3];
+      link.href = match[5];
       link.target = "_blank";
       link.rel = "noopener noreferrer";
-      link.textContent = match[2];
+      link.textContent = match[4];
       parent.append(link);
     }
     cursor = match.index + token.length;
@@ -108,7 +116,13 @@ export function renderAnswer(node, content, mediaType) {
     node.append(body);
     return;
   }
-  const lines = String(content || "").replace(/\r\n?/g, "\n").split("\n");
+  const normalizedContent = String(content || "")
+    .replace(/\\\|/g, "|")
+    // Some providers collapse pipe tables into one line. Recover row boundaries
+    // at the start of a new header cell or a bold first cell.
+    .replace(/\|\s*(?=\|?:?-{3,}:?\|)/g, "\n|")
+    .replace(/\|\s*(?=\*\*)/g, "\n|");
+  const lines = normalizedContent.replace(/\r\n?/g, "\n").split("\n");
   const body = document.createElement("div");
   body.className = "answer-body";
   let paragraph = [];
@@ -133,21 +147,52 @@ export function renderAnswer(node, content, mediaType) {
     body.append(pre);
     code = null;
   };
+  const parseTableRow = (line) => {
+    const normalized = line.replace(/^\s*[○•]\s*/, "").trim().replace(/^\\\|/, "|").replace(/\\\|\s*$/, "|");
+    if (!normalized.includes("|") || !/^\|?.*\|.*\|?$/.test(normalized)) return null;
+    const cells = normalized.replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.replace(/\\\|/g, "|").trim());
+    return cells.length >= 2 ? cells : null;
+  };
+  const isTableDivider = (cells) => cells.length >= 2 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s/g, "")));
+  const flushTable = () => {
+    if (!table) return;
+    const tableNode = document.createElement("table");
+    tableNode.className = "answer-table";
+    const head = document.createElement("thead");
+    const bodyNode = document.createElement("tbody");
+    table.rows[0].forEach((cell) => { const th = document.createElement("th"); appendMarkdownText(th, cell); head.append(th); });
+    table.rows.slice(1).forEach((row) => {
+      const tr = document.createElement("tr");
+      row.forEach((cell) => { const td = document.createElement("td"); appendMarkdownText(td, cell); tr.append(td); });
+      bodyNode.append(tr);
+    });
+    tableNode.append(head, bodyNode); body.append(tableNode); table = null;
+  };
+  let table = null;
   for (const line of lines) {
     if (line.startsWith("```")) {
-      flushParagraph(); flushList(); flushQuote();
+      flushParagraph(); flushList(); flushQuote(); flushTable();
       if (code) flushCode(); else code = { lines: [] };
       continue;
     }
     if (code) { code.lines.push(line); continue; }
     const heading = line.match(/^(#{1,6})\s+(.+?)\s*#*$/);
     if (heading) {
-      flushParagraph(); flushList(); flushQuote();
+      flushParagraph(); flushList(); flushQuote(); flushTable();
       const h = document.createElement(`h${Math.min(heading[1].length + 1, 6)}`);
       appendMarkdownText(h, heading[2]);
       body.append(h);
       continue;
     }
+    const tableRow = parseTableRow(line);
+    if (tableRow) {
+      if (isTableDivider(tableRow)) continue;
+      flushParagraph(); flushList(); flushQuote();
+      if (!table) table = { rows: [] };
+      table.rows.push(tableRow);
+      continue;
+    }
+    if (table) flushTable();
     if (/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(line)) { flushParagraph(); flushList(); flushQuote(); body.append(document.createElement("hr")); continue; }
     const quoteLine = line.match(/^\s*>\s?(.*)$/);
     if (quoteLine) {
@@ -162,10 +207,10 @@ export function renderAnswer(node, content, mediaType) {
       if (!list || list.tagName.toLowerCase() !== (ordered ? "ol" : "ul")) { flushList(); list = document.createElement(ordered ? "ol" : "ul"); }
       const li = document.createElement("li"); appendMarkdownText(li, item[2]); list.append(li); continue;
     }
-    if (!line.trim()) { flushParagraph(); flushList(); flushQuote(); continue; }
-    flushList(); flushQuote(); paragraph.push(line.trim());
+    if (!line.trim()) { flushParagraph(); flushList(); flushQuote(); flushTable(); continue; }
+    flushList(); flushQuote(); paragraph.push(line.replace(/^\s*[○•]\s*/, "").trim());
   }
-  flushParagraph(); flushList(); flushQuote(); flushCode();
+  flushParagraph(); flushList(); flushQuote(); flushCode(); flushTable();
   node.append(body);
 }
 

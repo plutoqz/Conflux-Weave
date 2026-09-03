@@ -18,6 +18,7 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -40,11 +41,12 @@ from conflux_weave.evidence import (
     render_report_document,
     require_closed_citations,
 )
-from conflux_weave.merge import plan_merge
+from conflux_weave.merge import ClaimAssignment, MergePlan, ParagraphAssignment, plan_merge
 from conflux_weave.provider import OpenAICompatibleChatAdapter, ProviderConfig
 from conflux_weave.report_writer import (
     WriterOutcome,
     build_deterministic_document,
+    build_deterministic_fused_document,
     compose_fused_report_document,
     compose_report_document,
     distill_evidence_cards,
@@ -63,9 +65,39 @@ MAX_LOCAL_DOCUMENTS = 8
 # 短于该长度的正文视作"仅标题"记录：只进快照/来源清单，不进证据台账。
 MIN_EVIDENCE_CONTENT_CHARS = 200
 
+# GPT Researcher reads process environment variables and uses module-level hooks.
+# Serialize bridge executions so two Runs cannot observe each other's provider
+# configuration or usage callbacks. The lock is shared across bridge instances.
+_ENGINE_STATE_LOCK = threading.RLock()
+
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _deterministic_recovery_plan(
+    objective: str, narrative, claims: tuple[Claim, ...]
+) -> MergePlan:
+    """Create an auditable paragraph skeleton when the model merge is unavailable."""
+    targets = [
+        (section_index, paragraph_index)
+        for section_index, section in enumerate(narrative.sections)
+        for paragraph_index, _ in enumerate(section.paragraphs)
+    ]
+    if not targets:
+        return MergePlan(objective[:500], (), tuple(claim.claim_id for claim in claims), ())
+    assignments = [[] for _ in targets]
+    for index, claim in enumerate(claims):
+        assignments[index % len(assignments)].append(ClaimAssignment(claim.claim_id, "supports"))
+    return MergePlan(
+        thesis=objective[:500],
+        assignments=tuple(
+            ParagraphAssignment(section, paragraph, (), tuple(entries))
+            for (section, paragraph), entries in zip(targets, assignments)
+        ),
+        research_space=(),
+        dropped=(),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,9 +124,11 @@ class DeepResearchResult:
     report_markdown: str
     planned_queries: tuple[str, ...]
     costs_usd: float
-    token_usage: dict[str, int] = field(default_factory=dict)
+    token_usage: dict[str, int | str] = field(default_factory=dict)
     report_source: str = "web"
     local_chunks: tuple[DeepLocalChunk, ...] = ()
+    model: str | None = None
+    retriever: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +190,7 @@ class GPTResearcherBridge:
             "SMART_LLM": engine_llm,
             "STRATEGIC_LLM": engine_llm,
         }
+        _ENGINE_STATE_LOCK.acquire()
         saved = {key: os.environ.get(key) for key in env_patches}
         os.environ.update(env_patches)
         temp_dir = None
@@ -163,6 +198,7 @@ class GPTResearcherBridge:
         engine_usage = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
         original_capture = self._install_usage_probe(engine_usage)
         original_tavily_init = self._install_tavily_adapter()
+        original_text_loader = self._install_utf8_document_loader()
         try:
             local_chunks = self._local_chunks(objective)
             config_payload = {
@@ -199,6 +235,10 @@ class GPTResearcherBridge:
             report, context = asyncio.run(run())
             sources = self._collect_sources(researcher)
             counts = tracker.consume()
+            # GPT Researcher may expose the same call through both LiteLLM and
+            # LangChain callbacks. Prefer the engine-boundary probe as the
+            # single source; use LiteLLM only when the probe saw no usage.
+            measured = engine_usage if engine_usage["calls"] else counts
             return DeepResearchResult(
                 sources=sources,
                 context=context,
@@ -207,18 +247,24 @@ class GPTResearcherBridge:
                 planned_queries=(),
                 costs_usd=float(researcher.get_costs() or 0.0),
                 token_usage={
-                    "input_tokens": counts["input_tokens"] + engine_usage["input_tokens"],
-                    "output_tokens": counts["output_tokens"] + engine_usage["output_tokens"],
-                    "calls": counts["calls"] + engine_usage["calls"],
+                    "input_tokens": measured["input_tokens"],
+                    "output_tokens": measured["output_tokens"],
+                    "calls": measured["calls"],
+                    "usage_source": "gpt_researcher_response_metadata"
+                    if engine_usage["calls"]
+                    else "litellm_callback_fallback",
                 },
                 report_source=report_source,
                 local_chunks=tuple(local_chunks),
+                model=self._provider_config.engine_model or chat_model,
+                retriever=retriever,
             )
         finally:
             # 异常路径也要回收回调与探针，避免泄漏进全局状态。
             tracker.consume()
             self._uninstall_usage_probe(original_capture)
             self._uninstall_tavily_adapter(original_tavily_init)
+            self._uninstall_utf8_document_loader(original_text_loader)
             for key, value in saved.items():
                 if value is None:
                     os.environ.pop(key, None)
@@ -226,6 +272,7 @@ class GPTResearcherBridge:
                     os.environ[key] = value
             if temp_dir is not None:
                 shutil.rmtree(temp_dir, ignore_errors=True)
+            _ENGINE_STATE_LOCK.release()
 
     @staticmethod
     def _install_usage_probe(engine_usage: dict[str, int]):
@@ -241,15 +288,35 @@ class GPTResearcherBridge:
 
             original = engine_base.GenericLLMProvider._capture_response_metadata
 
+            previous: dict[int, tuple[int, int]] = {}
+
             def patched(provider_self, message, *args, **kwargs):
                 try:
                     usage = getattr(message, "usage_metadata", None)
                     if usage is not None:
                         if hasattr(usage, "model_dump"):
                             usage = usage.model_dump()
-                        engine_usage["input_tokens"] += int(usage.get("input_tokens", 0) or 0)
-                        engine_usage["output_tokens"] += int(usage.get("output_tokens", 0) or 0)
-                        engine_usage["calls"] += 1
+                        current = (
+                            max(0, int(usage.get("input_tokens", 0) or 0)),
+                            max(0, int(usage.get("output_tokens", 0) or 0)),
+                        )
+                        key = id(provider_self)
+                        prior = previous.get(key)
+                        if prior is None:
+                            delta = current
+                        else:
+                            # Streaming providers may repeat cumulative usage on
+                            # every chunk. Count only the positive delta; a lower
+                            # value indicates a new request after provider reset.
+                            delta = tuple(
+                                value - old if value >= old else value
+                                for value, old in zip(current, prior)
+                            )
+                        previous[key] = current
+                        if delta != (0, 0):
+                            engine_usage["input_tokens"] += delta[0]
+                            engine_usage["output_tokens"] += delta[1]
+                            engine_usage["calls"] += 1
                 except Exception:  # noqa: BLE001 - 记账失败不阻断
                     pass
                 return original(provider_self, message, *args, **kwargs)
@@ -284,6 +351,38 @@ class GPTResearcherBridge:
 
         module.TavilySearch.__init__ = patched_init
         return original_init
+
+    @staticmethod
+    def _install_utf8_document_loader():
+        """Make GPT Researcher's hybrid TXT loader deterministic for UTF-8.
+
+        The bundled loader constructs ``TextLoader(path)`` without an encoding;
+        on Windows that rejects UTF-8 Chinese chunks. Patch only its imported
+        symbol for this locked bridge execution and restore it afterwards.
+        """
+        try:
+            from gpt_researcher.document import document as module
+            original = module.TextLoader
+
+            class Utf8TextLoader(original):
+                def __init__(self, file_path, *args, **kwargs):
+                    kwargs["encoding"] = "utf-8"
+                    super().__init__(file_path, *args, **kwargs)
+
+            module.TextLoader = Utf8TextLoader
+            return original
+        except Exception:  # noqa: BLE001 - optional compatibility patch
+            return None
+
+    @staticmethod
+    def _uninstall_utf8_document_loader(original) -> None:
+        if original is None:
+            return
+        try:
+            from gpt_researcher.document import document as module
+            module.TextLoader = original
+        except Exception:  # noqa: BLE001
+            pass
 
     @staticmethod
     def _uninstall_tavily_adapter(original) -> None:
@@ -704,41 +803,52 @@ class DeepResearchWorkflow:
             if merge is not None and merge.status == "degraded":
                 limitations += (f"证据融合规划未产出可用方案（{merge.reason}），报告按本地核验结论组装交付。",)
             write_started = time.monotonic()
-            writer: WriterOutcome = compose_report_document(
-                self.store,
-                self.chat,
-                objective,
-                accepted_claims,
-                accepted_evidence,
-                citations,
-                cards=distill.cards if distill.status == "ok" else (),
-            )
-            write_ms = int((time.monotonic() - write_started) * 1000)
-            if writer.status == "fallback":
-                limitations += ("报告正文为确定性组装的已验证 Claim 原文（模型写作未通过校验轮次），已完整覆盖全部核验结论。",)
-            document = writer.document if writer.document is not None else build_deterministic_document(objective, accepted_claims)
-            report = render_report_document(
-                title=objective,
-                document=document,
-                claims=accepted_claims,
-                evidence=accepted_evidence,
-                citations=citations,
-                evidence_trust={item.evidence_id: SourceTrustLevel.GENERAL_SOURCE for item in accepted_evidence},
-                limitations=limitations,
-            )
-            if engine_body:
-                # 引擎综合视图并入交付：与未核验交付同一分层模式——核验
-                # claim 链是骨架，附录内容显式标注"未经本地核验"。
-                report += (
-                    "\n\n---\n\n"
-                    "## 附录：聚合引擎综合视图（未经本地核验）\n\n"
-                    "> 以下内容由 GPT Researcher 生成，未经过本地 Claim/Verifier 链核验；"
-                    "结论请以上文「已验证研究发现」为准，来源出处见上方来源清单与快照。\n\n"
-                    + engine_body
-                    + "\n"
+            if narrative is not None and engine_body:
+                recovery_plan = _deterministic_recovery_plan(objective, narrative, accepted_claims)
+                document = build_deterministic_fused_document(objective, narrative, recovery_plan, accepted_claims)
+                report = render_fused_report(
+                    title=narrative.title or objective,
+                    thesis=recovery_plan.thesis,
+                    claims=accepted_claims,
+                    evidence=accepted_evidence,
+                    citations=citations,
+                    document=document,
+                    research_space_claims=(),
+                    web_registry=web_meta,
+                    local_registry=local_registry,
+                    note_lines=("合并规划不可用，已按段落顺序确定性嵌入核验结论。",),
                 )
-            delivery_shape = "flat"
-            engine_view = "appended-unverified" if engine_body else "omitted"
+                writer = WriterOutcome(
+                    document=document,
+                    status="fallback",
+                    reason=merge.reason if merge else "no merge plan",
+                    warnings=(),
+                )
+                delivery_shape = "engine-recovery"
+                engine_view = "narrative-recovery"
+                limitations += ("正文保留聚合引擎段落结构；Claim 采用确定性顺序分配，未宣称模型语义归属。",)
+            else:
+                writer = compose_report_document(
+                    self.store, self.chat, objective, accepted_claims, accepted_evidence, citations,
+                    cards=distill.cards if distill.status == "ok" else (),
+                )
+                document = writer.document if writer.document is not None else build_deterministic_document(objective, accepted_claims)
+                report = render_report_document(
+                    title=objective, document=document, claims=accepted_claims, evidence=accepted_evidence,
+                    citations=citations,
+                    evidence_trust={item.evidence_id: SourceTrustLevel.GENERAL_SOURCE for item in accepted_evidence},
+                    limitations=limitations,
+                )
+                if engine_body:
+                    report += (
+                        "\n\n---\n\n## 附录：聚合引擎综合视图（未经本地核验）\n\n"
+                        "> 以下内容由 GPT Researcher 生成，未经过本地 Claim/Verifier 链核验；"
+                        "结论请以上文「已验证研究发现」为准，来源出处见上方来源清单与快照。\n\n"
+                        + engine_body + "\n"
+                    )
+                delivery_shape = "flat"
+                engine_view = "appended-unverified" if engine_body else "omitted"
+            write_ms = int((time.monotonic() - write_started) * 1000)
         report_ref = self.store.put_bytes(
             report.encode("utf-8"),
             media_type="text/markdown; charset=utf-8",
@@ -771,6 +881,8 @@ class DeepResearchWorkflow:
                     "name": "gpt-researcher",
                     "report_source": result.report_source,
                     "costs_usd": result.costs_usd,
+                    "model": result.model,
+                    "retriever": result.retriever,
                 },
                 "code_revision": self.code_revision,
                 "disposition": disposition.value,
@@ -790,6 +902,7 @@ class DeepResearchWorkflow:
                     "assignment_count": len(merge.plan.assignments) if merge and merge.plan else 0,
                     "research_space_count": len(merge.plan.research_space) if merge and merge.plan else 0,
                     "dropped_count": len(merge.plan.dropped) if merge and merge.plan else 0,
+                    "normalization_warnings": list(merge.normalization_warnings) if merge else [],
                 },
                 "engine_view": engine_view,
                 "coverage": {

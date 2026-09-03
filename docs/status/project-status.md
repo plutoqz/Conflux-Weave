@@ -464,3 +464,25 @@ close and cancel buttons submit with `formnovalidate` so a required empty field 
 longer blocks closing. A startup health check now runs on every landing view instead of
 only on first research mount, so the topbar status is correct on the overview default
 route. Asset cache strings were bumped accordingly (`?v=v0.3-ux1-6`).
+
+## W3 实际开发状态（2026-09-02）
+
+本节覆盖 UX-1 之后已经合入主分支的 W3 实现，避免将旧的“下一步 P2.0”描述误读为当前
+代码状态。状态分为工程实现、离线验证和真实验收三类；未执行的真实 Provider/网络运行不
+计为验收证据。
+
+| 工作包 | 当前状态 | 证据边界 |
+| --- | --- | --- |
+| W3.0 直接问答 | `implemented_and_validated` | 独立聊天持久化、上下文注入、API 和浏览器回归已验证；真实 Provider 烟测曾有历史证据 |
+| W3.1 知识库问答 | `implemented_and_validated` | Hybrid 检索、片段引用、轻量上下文 Artifact 和无语料失败路径已验证；真实语料烟测曾有历史证据 |
+| W3.2 深度研究引擎 | `implemented_offline_pending_user_live_test` | GPT Researcher 证据桥、durable task、SourceSnapshot/Claim/Citation 链路和 fallback 已有离线测试；本轮不执行真实验收 |
+| W3.3 可信度与参数化回答 | `implemented_and_validated_offline` | 可信度标记和参数化 RAG 回答已有测试；未单独宣称新的 live 能力 |
+| W3.5/W3.6 融合报告 | `implemented_and_validated_offline` | 引擎叙事解析、Merge Plan、融合 Writer、Tavily/model routing 和 fallback 已有离线回归；正式 live 验收待用户执行 |
+
+截至本节更新，完整离线回归为 `439 passed`。测试前新增的 Provider 配置隔离位于
+`tests/conftest.py`，只清理测试进程中第三方依赖泄漏的 `CONFLUX_WEAVE_PROVIDER_*`
+变量，不改变生产环境变量优先于 dotenv 的配置契约。
+
+本轮工程整改顺序固定为：先同步状态文档，再隔离 GPT Researcher 的进程级配置状态，最后
+拆分 Writer 模块。真实深度研究 Run、成本/延迟和报告人工评审不在本轮执行范围，下一唯一验收
+点由用户手动执行。

@@ -65,6 +65,9 @@ class ChatMessage:
     content: str
     created_at: str
     context_artifact_id: str | None = None
+    turn_id: str | None = None
+    sequence: int = 0
+    run_id: str | None = None
 
 
 def _utc_now() -> str:
@@ -134,6 +137,69 @@ class ChatService:
         conn.row_factory = sqlite3.Row
         return conn
 
+    def _ensure_conversation(self, conversation_id: str | None, title: str, mode: str) -> str:
+        conversation = (conversation_id or "").strip() or f"conv-{uuid4().hex}"
+        now = _utc_now()
+        conn = self._connect()
+        try:
+            conn.execute("INSERT OR IGNORE INTO conversations(conversation_id,title,created_at,updated_at,active_mode) VALUES(?,?,?,?,?)", (conversation, title[:120], now, now, mode))
+            conn.execute("UPDATE conversations SET active_mode=?, updated_at=? WHERE conversation_id=?", (mode, now, conversation))
+            conn.commit()
+        finally:
+            conn.close()
+        return conversation
+
+    def _next_turn(self, conversation_id: str) -> tuple[str, int]:
+        conn = self._connect()
+        try:
+            row = conn.execute("SELECT COALESCE(MAX(sequence), 0) + 1 AS n FROM chat_messages WHERE conversation_id=?", (conversation_id,)).fetchone()
+        finally:
+            conn.close()
+        sequence = int(row["n"])
+        return f"turn-{uuid4().hex}", sequence
+
+    def conversations(self, limit: int = 50) -> list[dict]:
+        conn = self._connect()
+        try:
+            rows = conn.execute("SELECT conversation_id,title,created_at,updated_at,last_message_preview,message_count,active_mode,archived_at FROM conversations WHERE archived_at IS NULL ORDER BY updated_at DESC LIMIT ?", (max(1, min(int(limit), 100)),)).fetchall()
+        finally:
+            conn.close()
+        return [dict(row) for row in rows]
+
+    def conversation_record(self, conversation_id: str) -> dict:
+        messages = self.conversation(conversation_id, limit=100)
+        conn = self._connect()
+        try:
+            row = conn.execute("SELECT conversation_id,title,created_at,updated_at,last_message_preview,message_count,active_mode,archived_at FROM conversations WHERE conversation_id=?", (conversation_id,)).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            return {"conversation_id": conversation_id, "title": messages[0].content[:120] if messages else "新对话", "messages": messages}
+        return {**dict(row), "messages": messages}
+
+    def record_research_message(self, conversation_id: str, role: str, content: str, run_id: str, *, mode: str = "deep") -> ChatMessage:
+        """Persist a durable research turn message; run_id makes retries idempotent."""
+        conn = self._connect()
+        try:
+            existing = conn.execute("SELECT message_id, conversation_id, role, mode, content, created_at, context_artifact_id, turn_id, sequence, run_id FROM chat_messages WHERE run_id=? AND role=?", (run_id, role)).fetchone()
+        finally:
+            conn.close()
+        if existing is not None:
+            return ChatMessage(existing["message_id"], existing["conversation_id"], existing["role"], existing["mode"], existing["content"], existing["created_at"], existing["context_artifact_id"], existing["turn_id"], existing["sequence"], existing["run_id"])
+        conversation = self._ensure_conversation(conversation_id, content, mode)
+        conn = self._connect()
+        try:
+            prior = conn.execute("SELECT turn_id, sequence FROM chat_messages WHERE conversation_id=? AND run_id=? LIMIT 1", (conversation, run_id)).fetchone()
+        finally:
+            conn.close()
+        if prior is None:
+            turn_id, sequence = self._next_turn(conversation)
+        else:
+            turn_id, sequence = prior["turn_id"], prior["sequence"]
+        message = ChatMessage(f"msg-{uuid4().hex}", conversation, role, mode, content, _utc_now(), turn_id=turn_id, sequence=sequence, run_id=run_id)
+        self._append(message)
+        return message
+
     def _ensure_table(self) -> None:
         conn = self._connect()
         try:
@@ -145,7 +211,10 @@ class ChatService:
                     role TEXT NOT NULL,
                     mode TEXT NOT NULL,
                     content TEXT NOT NULL,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    turn_id TEXT,
+                    sequence INTEGER NOT NULL DEFAULT 0,
+                    run_id TEXT
                 )
                 """
             )
@@ -161,6 +230,37 @@ class ChatService:
                 conn.execute("ALTER TABLE chat_messages ADD COLUMN context_artifact_id TEXT")
             except sqlite3.OperationalError:
                 pass  # 列已存在
+            for column, definition in (("turn_id", "TEXT"), ("sequence", "INTEGER NOT NULL DEFAULT 0"), ("run_id", "TEXT")):
+                try:
+                    conn.execute(f"ALTER TABLE chat_messages ADD COLUMN {column} {definition}")
+                except sqlite3.OperationalError:
+                    pass
+            conn.execute("""CREATE TABLE IF NOT EXISTS conversations (
+                conversation_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_message_preview TEXT NOT NULL DEFAULT '',
+                message_count INTEGER NOT NULL DEFAULT 0,
+                active_mode TEXT NOT NULL DEFAULT 'direct',
+                archived_at TEXT
+            )""")
+            # Upgrade existing chat-only databases without rewriting messages.
+            conn.execute("""INSERT OR IGNORE INTO conversations
+                (conversation_id, title, created_at, updated_at, last_message_preview, message_count, active_mode)
+                SELECT conversation_id,
+                       COALESCE((SELECT content FROM chat_messages first_msg
+                                 WHERE first_msg.conversation_id = chat_messages.conversation_id
+                                 ORDER BY created_at ASC, message_id ASC LIMIT 1), '新对话'),
+                       MIN(created_at), MAX(created_at),
+                       COALESCE((SELECT content FROM chat_messages last_msg
+                                 WHERE last_msg.conversation_id = chat_messages.conversation_id
+                                 ORDER BY created_at DESC, message_id DESC LIMIT 1), ''),
+                       COUNT(*),
+                       COALESCE((SELECT mode FROM chat_messages last_mode
+                                 WHERE last_mode.conversation_id = chat_messages.conversation_id
+                                 ORDER BY created_at DESC, message_id DESC LIMIT 1), 'direct')
+                FROM chat_messages GROUP BY conversation_id""")
             conn.commit()
         finally:
             conn.close()
@@ -171,7 +271,8 @@ class ChatService:
             raise ValueError("question must not be empty")
         if len(normalized) > MAX_QUESTION_CHARS:
             raise ValueError(f"question must be at most {MAX_QUESTION_CHARS} characters")
-        conversation = (conversation_id or "").strip() or f"conv-{uuid4().hex}"
+        conversation = self._ensure_conversation(conversation_id, normalized, "direct")
+        turn_id, sequence = self._next_turn(conversation)
         started = time.monotonic()
         history_started = time.monotonic()
         history = self.conversation(conversation, limit=HISTORY_MESSAGE_LIMIT)
@@ -179,7 +280,7 @@ class ChatService:
 
         now = _utc_now()
         self._append(
-            ChatMessage(f"msg-{uuid4().hex}", conversation, "user", "direct", normalized, now)
+            ChatMessage(f"msg-{uuid4().hex}", conversation, "user", "direct", normalized, now, turn_id=turn_id, sequence=sequence)
         )
 
         context_blocks = [
@@ -198,7 +299,7 @@ class ChatService:
         provider_ms = int((time.monotonic() - provider_started) * 1000)
         answer = (completion.content or "").strip()[:MAX_CONTENT_CHARS] or "(空回答)"
         assistant = ChatMessage(
-            f"msg-{uuid4().hex}", conversation, "assistant", "direct", answer, _utc_now()
+            f"msg-{uuid4().hex}", conversation, "assistant", "direct", answer, _utc_now(), turn_id=turn_id, sequence=sequence
         )
         persist_started = time.monotonic()
         self._append(assistant)
@@ -229,7 +330,8 @@ class ChatService:
             raise ValueError("question must not be empty")
         if len(normalized) > MAX_QUESTION_CHARS:
             raise ValueError(f"question must be at most {MAX_QUESTION_CHARS} characters")
-        conversation = (conversation_id or "").strip() or f"conv-{uuid4().hex}"
+        conversation = self._ensure_conversation(conversation_id, normalized, "rag")
+        turn_id, sequence = self._next_turn(conversation)
 
         started = time.monotonic()
         retrieval_started = time.monotonic()
@@ -255,7 +357,7 @@ class ChatService:
         input_persist_started = time.monotonic()
         self._append(
             ChatMessage(
-                f"msg-{uuid4().hex}", conversation, "user", "rag", normalized, _utc_now()
+                f"msg-{uuid4().hex}", conversation, "user", "rag", normalized, _utc_now(), turn_id=turn_id, sequence=sequence
             )
         )
         input_persist_ms = int((time.monotonic() - input_persist_started) * 1000)
@@ -342,7 +444,7 @@ class ChatService:
         context_ms = int((time.monotonic() - context_started) * 1000)
         assistant = ChatMessage(
             f"msg-{uuid4().hex}", conversation, "assistant", "rag", content, _utc_now(),
-            context_artifact_id,
+            context_artifact_id, turn_id, sequence,
         )
         output_persist_started = time.monotonic()
         self._append(assistant)
@@ -385,7 +487,7 @@ class ChatService:
         conn = self._connect()
         try:
             rows = conn.execute(
-                "SELECT message_id, conversation_id, role, mode, content, created_at, context_artifact_id "
+                "SELECT message_id, conversation_id, role, mode, content, created_at, context_artifact_id, turn_id, sequence, run_id "
                 "FROM chat_messages ORDER BY created_at DESC, message_id DESC LIMIT ?",
                 (limit,),
             ).fetchall()
@@ -394,7 +496,7 @@ class ChatService:
         return [
             ChatMessage(
                 row["message_id"], row["conversation_id"], row["role"], row["mode"],
-                row["content"], row["created_at"], row["context_artifact_id"],
+                row["content"], row["created_at"], row["context_artifact_id"], row["turn_id"], row["sequence"], row["run_id"],
             )
             for row in reversed(rows)
         ]
@@ -404,7 +506,7 @@ class ChatService:
         conn = self._connect()
         try:
             rows = conn.execute(
-                "SELECT message_id, conversation_id, role, mode, content, created_at, context_artifact_id "
+                "SELECT message_id, conversation_id, role, mode, content, created_at, context_artifact_id, turn_id, sequence, run_id "
                 "FROM chat_messages WHERE conversation_id = ? "
                 "ORDER BY created_at DESC, message_id DESC LIMIT ?",
                 (conversation_id, limit),
@@ -414,7 +516,7 @@ class ChatService:
         return [
             ChatMessage(
                 row["message_id"], row["conversation_id"], row["role"], row["mode"],
-                row["content"], row["created_at"], row["context_artifact_id"],
+                row["content"], row["created_at"], row["context_artifact_id"], row["turn_id"], row["sequence"], row["run_id"],
             )
             for row in reversed(rows)
         ]
@@ -424,8 +526,8 @@ class ChatService:
         try:
             conn.execute(
                 "INSERT INTO chat_messages "
-                "(message_id, conversation_id, role, mode, content, created_at, context_artifact_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "(message_id, conversation_id, role, mode, content, created_at, context_artifact_id, turn_id, sequence, run_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     message.message_id,
                     message.conversation_id,
@@ -434,8 +536,14 @@ class ChatService:
                     message.content,
                     message.created_at,
                     message.context_artifact_id,
+                    message.turn_id, message.sequence, message.run_id,
                 ),
             )
+            conn.execute("""INSERT INTO conversations(conversation_id,title,created_at,updated_at,last_message_preview,message_count,active_mode)
+                VALUES(?,?,?,?,?,?,?) ON CONFLICT(conversation_id) DO UPDATE SET updated_at=excluded.updated_at,
+                last_message_preview=excluded.last_message_preview, message_count=conversations.message_count+1,
+                active_mode=excluded.active_mode""", (message.conversation_id, message.content[:120], message.created_at,
+                message.created_at, message.content[:120], 1, message.mode))
             conn.commit()
         finally:
             conn.close()

@@ -321,9 +321,23 @@ function connectEvents(run) {
     if (state.eventRunId !== run.run_id) return;
     const source = new EventSource(`/api/v1/runs/${encodeURIComponent(run.run_id)}/events?after=${state.eventCursor}`);
     state.eventSource = source;
-    source.onerror = () => {
+    source.onerror = async () => {
       source.close();
       if (state.eventRunId !== run.run_id || state.selected?.is_terminal) return;
+      // The server closes SSE normally after the terminal event. Check state
+      // before treating that EOF as a transient network failure.
+      try {
+        const current = await api(`/api/v1/runs/${encodeURIComponent(run.run_id)}`);
+        if (state.eventRunId !== run.run_id || current.is_terminal) {
+          if (current.is_terminal && state.selected?.run_id === run.run_id) {
+            const previous = state.selected;
+            state.selected = current;
+            renderRun(current, previous);
+            await loadDelivery(current);
+          }
+          return;
+        }
+      } catch { /* retry below when the status endpoint is also unavailable */ }
       state.eventReconnectTimer = setTimeout(() => {
         state.eventReconnectTimer = null;
         open();
@@ -597,6 +611,14 @@ inspectorMedia.addEventListener("change", (event) => {
 });
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !$("#evidence-inspector").hidden) closeInspector();
+});
+document.addEventListener("click", (event) => {
+  const citation = event.target.closest(".citation-link");
+  if (!citation) return;
+  const index = Number(citation.dataset.citationIndex) - 1;
+  if (!Number.isInteger(index) || !state.evidenceList[index]) return;
+  event.preventDefault();
+  openEvidence(state.evidenceList[index], index, citation);
 });
 $("#task-form").addEventListener("submit", (event) => {
   if (event.submitter?.value !== "cancel") event.preventDefault();

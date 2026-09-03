@@ -1,0 +1,36 @@
+"""Stable policy values shared by report-writer orchestration paths.
+
+Keeping limits and provider budgets outside the orchestration module makes
+policy changes reviewable without editing parsing or fallback behavior.
+"""
+
+REPORT_DOCUMENT_SCHEMA = "conflux-weave.research-report-document.v5"
+EVIDENCE_CARDS_SCHEMA = "conflux-weave.evidence-cards.v1"
+PARAGRAPH_AUDITS_SCHEMA = "conflux-weave.writer-paragraph-audits.v1"
+WRITER_PROMPT_VERSION = "writer-zh-cards-v1"
+
+WRITER_MAX_OUTPUT_TOKENS = 8192
+WRITER_MAX_ATTEMPTS = 3
+AUDIT_MAX_OUTPUT_TOKENS = 2000
+DISTILL_MAX_OUTPUT_TOKENS = 4096
+DISTILL_MAX_EVIDENCE_PER_CALL = 4
+DISTILL_MAX_ATTEMPTS = 2
+WRITER_TEMPERATURE = 0.2
+MAX_SECTIONS = 8
+MAX_PARAGRAPHS_PER_SECTION = 8
+MAX_CLAIMS_PER_PARAGRAPH = 10
+MAX_OPEN_QUESTIONS = 8
+MAX_BACKGROUND_ITEMS = 6
+MAX_BACKGROUND_HEADING_CHARS = 200
+MAX_TEXT_CHARS = 4000
+MAX_HEADING_CHARS = 200
+MAX_QUESTION_CHARS = 500
+MAX_CARDS = 16
+MAX_CARD_SUMMARY_CHARS = 2000
+MAX_CARD_KEY_POINTS = 8
+MAX_CARD_KEY_POINT_CHARS = 500
+MAX_CARD_TERMS = 12
+MAX_CARD_TERM_CHARS = 100
+MAX_CARD_SCOPE_CHARS = 500
+WRITER_CLAIM_EVIDENCE_CHARS = 1500
+
