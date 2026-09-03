@@ -7,7 +7,7 @@ import {
   renderAnswer,
   showToast,
   stateLabels,
-} from "./modules/shared.js";
+} from "./modules/shared.js?v=v0.3-report-render-4";
 import { initRouter, navigate, registerView, replaceHash } from "./modules/router.js";
 import "./modules/overview.js";
 import "./modules/chat.js";

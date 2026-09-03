@@ -1,6 +1,6 @@
 /* 设置视图：模型服务配置（写入本地 .env，重启生效）、系统检查与数据目录。 */
 
-import { api, renderChecks } from "./shared.js";
+import { api, renderChecks } from "./shared.js?v=v0.3-report-render-4";
 import { registerView } from "./router.js";
 
 const form = document.getElementById("provider-form");

@@ -281,10 +281,11 @@ def render_report_document(
         locator = json.dumps(item.locator, ensure_ascii=False, sort_keys=True)
         lane_marker = LANE_MARKERS.get(origin_lane(item), "")
         lines.append(
-            f"[{citation.display_index}] 来源 {TRUST_MARKERS[trust]}"
+            f"- [{citation.display_index}] 来源 {TRUST_MARKERS[trust]}"
             + (f" {lane_marker}" if lane_marker else "")
             + f" · SourceSnapshot `{item.source_snapshot_id}` · 定位 `{locator}`"
         )
+        lines.append("")
     lines.append("")
     claim_by_id = {claim.claim_id: claim for claim in claims}
     lines.extend(("### 审计附录（Evidence 汇总）", ""))
@@ -510,9 +511,10 @@ def render_fused_report(
     for key in ordered_keys:
         entry = reference_entry(key)
         if entry.lane == "web":
-            lines.append(f"[{numbers[key]}]({entry.detail}) {entry.title}[web]")
+            lines.append(f"- [{numbers[key]}]({entry.detail}) {entry.title}[web]")
         else:
-            lines.append(f"[{numbers[key]}]《{entry.title}》[本地], {entry.detail}")
+            lines.append(f"- [{numbers[key]}]《{entry.title}》[本地], {entry.detail}")
+        lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
 

@@ -110,6 +110,9 @@ function appendMarkdownText(parent, value) {
 export function renderAnswer(node, content, mediaType) {
   node.replaceChildren();
   if (!mediaType.startsWith("text/markdown")) {
+    const rail = document.querySelector("#report-toc-rail");
+    rail?.setAttribute("hidden", "");
+    rail?.closest(".app-shell")?.setAttribute("data-toc", "closed");
     const body = document.createElement("p");
     body.className = "answer-paragraph";
     body.textContent = content || "";
@@ -119,15 +122,35 @@ export function renderAnswer(node, content, mediaType) {
   const normalizedContent = String(content || "")
     .replace(/\\\|/g, "|")
     // Some providers collapse pipe tables into one line. Recover row boundaries
-    // at the start of a new header cell or a bold first cell.
-    .replace(/\|\s*(?=\|?:?-{3,}:?\|)/g, "\n|")
-    .replace(/\|\s*(?=\*\*)/g, "\n|");
-  const lines = normalizedContent.replace(/\r\n?/g, "\n").split("\n");
+    // around the divider and preserve bold text inside ordinary paragraphs.
+    // Providers sometimes collapse an entire pipe table into one line. Restore
+    // the divider boundaries before block parsing; prose after the table stays intact.
+    .replace(/(?:\|:?-{2,}:?){2,}\|?/g, (divider) => `\n${divider}\n`)
+    // A collapsed table often uses `||` between rows. Recover row starts;
+    // deliberate empty cells are not emitted by the report contract.
+    .replace(/\|{2,}/g, "|\n|")
+    .replace(/\|\s+\|/g, "|\n|");
+  const normalizedLines = normalizedContent.replace(/\r\n?/g, "\n").split("\n");
+  const lines = [];
+  let inReferences = false;
+  for (let index = 0; index < normalizedLines.length; index += 1) {
+    const line = normalizedLines[index];
+    const isHeadingLine = /^#{1,6}\s+/.test(line);
+    if (/^#{1,6}\s+(?:来源引用|来源)\s*$/.test(line)) inReferences = true;
+    else if (/^#{1,6}\s+/.test(line) && !/来源/.test(line)) inReferences = false;
+    if (inReferences && !isHeadingLine && line.trim() && !/^\s*[-*+]\s+/.test(line)) {
+      const parts = line.split(/\s+(?=\[\d+\](?:\(|《))/);
+      parts.forEach((part) => lines.push(`- ${part.trim()}`));
+    } else {
+      lines.push(line);
+    }
+  }
   const body = document.createElement("div");
   body.className = "answer-body";
   let paragraph = [];
   let list = null;
   let quote = null;
+  let callout = null;
   let code = null;
   const flushParagraph = () => {
     if (!paragraph.length) return;
@@ -138,6 +161,7 @@ export function renderAnswer(node, content, mediaType) {
   };
   const flushList = () => { if (list) { body.append(list); list = null; } };
   const flushQuote = () => { if (quote) { body.append(quote); quote = null; } };
+  const flushCallout = () => { if (callout) { body.append(callout); callout = null; } };
   const flushCode = () => {
     if (!code) return;
     const pre = document.createElement("pre");
@@ -148,12 +172,14 @@ export function renderAnswer(node, content, mediaType) {
     code = null;
   };
   const parseTableRow = (line) => {
+    // URL/title lines may contain pipes; only parse deliberate Markdown table rows.
+    if (/https?:\/\//i.test(line)) return null;
     const normalized = line.replace(/^\s*[○•]\s*/, "").trim().replace(/^\\\|/, "|").replace(/\\\|\s*$/, "|");
-    if (!normalized.includes("|") || !/^\|?.*\|.*\|?$/.test(normalized)) return null;
+    if (!normalized.startsWith("|") || (normalized.match(/\|/g) || []).length < 2) return null;
     const cells = normalized.replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.replace(/\\\|/g, "|").trim());
     return cells.length >= 2 ? cells : null;
   };
-  const isTableDivider = (cells) => cells.length >= 2 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s/g, "")));
+  const isTableDivider = (cells) => cells.length >= 2 && cells.every((cell) => /^:?-{2,}:?$/.test(cell.replace(/\s/g, "")));
   const flushTable = () => {
     if (!table) return;
     const tableNode = document.createElement("table");
@@ -166,51 +192,140 @@ export function renderAnswer(node, content, mediaType) {
       row.forEach((cell) => { const td = document.createElement("td"); appendMarkdownText(td, cell); tr.append(td); });
       bodyNode.append(tr);
     });
-    tableNode.append(head, bodyNode); body.append(tableNode); table = null;
+    tableNode.append(head, bodyNode);
+    const tableWrap = document.createElement("div");
+    tableWrap.className = "answer-table-wrap";
+    tableWrap.append(tableNode);
+    body.append(tableWrap); table = null;
   };
   let table = null;
-  for (const line of lines) {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const line = lines[lineIndex];
     if (line.startsWith("```")) {
-      flushParagraph(); flushList(); flushQuote(); flushTable();
+      flushParagraph(); flushList(); flushQuote(); flushCallout(); flushTable();
       if (code) flushCode(); else code = { lines: [] };
       continue;
     }
     if (code) { code.lines.push(line); continue; }
     const heading = line.match(/^(#{1,6})\s+(.+?)\s*#*$/);
     if (heading) {
-      flushParagraph(); flushList(); flushQuote(); flushTable();
+      flushParagraph(); flushList(); flushQuote(); flushCallout(); flushTable();
       const h = document.createElement(`h${Math.min(heading[1].length + 1, 6)}`);
+      h.id = heading[2].toLowerCase().replace(/[^\u3400-\u9fff\w\s-]/g, "").trim().replace(/[\s_-]+/g, "-") || `section-${body.querySelectorAll("h2,h3,h4,h5,h6").length + 1}`;
       appendMarkdownText(h, heading[2]);
       body.append(h);
       continue;
     }
     const tableRow = parseTableRow(line);
     if (tableRow) {
-      if (isTableDivider(tableRow)) continue;
-      flushParagraph(); flushList(); flushQuote();
-      if (!table) table = { rows: [] };
-      table.rows.push(tableRow);
-      continue;
+      if (!table) {
+        const nextRow = lineIndex + 1 < lines.length ? parseTableRow(lines[lineIndex + 1]) : null;
+        if (nextRow && isTableDivider(nextRow)) {
+          flushParagraph(); flushList(); flushQuote(); flushCallout();
+          table = { rows: [tableRow], columns: tableRow.length };
+          lineIndex += 1;
+          continue;
+        }
+      } else if (!isTableDivider(tableRow)) {
+        flushParagraph(); flushList(); flushQuote(); flushCallout();
+        const columns = table.columns || table.rows[0].length;
+        if (tableRow.length > columns) {
+          const completeCells = Math.floor(tableRow.length / columns) * columns;
+          for (let offset = 0; offset < completeCells; offset += columns) {
+            table.rows.push(tableRow.slice(offset, offset + columns));
+          }
+          const remainder = tableRow.slice(completeCells).filter((cell) => cell.trim()).join(" ");
+          flushTable();
+          if (remainder) paragraph.push(remainder);
+        } else {
+          table.rows.push(tableRow);
+        }
+        continue;
+      }
     }
     if (table) flushTable();
-    if (/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(line)) { flushParagraph(); flushList(); flushQuote(); body.append(document.createElement("hr")); continue; }
+    if (/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(line)) { flushParagraph(); flushList(); flushQuote(); flushCallout(); body.append(document.createElement("hr")); continue; }
     const quoteLine = line.match(/^\s*>\s?(.*)$/);
     if (quoteLine) {
       flushParagraph(); flushList();
+      const calloutMarker = quoteLine[1].match(/^\[!(NOTE|TIP|WARNING|IMPORTANT)\]\s*$/i);
+      if (calloutMarker) {
+        flushQuote(); flushCallout();
+        callout = document.createElement("aside");
+        callout.className = `report-callout ${calloutMarker[1].toLowerCase()}`;
+        callout.setAttribute("role", "note");
+        const label = document.createElement("strong");
+        label.className = "report-callout-label";
+        label.textContent = calloutMarker[1].toUpperCase();
+        callout.append(label);
+        continue;
+      }
+      if (callout) {
+        const p = document.createElement("p");
+        appendMarkdownText(p, quoteLine[1]);
+        callout.append(p);
+        continue;
+      }
       if (!quote) { quote = document.createElement("blockquote"); }
       const p = document.createElement("p"); appendMarkdownText(p, quoteLine[1]); quote.append(p); continue;
     }
     const item = line.match(/^\s*([-*+] |\d+\. )(.+)$/);
     if (item) {
-      flushParagraph(); flushQuote();
+      flushParagraph(); flushQuote(); flushCallout();
       const ordered = /^\d/.test(item[1]);
       if (!list || list.tagName.toLowerCase() !== (ordered ? "ol" : "ul")) { flushList(); list = document.createElement(ordered ? "ol" : "ul"); }
       const li = document.createElement("li"); appendMarkdownText(li, item[2]); list.append(li); continue;
     }
-    if (!line.trim()) { flushParagraph(); flushList(); flushQuote(); flushTable(); continue; }
-    flushList(); flushQuote(); paragraph.push(line.replace(/^\s*[○•]\s*/, "").trim());
+    if (!line.trim()) { flushParagraph(); flushList(); flushQuote(); flushCallout(); flushTable(); continue; }
+    flushList(); flushQuote(); flushCallout(); paragraph.push(line.replace(/^\s*[○•]\s*/, "").trim());
   }
-  flushParagraph(); flushList(); flushQuote(); flushCode(); flushTable();
+  flushParagraph(); flushList(); flushQuote(); flushCallout(); flushCode(); flushTable();
+  const headings = [...body.querySelectorAll("h2, h3, h4, h5, h6")];
+  if (headings.length >= 2) {
+    const toc = document.createElement("nav");
+    toc.className = "report-toc";
+    toc.setAttribute("aria-label", "报告目录");
+    const tocTitle = document.createElement("strong");
+    tocTitle.textContent = "报告目录";
+    toc.append(tocTitle);
+    const listNode = document.createElement("ul");
+    headings.forEach((heading) => {
+      const itemNode = document.createElement("li");
+      itemNode.dataset.level = heading.tagName.slice(1);
+      const link = document.createElement("a");
+      link.href = `#${heading.id}`;
+      link.textContent = heading.textContent;
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        document.getElementById(heading.id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      itemNode.append(link); listNode.append(itemNode);
+    });
+    toc.append(listNode);
+    const rail = node.id === "answer-content" ? document.querySelector("#report-toc-rail") : null;
+    if (rail) {
+      rail.replaceChildren(toc);
+      rail.hidden = false;
+      rail.closest(".app-shell")?.setAttribute("data-toc", "open");
+    } else {
+      node.append(toc);
+    }
+    if ("IntersectionObserver" in window) {
+      const links = new Map(headings.map((heading) => [heading.id, listNode.querySelector(`a[href="#${heading.id}"]`)]));
+      const observer = new IntersectionObserver((entries) => {
+        entries.filter((entry) => entry.isIntersecting).forEach((entry) => {
+          links.forEach((link) => link?.removeAttribute("aria-current"));
+          links.get(entry.target.id)?.setAttribute("aria-current", "location");
+        });
+      }, { rootMargin: "-88px 0px -65% 0px", threshold: 0 });
+      headings.forEach((heading) => observer.observe(heading));
+    }
+  }
+  const rail = document.querySelector("#report-toc-rail");
+  if (rail && headings.length < 2) {
+    rail.hidden = true;
+    rail.closest(".app-shell")?.setAttribute("data-toc", "closed");
+  }
   node.append(body);
 }
 

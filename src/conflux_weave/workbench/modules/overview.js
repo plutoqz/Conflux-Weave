@@ -1,6 +1,6 @@
 /* 总览工作台：快速开始、真实系统状态与最近研究。所有数字均来自后端。 */
 
-import { api, formatDate, renderChecks, stateLabels } from "./shared.js";
+import { api, formatDate, renderChecks, stateLabels } from "./shared.js?v=v0.3-report-render-4";
 import { registerView } from "./router.js";
 
 async function renderHealth() {

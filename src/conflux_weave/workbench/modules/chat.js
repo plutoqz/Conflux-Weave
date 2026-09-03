@@ -2,7 +2,7 @@
    历史按 parent_run_id 追溯为只读线程（UX-1.1）：不删除、不改审计语义；
    "新对话"仅清空当前前端视图。P4 统一对话路由就绪后仅替换提交入口，UI 合同不变。 */
 
-import { api, familyLabels, formatDate, modeLabels, renderAnswer, showToast, stateLabels } from "./shared.js";
+import { api, familyLabels, formatDate, modeLabels, renderAnswer, showToast, stateLabels } from "./shared.js?v=v0.3-report-render-4";
 import { registerView } from "./router.js";
 
 const TERMINAL_STATES = new Set(["complete", "partial", "failed", "cancelled", "expired"]);
