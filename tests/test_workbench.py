@@ -222,16 +222,23 @@ def test_workbench_ux1_sections_are_local_and_wired(tmp_path) -> None:
     assert 'id="cfg-api-key" name="api_key" type="password"' in index
     assert 'id="chat-input"' in index
     assert 'id="overview-checks"' in index
+    assert 'id="chat-empty-title"' in index
+    assert 'id="chat-empty-description"' in index
 
-    assert 'from "./modules/shared.js"' in (workbench_root / "app.js").read_text(encoding="utf-8")
+    app_source = (workbench_root / "app.js").read_text(encoding="utf-8")
+    assert 'from "./modules/shared.js' in app_source
     assert "initRouter" in (workbench_root / "app.js").read_text(encoding="utf-8")
     assert "registerView" in router and "hashchange" in router
+    assert 'shell.dataset.toc = "closed"' in router
+    assert 'shell.dataset.inspector = "closed"' in router
     assert "/api/v1/health/ready" in overview
     assert "/api/v1/config" in settings and "/api/v1/config/provider" in settings
     assert "/api/v1/tasks/deep-research" in chat
     assert "/api/v1/chat" in chat
     assert "/follow-up" in chat
     assert "EventSource" in chat
+    assert "MODE_INTRO" in chat
+    assert "emptyDescription.textContent" in chat
 
     combined = "".join(module_sources.values())
     assert "http://" not in combined
@@ -258,6 +265,34 @@ def test_workbench_w55_layout_and_keyboard_contracts_are_local_and_responsive() 
     assert 'event.key === "ArrowRight"' in script
     assert "trigger?.isConnected" in script
     assert "event.preventDefault()" in script
+
+
+def test_library_uses_persistent_tabs_and_configurable_result_count() -> None:
+    from pathlib import Path
+
+    root = Path(__file__).parents[1] / "src" / "conflux_weave" / "workbench"
+    index = (root / "index.html").read_text(encoding="utf-8")
+    library = (root / "modules" / "library.js").read_text(encoding="utf-8")
+
+    tabs_at = index.index('class="library-subnav"')
+    documents_at = index.index('id="library-documents-panel"')
+    papers_at = index.index('id="library-papers-panel"')
+    assert tabs_at < documents_at < papers_at
+    assert 'id="paper-back-documents"' not in index
+    assert 'id="paper-result-limit"' in index
+    assert 'id="library-load-more"' in index
+    assert 'value="20" selected' in index
+    assert 'document.getElementById("paper-result-limit").value' in library
+    assert 'max_results: "10"' not in library
+    assert 'library.js?v=v0.3-library-ux-3' in (root / "app.js").read_text(encoding="utf-8")
+    assert "item.doi" in library and "item.arxiv_id" in library and "item.authors" in library
+    assert 'match.textContent = "正文命中"' in library
+    assert 'api(`/api/v1/library/search?${params}`)' in library
+    assert "item.match_snippet" in library
+    assert 'retry.addEventListener("click", () => runPaperSearch(source.source))' in library
+    assert 'id="paper-query-understanding"' in index
+    assert 'id="paper-source-details"' in index
+    assert 'button.title = "使用此意图重新检索"' in library
 
 
 def test_workbench_reads_only_registered_delivery_text(tmp_path) -> None:

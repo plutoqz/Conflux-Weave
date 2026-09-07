@@ -6,8 +6,8 @@
     <meta name="color-scheme" content="light">
     <link rel="icon" href="data:,">
     <title>Conflux Weave</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=v0.3-report-render-4">
-    <script type="module" src="/assets/app.js?v=v0.3-report-render-4"></script>
+    <link rel="stylesheet" href="/assets/styles.css?v=v0.3-library-ux-2">
+    <script type="module" src="/assets/app.js?v=v0.3-library-ux-2"></script>
   </head>
   <body>
     <header class="topbar">
@@ -22,6 +22,7 @@
         <a class="section-link" data-section-link="overview" href="#/overview">总览</a>
         <a class="section-link" data-section-link="chat" href="#/chat">对话</a>
         <a class="section-link" data-section-link="research" href="#/research">研究</a>
+        <a class="section-link" data-section-link="library" href="#/library">资料库</a>
         <a class="section-link" data-section-link="settings" href="#/settings">设置</a>
       </nav>
       <div id="health" class="health" role="status">
@@ -130,8 +131,8 @@
           <main class="chat-main">
           <div id="chat-thread-empty" class="chat-empty">
             <p class="eyebrow">Ask · 01</p>
-            <h1>直接提问</h1>
-            <p>问题会创建为一次核验研究：结果带引用证据，运行过程实时可见。</p>
+            <h1 id="chat-empty-title">直接提问</h1>
+            <p id="chat-empty-description">直接获得模型回答，不检索本地资料，也不附带引用。</p>
           </div>
           <div id="chat-thread" class="chat-thread" aria-live="polite"></div>
           <form id="chat-form" class="chat-composer" aria-label="发送问题">
@@ -176,6 +177,48 @@
           </aside>
         </section>
 
+        <section id="library-view" class="library-view" hidden>
+          <header class="section-heading library-heading">
+            <div><span class="eyebrow">Library</span><h1>资料库</h1><p>统一管理论文、PDF 和 Markdown 资料，以及当前知识库状态。</p></div>
+            <div class="library-actions"><label class="quiet-button" for="library-file">添加资料<input id="library-file" type="file" accept=".pdf,.md,.markdown" hidden></label><button id="library-refresh" class="quiet-button" type="button">刷新</button></div>
+          </header>
+          <section class="library-summary" aria-label="资料库状态">
+            <div><span>资料总数</span><strong id="library-total">—</strong></div>
+            <div><span>知识库可用</span><strong id="library-imported">—</strong></div>
+            <div><span>当前知识库</span><strong id="library-index-status">—</strong></div>
+            <div><span>正文字符</span><strong id="library-characters">—</strong></div><div><span>数据量</span><strong id="library-size">—</strong></div><div><span>来源分类</span><strong id="library-sources">—</strong></div>
+          </section>
+          <section class="library-workspace" aria-label="资料总览">
+            <div class="section-heading library-workspace-heading"><div><h2>资料总览</h2><p id="library-result-summary">正在读取资料…</p></div><span id="library-manifest" class="count-label"></span></div>
+            <nav class="library-subnav" aria-label="资料库功能"><button class="library-tab active" data-library-tab="documents" type="button" aria-selected="true">我的资料</button><button class="library-tab" data-library-tab="papers" type="button" aria-selected="false">论文获取</button></nav>
+          </section>
+          <section id="library-documents-panel" class="library-panel" aria-label="资料列表">
+            <div class="library-toolbar"><input id="library-search" type="search" placeholder="搜索标题、作者、正文、DOI 或 arXiv ID" aria-label="搜索资料"><select id="library-status" aria-label="按状态筛选"><option value="">全部状态</option><option value="ready">正文可用</option><option value="metadata">仅元数据</option><option value="processing">处理中</option><option value="failed">处理失败</option></select></div>
+            <div id="library-list" class="library-list"></div>
+            <button id="library-load-more" class="quiet-button library-load-more" type="button" hidden>加载更多</button>
+            <p id="library-empty" class="panel-empty" hidden><strong>还没有资料</strong><span>论文获取和本地文档导入将在资料库中统一接入。</span></p>
+          </section>
+          <section id="library-papers-panel" class="library-panel paper-search-panel" aria-label="论文获取" hidden>
+            <div class="paper-search-controls">
+              <div class="paper-search-bar"><input id="paper-search-query" type="search" placeholder="输入主题、标题、DOI 或 arXiv ID" aria-label="论文搜索关键词"><button id="paper-search-submit" class="primary-button" type="button">搜索论文</button></div>
+              <div class="paper-filter-row">
+                <label>起始年份<input id="paper-year-from" type="number" min="1900" max="2100" inputmode="numeric"></label>
+                <label>结束年份<input id="paper-year-to" type="number" min="1900" max="2100" inputmode="numeric"></label>
+                <label>来源<select id="paper-sources"><option value="openalex,arxiv">OpenAlex + arXiv</option><option value="openalex">OpenAlex</option><option value="arxiv">arXiv</option></select></label>
+                <label>排序<select id="paper-sort"><option value="relevance">相关性</option><option value="newest">最新发表</option><option value="impact">引用影响</option></select></label>
+                <label>首批数量<select id="paper-result-limit"><option value="20" selected>20 条</option><option value="40">40 条</option><option value="50">50 条</option></select></label>
+                <label class="paper-check"><input id="paper-oa-only" type="checkbox">仅开放全文</label>
+              </div>
+            </div>
+            <div id="paper-query-understanding" class="paper-query-understanding" hidden></div>
+            <div id="paper-search-status" class="paper-source-status" role="status" aria-live="polite"></div>
+            <div id="paper-source-details" class="paper-source-details"></div>
+            <div id="paper-results" class="library-list"></div>
+            <button id="paper-load-more" class="quiet-button library-load-more" type="button" hidden>继续获取</button>
+          </section>
+          <dialog id="library-detail-dialog" class="evidence-dialog"><article><header class="dialog-header"><div><span class="eyebrow">Document</span><h2 id="library-detail-title">资料详情</h2></div><button id="library-detail-close" class="icon-button" type="button" aria-label="关闭">×</button></header><dl class="evidence-meta" id="library-detail-meta"></dl><div id="library-detail-content" class="library-detail-content"></div></article></dialog>
+        </section>
+
         <section id="settings-view" class="settings-view" hidden>
           <div id="settings-banner" class="settings-banner" role="status" hidden></div>
 
@@ -193,6 +236,8 @@
               <label class="field-label" for="cfg-api-key">API Key</label>
               <input id="cfg-api-key" name="api_key" type="password" autocomplete="new-password" placeholder="未配置">
               <p class="field-hint">密钥只写入本地配置文件，不会显示在页面或日志中；留空保持现有值不变。</p>
+              <label class="field-label" for="cfg-contact-email">学术开放 API 联系邮箱</label>
+              <input id="cfg-contact-email" name="contact_email" type="email" autocomplete="email" placeholder="用于 OpenAlex 和 Unpaywall 的合规请求">
               <div class="settings-model-grid">
                 <div>
                   <label class="field-label" for="cfg-model">Chat 模型</label>

@@ -7,6 +7,7 @@ let active = null;
 const SECTION_IDS = {
   overview: "overview-view",
   chat: "chat-view",
+  library: "library-view",
   settings: "settings-view",
 };
 
@@ -50,7 +51,16 @@ async function apply() {
     else link.removeAttribute("aria-current");
   });
   const shell = document.querySelector(".app-shell");
-  if (shell) shell.dataset.section = name;
+  if (shell) {
+    shell.dataset.section = name;
+    // TOC and the evidence inspector are research-only grid columns. Clear
+    // their state before entering another section so hidden columns cannot
+    // continue constraining the destination view.
+    if (name !== "research") {
+      shell.dataset.toc = "closed";
+      shell.dataset.inspector = "closed";
+    }
+  }
   for (const [section, id] of Object.entries(SECTION_IDS)) {
     const node = document.getElementById(id);
     if (node) node.hidden = section !== name;

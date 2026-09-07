@@ -49,6 +49,7 @@ DOTENV_SEEDED = (
     "CONFLUX_WEAVE_PROVIDER_BASE_URL=https://provider.example/v1\n"
     "CONFLUX_WEAVE_PROVIDER_API_KEY=sk-existing-9f8e\n"
     "CONFLUX_WEAVE_PROVIDER_MODEL=qwen3.7-flash\n"
+    "CONFLUX_WEAVE_CONTACT_EMAIL=researcher@example.com\n"
     "OTHER_SETTING=keep-me\n"
 )
 
@@ -59,6 +60,7 @@ def test_get_config_returns_sanitized_provider_and_paths(tmp_path) -> None:
 
     assert response.provider.base_url == "https://provider.example/v1"
     assert response.provider.model == "qwen3.7-flash"
+    assert response.provider.contact_email == "researcher@example.com"
     assert response.provider.api_key_configured is True
     assert response.provider.api_key_hint == "…9f8e"
     assert response.provider_active is False
@@ -74,6 +76,7 @@ def test_put_provider_config_writes_env_and_preserves_other_lines(tmp_path) -> N
         model="qwen-next",
         embedding_model="text-embedding-v4",
         api_key="sk-new-key-abcd",
+        contact_email="oa@example.org",
     )
     response = asyncio.run(route(app, "/api/v1/config/provider")(request))
 
@@ -87,6 +90,7 @@ def test_put_provider_config_writes_env_and_preserves_other_lines(tmp_path) -> N
     assert "CONFLUX_WEAVE_PROVIDER_API_KEY=sk-new-key-abcd\n" in written
     assert "CONFLUX_WEAVE_PROVIDER_MODEL=qwen-next\n" in written
     assert "CONFLUX_WEAVE_PROVIDER_EMBEDDING_MODEL=text-embedding-v4\n" in written
+    assert "CONFLUX_WEAVE_CONTACT_EMAIL=oa@example.org\n" in written
     payload = json.dumps(response.model_dump(mode="json"), ensure_ascii=False)
     assert "sk-new-key-abcd" not in payload
 

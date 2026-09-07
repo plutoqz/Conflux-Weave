@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 from conflux_weave.hybrid_retrieval import HybridRetrievalPipeline
 from conflux_weave.indexing import LanceDBDenseIndex
@@ -45,3 +46,24 @@ def test_pipeline_degrades_to_hybrid_when_reranker_fails(tmp_path):
     assert run.rerank_status == "degraded_to_hybrid"
     assert run.final == run.hybrid
     assert run.rerank_error_code == "provider_http_failed"
+
+
+def test_incremental_documents_are_added_to_sparse_and_dense_indexes(tmp_path):
+    documents = (RetrievalDocument("chunk-1", "existing geographic content", "source-1", {}),)
+    index = LanceDBDenseIndex(tmp_path / "db")
+    index.publish(documents, ((1.0, 0.0),))
+
+    class IncrementalEmbedding:
+        def embed(self, texts, *, producer_step_id):
+            artifact = SimpleNamespace(artifact_id="artifact-test")
+            vectors = tuple((0.0, 1.0) if "urecom" in text.lower() else (1.0, 0.0) for text in texts)
+            return SimpleNamespace(vectors=vectors, request_artifact=artifact, response_artifact=artifact)
+
+    pipeline = HybridRetrievalPipeline(documents, index, IncrementalEmbedding(), SimpleNamespace())
+    added = (RetrievalDocument("chunk-2", "UReCoM is a user-relayed context manipulation attack.", "source-2", {"page": 1}),)
+
+    result = pipeline.add_documents(added)
+
+    assert result["added_count"] == 1
+    assert pipeline.bm25.search("UReCoM", top_k=5).hits[0].document_id == "chunk-2"
+    assert index.search((0.0, 1.0), top_k=1).hits[0].document_id == "chunk-2"

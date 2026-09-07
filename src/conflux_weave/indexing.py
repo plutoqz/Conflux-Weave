@@ -13,16 +13,32 @@ from conflux_weave.retrieval import RetrievalHit, RetrievalQueryResult, Retrieva
 from conflux_weave.runtime.artifacts import LocalArtifactStore
 
 
-def load_chunks(import_manifest: Path, store: LocalArtifactStore) -> tuple[RetrievalDocument, ...]:
+def load_chunks(import_manifest: Path, store: LocalArtifactStore, registry_path: Path | None = None) -> tuple[RetrievalDocument, ...]:
     manifest = json.loads(import_manifest.read_text(encoding="utf-8"))
     documents: list[RetrievalDocument] = []
-    for row in manifest["files"]:
+    rows = list(manifest["files"])
+    if registry_path and registry_path.is_file():
+        try:
+            rows.extend(json.loads(registry_path.read_text(encoding="utf-8")))
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
+    seen: set[str] = set()
+    for row in rows:
         if row["status"] != "imported":
+            if row.get("status") != "knowledge_ready":
+                continue
+        artifact_id = str(row.get("segments_artifact_id", ""))
+        source_snapshot_id = str(row.get("source_snapshot_id") or row.get("document_id") or "")
+        if not artifact_id or not source_snapshot_id:
             continue
-        ref = store.path_for_digest(row["segments_artifact_id"].removeprefix("artifact-sha256-"))
+        ref = store.path_for_digest(artifact_id.removeprefix("artifact-sha256-"))
         payload = json.loads(ref.read_text(encoding="utf-8"))
         for segment in payload["segments"]:
-            documents.append(RetrievalDocument(segment["segment_id"], segment["text"], row["source_snapshot_id"], segment["locator"]))
+            segment_id = segment["segment_id"]
+            if segment_id in seen:
+                continue
+            seen.add(segment_id)
+            documents.append(RetrievalDocument(segment_id, segment["text"], source_snapshot_id, segment["locator"]))
     return tuple(documents)
 
 
@@ -85,6 +101,32 @@ class LanceDBDenseIndex:
         self.table = self.db.open_table(self.table_name)
         corpus_hash = hashlib.sha256("\n".join(f"{doc.document_id}:{doc.text}" for doc in documents).encode()).hexdigest()
         return {"schema_version": "conflux-weave.index-manifest.v1", "index_type": "lancedb", "database_path": str(self.db_path.resolve()), "table_name": self.table_name, "corpus_hash": f"sha256:{corpus_hash}", "document_count": len(documents), "dimensions": dimensions, "status": "published"}
+
+    def add(self, documents: tuple[RetrievalDocument, ...], vectors: tuple[tuple[float, ...], ...]) -> dict[str, Any]:
+        """Append previously unseen chunks without rebuilding the whole table."""
+        if len(documents) != len(vectors) or not documents:
+            raise ValueError("documents and vectors must be non-empty and aligned")
+        dimensions = len(vectors[0])
+        if not dimensions or any(len(vector) != dimensions for vector in vectors):
+            raise ValueError("vectors must have consistent dimensions")
+        rows = [{"chunk_id": doc.document_id, "source_snapshot_id": doc.source_snapshot_id or "", "locator_json": json.dumps(doc.locator or {}, ensure_ascii=False, sort_keys=True), "text": doc.text, "vector": list(vector)} for doc, vector in zip(documents, vectors)]
+        if self.table is None:
+            return self.publish(documents, vectors)
+        schema = self.table.schema
+        vector_field = schema.field("vector")
+        existing_dimensions = getattr(vector_field.type, "list_size", dimensions)
+        if existing_dimensions != dimensions:
+            raise ValueError(f"embedding dimensions changed: index={existing_dimensions}, new={dimensions}")
+        self.table.add(rows)
+        return {
+            "schema_version": "conflux-weave.index-update.v1",
+            "index_type": "lancedb",
+            "database_path": str(self.db_path.resolve()),
+            "table_name": self.table_name,
+            "added_count": len(documents),
+            "dimensions": dimensions,
+            "status": "published",
+        }
 
     def search(self, query_vector: tuple[float, ...], *, top_k: int = 10, where: str | None = None) -> RetrievalQueryResult:
         if self.table is None:

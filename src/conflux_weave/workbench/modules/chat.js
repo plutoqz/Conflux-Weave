@@ -29,6 +29,23 @@ const modeSelect = document.getElementById("chat-mode-select");
 const modeButton = document.getElementById("chat-mode-button");
 const modeLabel = document.getElementById("chat-mode-label");
 const modeList = document.getElementById("chat-mode-list");
+const emptyTitle = document.getElementById("chat-empty-title");
+const emptyDescription = document.getElementById("chat-empty-description");
+
+const MODE_INTRO = {
+  direct: {
+    title: "直接提问",
+    description: "直接获得模型回答，不检索本地资料，也不附带引用。",
+  },
+  rag: {
+    title: "知识库问答",
+    description: "基于本地资料检索回答，附带片段引用，但不执行完整核验研究。",
+  },
+  deep: {
+    title: "深度研究",
+    description: "问题会创建为一次核验研究：结果带引用证据，运行过程实时可见。",
+  },
+};
 
 function closeModeList() {
   modeList.hidden = true;
@@ -40,6 +57,9 @@ function setChatMode(mode) {
   if (!option) return;
   chatMode = mode;
   modeLabel.textContent = option.querySelector("strong").textContent;
+  const intro = MODE_INTRO[mode] || MODE_INTRO.direct;
+  emptyTitle.textContent = intro.title;
+  emptyDescription.textContent = intro.description;
   for (const item of modeList.querySelectorAll("li")) {
     item.setAttribute("aria-selected", item.dataset.mode === mode ? "true" : "false");
   }

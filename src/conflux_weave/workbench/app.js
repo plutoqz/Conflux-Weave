@@ -11,6 +11,7 @@ import {
 import { initRouter, navigate, registerView, replaceHash } from "./modules/router.js";
 import "./modules/overview.js";
 import "./modules/chat.js";
+import "./modules/library.js?v=v0.3-library-ux-3";
 import "./modules/settings.js";
 
 const state = {
@@ -616,9 +617,20 @@ document.addEventListener("click", (event) => {
   const citation = event.target.closest(".citation-link");
   if (!citation) return;
   const index = Number(citation.dataset.citationIndex) - 1;
-  if (!Number.isInteger(index) || !state.evidenceList[index]) return;
   event.preventDefault();
-  openEvidence(state.evidenceList[index], index, citation);
+  if (Number.isInteger(index) && state.evidenceList[index]) {
+    openEvidence(state.evidenceList[index], index, citation);
+    return;
+  }
+  // Chat RAG citations are local to the rendered answer rather than research
+  // evidence records. Keep the user in the conversation and jump to the
+  // matching source entry instead of letting the hash router fall back home.
+  const body = citation.closest(".chat-msg-body");
+  const sourceLinks = body
+    ? [...body.querySelectorAll(`.citation-link[data-citation-index=\"${index + 1}\"]`)]
+    : [];
+  const source = sourceLinks[sourceLinks.length - 1];
+  if (source && source !== citation) source.scrollIntoView({ behavior: "smooth", block: "center" });
 });
 $("#task-form").addEventListener("submit", (event) => {
   if (event.submitter?.value !== "cancel") event.preventDefault();

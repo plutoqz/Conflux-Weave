@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from threading import RLock
+from typing import Any
 
 from conflux_weave.indexing import LanceDBDenseIndex
 from conflux_weave.provider import (
@@ -50,6 +52,44 @@ class HybridRetrievalPipeline:
         self.dense_index = dense_index
         self.embedding = embedding
         self.reranker = reranker
+        self._index_lock = RLock()
+
+    def add_documents(
+        self,
+        documents: tuple[RetrievalDocument, ...],
+        *,
+        batch_size: int = 10,
+        producer_step_id: str = "step-library-incremental-index",
+    ) -> dict[str, Any]:
+        """Embed and publish new chunks, then expose them to sparse retrieval."""
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+        if not documents:
+            raise ValueError("documents must not be empty")
+        with self._index_lock:
+            pending = tuple(document for document in documents if document.document_id not in self.document_by_id)
+            if not pending:
+                return {"status": "already_indexed", "added_count": 0, "embedding_artifacts": []}
+            if len({document.document_id for document in pending}) != len(pending):
+                raise ValueError("document_id values must be unique")
+            vectors: list[tuple[float, ...]] = []
+            artifacts: list[dict[str, str]] = []
+            for start in range(0, len(pending), batch_size):
+                embedded = self.embedding.embed(
+                    [document.text for document in pending[start:start + batch_size]],
+                    producer_step_id=f"{producer_step_id}-{start // batch_size:04d}",
+                )
+                vectors.extend(embedded.vectors)
+                artifacts.append({
+                    "request": embedded.request_artifact.artifact_id,
+                    "response": embedded.response_artifact.artifact_id,
+                })
+            update = self.dense_index.add(pending, tuple(vectors))
+            combined = self.documents + pending
+            self.documents = combined
+            self.document_by_id = {document.document_id: document for document in combined}
+            self.bm25 = BM25Retriever(combined)
+            return {**update, "added_count": len(pending), "embedding_artifacts": artifacts}
 
     def search(
         self,
@@ -63,10 +103,11 @@ class HybridRetrievalPipeline:
         if not query.strip():
             raise ValueError("query must not be empty")
         embedded = self.embedding.embed([query], producer_step_id="s1-query-embedding")
-        bm25 = self.bm25.search(query, top_k=sparse_k)
-        dense = self.dense_index.search(embedded.vectors[0], top_k=dense_k)
-        hybrid = reciprocal_rank_fusion(bm25, dense, top_k=fusion_k)
-        candidates = [self.document_by_id[hit.document_id] for hit in hybrid.hits]
+        with self._index_lock:
+            bm25 = self.bm25.search(query, top_k=sparse_k)
+            dense = self.dense_index.search(embedded.vectors[0], top_k=dense_k)
+            hybrid = reciprocal_rank_fusion(bm25, dense, top_k=fusion_k)
+            candidates = [self.document_by_id[hit.document_id] for hit in hybrid.hits]
         try:
             reranked = self.reranker.rerank(query, [item.text for item in candidates], top_n=min(rerank_k, len(candidates)), producer_step_id="s1-query-rerank")
             final_hits = tuple(

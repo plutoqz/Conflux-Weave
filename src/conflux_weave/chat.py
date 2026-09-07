@@ -111,6 +111,24 @@ def _rag_retry_feedback(violations: tuple[str, ...]) -> str:
     )
 
 
+def _normalize_rag_citations(answer: str, snippet_count: int) -> str:
+    """Keep provider citation markers closed over the snippets supplied to it."""
+    if snippet_count <= 0:
+        return answer
+
+    def replace(match: re.Match[str]) -> str:
+        index = int(match.group(1))
+        if 1 <= index <= snippet_count:
+            return match.group(0)
+        # Providers sometimes copy bibliography numbering from the source PDF.
+        # Fold that accidental numbering back into the bounded snippet set so
+        # the delivered answer cannot link to a citation that does not exist.
+        normalized = ((index - 1) % snippet_count) + 1
+        return f"[{normalized}]"
+
+    return CITATION_INDEX_PATTERN.sub(replace, answer)
+
+
 class ChatService:
     """直接问答：LLM 原样应答 + 对话记录持久化（W3.0 模式 A）。"""
 
@@ -397,6 +415,8 @@ class ChatService:
             violations = _check_rag_answer(answer, len(snippets))
             if not violations:
                 break
+        answer = _normalize_rag_citations(answer, len(snippets))
+        violations = _check_rag_answer(answer, len(snippets))
         provider_ms = int((time.monotonic() - provider_started) * 1000)
         # W3.5：来源脚注压缩为紧凑引用（文档标题+页码），与深度研究报告的
         # 来源引用同一排版语义；chunk/snapshot/定位 JSON 留在 API citations

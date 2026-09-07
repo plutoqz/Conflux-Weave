@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from conflux_weave.api_contracts import ChatMessageRequest
 from conflux_weave.runtime import LocalArtifactStore as _Store
-from conflux_weave.chat import ChatService, _check_rag_answer
+from conflux_weave.chat import ChatService, _check_rag_answer, _normalize_rag_citations
 from conflux_weave.provider import (
     OpenAICompatibleChatAdapter,
     ProviderConfig,
@@ -214,6 +214,10 @@ def test_rag_check_rejects_out_of_range_citation_and_low_coverage():
     # 长度达标但 4 个片段只引用 1 个：素材回避
     padded = "长" * 300 + " [1]"
     assert any("仅实际引用" in v for v in _check_rag_answer(padded, 4))
+
+
+def test_rag_citation_normalization_closes_provider_bibliography_numbers():
+    assert _normalize_rag_citations("结论 [1]，补充说明 [13] 和 [15]。", 6) == "结论 [1]，补充说明 [1] 和 [3]。"
 
 
 def test_rag_unavailable_without_retrieval(tmp_path):

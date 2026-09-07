@@ -383,7 +383,9 @@ class ArxivSearchAdapter:
                 "search_query": normalized,
                 "start": 0,
                 "max_results": max_results,
-                "sortBy": "submittedDate",
+                # Relevance is essential for interactive library search; newest-first
+                # routinely returns unrelated papers for broad translated topics.
+                "sortBy": "relevance",
                 "sortOrder": "descending",
             }
         )

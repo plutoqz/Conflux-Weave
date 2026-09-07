@@ -20,6 +20,7 @@ PROVIDER_MODEL_KEY = "CONFLUX_WEAVE_PROVIDER_MODEL"
 PROVIDER_EMBEDDING_MODEL_KEY = "CONFLUX_WEAVE_PROVIDER_EMBEDDING_MODEL"
 PROVIDER_RERANKER_MODEL_KEY = "CONFLUX_WEAVE_PROVIDER_RERANKER_MODEL"
 PROVIDER_ENGINE_MODEL_KEY = "CONFLUX_WEAVE_PROVIDER_ENGINE_MODEL"
+CONTACT_EMAIL_KEY = "CONFLUX_WEAVE_CONTACT_EMAIL"
 
 _PROVIDER_KEYS = (
     PROVIDER_BASE_URL_KEY,
@@ -28,6 +29,7 @@ _PROVIDER_KEYS = (
     PROVIDER_EMBEDDING_MODEL_KEY,
     PROVIDER_RERANKER_MODEL_KEY,
     PROVIDER_ENGINE_MODEL_KEY,
+    CONTACT_EMAIL_KEY,
 )
 
 
@@ -44,6 +46,7 @@ class ProviderConfigView:
     embedding_model: str
     reranker_model: str
     engine_model: str
+    contact_email: str
     api_key_configured: bool
     api_key_hint: str | None
 
@@ -73,6 +76,7 @@ def _view_from_values(values: dict[str, str], api_key: str) -> ProviderConfigVie
         embedding_model=values[PROVIDER_EMBEDDING_MODEL_KEY],
         reranker_model=values[PROVIDER_RERANKER_MODEL_KEY],
         engine_model=values[PROVIDER_ENGINE_MODEL_KEY],
+        contact_email=values[CONTACT_EMAIL_KEY],
         api_key_configured=bool(api_key),
         api_key_hint=_mask_key(api_key),
     )
@@ -120,6 +124,7 @@ def update_provider(
     embedding_model: str | None,
     reranker_model: str | None,
     engine_model: str | None = None,
+    contact_email: str | None = None,
 ) -> ProviderConfigView:
     """Persist Provider keys into the dotenv file, preserving unrelated lines.
 
@@ -135,6 +140,7 @@ def update_provider(
         PROVIDER_EMBEDDING_MODEL_KEY: (embedding_model or "").strip(),
         PROVIDER_RERANKER_MODEL_KEY: (reranker_model or "").strip(),
         PROVIDER_ENGINE_MODEL_KEY: (engine_model or "").strip(),
+        CONTACT_EMAIL_KEY: (contact_email or "").strip(),
     }
     if api_key is not None and api_key.strip():
         updates[PROVIDER_API_KEY_KEY] = api_key.strip()

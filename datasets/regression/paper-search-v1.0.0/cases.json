@@ -1,0 +1,60 @@
+{
+  "schema_version": "conflux-weave.paper-search-evaluation.v1",
+  "dataset_id": "paper-search-v1.0.0",
+  "status": "provisional_human_review_required",
+  "cases": [
+    {
+      "case_id": "ps-zh-geospatial-agent",
+      "query": "地理智能体",
+      "kind": "chinese_topic",
+      "required_concepts": ["geospatial", "agent"],
+      "expected": "relevant_results"
+    },
+    {
+      "case_id": "ps-zh-disaster-kg",
+      "query": "灾害知识图谱",
+      "kind": "chinese_topic",
+      "required_concepts": ["disaster", "knowledge graph"],
+      "expected": "relevant_results"
+    },
+    {
+      "case_id": "ps-en-graphrag-gis",
+      "query": "GraphRAG for geographic information systems",
+      "kind": "cross_disciplinary_topic",
+      "required_concepts": ["graph", "geographic"],
+      "expected": "relevant_results"
+    },
+    {
+      "case_id": "ps-en-emerging-agent",
+      "query": "autonomous GIS agent",
+      "kind": "emerging_term",
+      "required_concepts": ["GIS", "agent"],
+      "expected": "relevant_results"
+    },
+    {
+      "case_id": "ps-arxiv-id",
+      "query": "2504.01458v2",
+      "kind": "arxiv_id",
+      "expected": "exact_identifier"
+    },
+    {
+      "case_id": "ps-doi",
+      "query": "10.1111/j.1467-9671.2007.01057.x",
+      "kind": "doi",
+      "expected": "exact_identifier"
+    },
+    {
+      "case_id": "ps-no-answer",
+      "query": "量子香蕉地籍智能体",
+      "kind": "no_answer",
+      "expected": "no_relevant_results"
+    }
+  ],
+  "review_fields": [
+    "top_10_relevant_count",
+    "top_10_obvious_mismatch_count",
+    "duplicate_count",
+    "source_failures",
+    "oa_candidate_count"
+  ]
+}

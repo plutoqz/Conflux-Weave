@@ -16,6 +16,7 @@ const fields = {
   model: () => document.getElementById("cfg-model"),
   embedding: () => document.getElementById("cfg-embedding"),
   reranker: () => document.getElementById("cfg-reranker"),
+  contactEmail: () => document.getElementById("cfg-contact-email"),
 };
 
 function setBanner(kind, message) {
@@ -29,6 +30,7 @@ function applyProviderDefaults(provider) {
   fields.model().value = provider.model || "";
   fields.embedding().value = provider.embedding_model || "";
   fields.reranker().value = provider.reranker_model || "";
+  fields.contactEmail().value = provider.contact_email || "";
   const key = fields.apiKey();
   key.value = "";
   key.placeholder = provider.api_key_configured
@@ -125,6 +127,7 @@ async function save(event) {
     model: fields.model().value.trim(),
     embedding_model: fields.embedding().value.trim(),
     reranker_model: fields.reranker().value.trim(),
+    contact_email: fields.contactEmail().value.trim(),
   };
   const key = fields.apiKey().value.trim();
   if (key) payload.api_key = key;
