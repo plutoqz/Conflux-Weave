@@ -3,7 +3,7 @@
 ## Lucide Static 1.34.0
 
 The Workbench embeds local path data from the `plus`, `panel-left`,
-`chevron-down`, `refresh-cw`, and `x` icons. It does not load Lucide at runtime.
+`chevron-down`, `refresh-cw`, `x`, `sun`, `moon`, `copy`, `check`, `download`, and `search` icons. It does not load Lucide at runtime.
 
 ISC License
 

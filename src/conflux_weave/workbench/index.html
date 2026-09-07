@@ -3,11 +3,11 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="color-scheme" content="light">
+    <meta name="color-scheme" content="light dark">
     <link rel="icon" href="data:,">
     <title>Conflux Weave</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=v0.3-library-ux-2">
-    <script type="module" src="/assets/app.js?v=v0.3-library-ux-2"></script>
+    <link rel="stylesheet" href="/assets/styles.css?v=v0.4-ux-dense">
+    <script type="module" src="/assets/app.js?v=v0.4-ux-dense"></script>
   </head>
   <body>
     <header class="topbar">
@@ -25,9 +25,16 @@
         <a class="section-link" data-section-link="library" href="#/library">资料库</a>
         <a class="section-link" data-section-link="settings" href="#/settings">设置</a>
       </nav>
-      <div id="health" class="health" role="status">
-        <span class="health-dot" aria-hidden="true"></span>
-        <span>正在检查</span>
+      <div class="topbar-actions">
+        <button class="icon-button theme-toggle" id="theme-toggle" type="button" title="切换深浅主题" aria-label="切换深浅主题">
+          <!-- Icon: sun / moon (lucide-static v1.34.0, ISC License) -->
+          <svg class="icon icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+          <svg class="icon icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden><path d="M12 3a6 6 0 0 0 9 9 9 0 1 1-9-9Z"/></svg>
+        </button>
+        <div id="health" class="health" role="status">
+          <span class="health-dot" aria-hidden="true"></span>
+          <span>正在检查</span>
+        </div>
       </div>
     </header>
 
@@ -47,6 +54,19 @@
               <!-- Icon: panel-left (lucide-static v1.34.0, ISC License) -->
               <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg>
             </button>
+          </div>
+        </div>
+
+        <div class="sidebar-filter-bar">
+          <div class="sidebar-search-wrap">
+            <!-- Icon: search (lucide-static v1.34.0, ISC License) -->
+            <svg class="icon search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+            <input id="run-search-input" class="sidebar-search-input" type="search" placeholder="搜索研究历史..." aria-label="搜索研究历史">
+          </div>
+          <div class="sidebar-pills" role="tablist" aria-label="筛选状态">
+            <button type="button" class="sidebar-pill active" data-filter="all">全部</button>
+            <button type="button" class="sidebar-pill" data-filter="completed">已完成</button>
+            <button type="button" class="sidebar-pill" data-filter="active">进行中</button>
           </div>
         </div>
 
@@ -83,12 +103,71 @@
           <header class="overview-hero">
             <p class="eyebrow">Workbench · 01</p>
             <h1>从一个问题开始</h1>
-            <p class="overview-lede">对话提问，或直接新建研究。</p>
+            <p class="overview-lede">对话提问，或直接新建研究。全流程多智能体协作与本地证据核验。</p>
             <div class="overview-actions">
               <button class="primary-button" data-open-task type="button">新建研究</button>
               <a class="quiet-button overview-link" href="#/chat">去对话提问</a>
+              <a class="quiet-button overview-link" href="#/library">浏览资料库</a>
             </div>
           </header>
+
+          <div class="overview-kpi-grid">
+            <div class="overview-kpi-card">
+              <div class="overview-kpi-head">
+                <span class="overview-kpi-title">累计研究任务</span>
+                <span id="overview-kpi-run-badge" class="overview-kpi-badge">— 成功率</span>
+              </div>
+              <strong id="overview-kpi-runs" class="overview-kpi-val">—</strong>
+              <div class="overview-kpi-sub" id="overview-kpi-runs-sub">正在统计任务…</div>
+            </div>
+            <div class="overview-kpi-card">
+              <div class="overview-kpi-head">
+                <span class="overview-kpi-title">知识库资产</span>
+                <span id="overview-kpi-lib-badge" class="overview-kpi-badge">问答就绪</span>
+              </div>
+              <strong id="overview-kpi-docs" class="overview-kpi-val">—</strong>
+              <div class="overview-kpi-sub" id="overview-kpi-docs-sub">文档与论文收录</div>
+            </div>
+            <div class="overview-kpi-card">
+              <div class="overview-kpi-head">
+                <span class="overview-kpi-title">Token 消耗总计</span>
+                <span id="overview-kpi-token-badge" class="overview-kpi-badge">推理用量</span>
+              </div>
+              <strong id="overview-kpi-tokens" class="overview-kpi-val">—</strong>
+              <div class="overview-kpi-sub" id="overview-kpi-tokens-sub">计算吞吐监控</div>
+            </div>
+            <div class="overview-kpi-card">
+              <div class="overview-kpi-head">
+                <span class="overview-kpi-title">推理引擎状态</span>
+                <span id="overview-kpi-health-badge" class="overview-kpi-badge">健康就绪</span>
+              </div>
+              <strong id="overview-kpi-model" class="overview-kpi-val">—</strong>
+              <div class="overview-kpi-sub" id="overview-kpi-model-sub">活跃推理模型</div>
+            </div>
+          </div>
+
+          <div class="overview-charts-grid">
+            <section class="overview-chart-card" aria-label="研究任务全景分布">
+              <div class="section-heading">
+                <div>
+                  <span class="eyebrow">Analytics</span>
+                  <h2>研究任务状态分布</h2>
+                </div>
+                <a class="count-label" href="#/research">进入研究</a>
+              </div>
+              <div id="overview-task-chart"></div>
+            </section>
+            <section class="overview-chart-card" aria-label="知识库构成">
+              <div class="section-heading">
+                <div>
+                  <span class="eyebrow">Corpus</span>
+                  <h2>知识资产格式与来源</h2>
+                </div>
+                <a class="count-label" href="#/library">管理资料</a>
+              </div>
+              <div id="overview-corpus-chart"></div>
+            </section>
+          </div>
 
           <div class="overview-grid">
             <section class="overview-card" aria-label="系统状态">
@@ -188,11 +267,55 @@
             <div><span>当前知识库</span><strong id="library-index-status">—</strong></div>
             <div><span>正文字符</span><strong id="library-characters">—</strong></div><div><span>数据量</span><strong id="library-size">—</strong></div><div><span>来源分类</span><strong id="library-sources">—</strong></div>
           </section>
+          <div class="library-charts-grid" id="library-charts-grid">
+            <section class="library-chart-card" aria-label="来源与介质分布">
+              <div class="section-heading">
+                <div>
+                  <span class="eyebrow">Composition</span>
+                  <h2>来源与格式构成</h2>
+                </div>
+              </div>
+              <div id="library-source-donut"></div>
+            </section>
+            <section class="library-chart-card" aria-label="篇幅深度分布">
+              <div class="section-heading">
+                <div>
+                  <span class="eyebrow">Distribution</span>
+                  <h2>文档篇幅深度分布</h2>
+                </div>
+              </div>
+              <div id="library-length-histogram"></div>
+            </section>
+            <section class="library-chart-card" aria-label="知识分块索引健康">
+              <div class="section-heading">
+                <div>
+                  <span class="eyebrow">Integrity</span>
+                  <h2>知识分块与索引健康</h2>
+                </div>
+              </div>
+              <div id="library-chunk-health"></div>
+            </section>
+            <section class="library-chart-card" aria-label="文献时序分布">
+              <div class="section-heading">
+                <div>
+                  <span class="eyebrow">Timeline</span>
+                  <h2>文献发表时序分布</h2>
+                </div>
+              </div>
+              <div id="library-year-chart"></div>
+            </section>
+          </div>
           <section class="library-workspace" aria-label="资料总览">
             <div class="section-heading library-workspace-heading"><div><h2>资料总览</h2><p id="library-result-summary">正在读取资料…</p></div><span id="library-manifest" class="count-label"></span></div>
             <nav class="library-subnav" aria-label="资料库功能"><button class="library-tab active" data-library-tab="documents" type="button" aria-selected="true">我的资料</button><button class="library-tab" data-library-tab="papers" type="button" aria-selected="false">论文获取</button></nav>
           </section>
           <section id="library-documents-panel" class="library-panel" aria-label="资料列表">
+            <div class="library-filter-pills" id="library-filter-pills" role="tablist" aria-label="快速筛选资料分类">
+              <button type="button" class="library-pill active" data-pill-filter="all">全部资料 <span class="library-pill-count" id="pill-count-all">217</span></button>
+              <button type="button" class="library-pill" data-pill-filter="pdf">PDF 文档 <span class="library-pill-count" id="pill-count-pdf">206</span></button>
+              <button type="button" class="library-pill" data-pill-filter="paper">学术论文 <span class="library-pill-count" id="pill-count-paper">11</span></button>
+              <button type="button" class="library-pill" data-pill-filter="ready">已索引可用 <span class="library-pill-count" id="pill-count-ready">182</span></button>
+            </div>
             <div class="library-toolbar"><input id="library-search" type="search" placeholder="搜索标题、作者、正文、DOI 或 arXiv ID" aria-label="搜索资料"><select id="library-status" aria-label="按状态筛选"><option value="">全部状态</option><option value="ready">正文可用</option><option value="metadata">仅元数据</option><option value="processing">处理中</option><option value="failed">处理失败</option></select></div>
             <div id="library-list" class="library-list"></div>
             <button id="library-load-more" class="quiet-button library-load-more" type="button" hidden>加载更多</button>
@@ -350,11 +473,13 @@
             <section>
               <span>模型用量</span>
               <strong id="token-value">0 tokens</strong>
+              <div id="token-sparkbar" class="summary-card-chart"></div>
               <small id="budget-state"></small>
             </section>
             <section>
               <span>检索轮次</span>
               <strong id="retrieval-value">0 / 0</strong>
+              <div id="retrieval-sparkbar" class="summary-card-chart"></div>
               <small id="tool-value"></small>
             </section>
             <section>
@@ -374,6 +499,25 @@
               <span class="skeleton-line" style="width: 82%"></span>
               <span class="skeleton-line" style="width: 96%"></span>
               <span class="skeleton-line" style="width: 64%"></span>
+            </div>
+            <div id="document-toolbar" class="document-toolbar" hidden>
+              <div class="doc-toolbar-left">
+                <span class="doc-badge">交付成果</span>
+                <span class="doc-sep">/</span>
+                <span id="doc-meta-stats" class="doc-stats">正在统计…</span>
+              </div>
+              <div class="doc-toolbar-actions">
+                <button type="button" id="doc-copy-markdown" class="doc-action-btn" title="复制全文 Markdown">
+                  <!-- Icon: copy (lucide-static v1.34.0, ISC License) -->
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                  <span>复制全文</span>
+                </button>
+                <button type="button" id="doc-download-markdown" class="doc-action-btn" title="下载 Markdown 文件">
+                  <!-- Icon: download (lucide-static v1.34.0, ISC License) -->
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+                  <span>下载 .md</span>
+                </button>
+              </div>
             </div>
             <article id="answer-content" class="answer-content" hidden></article>
             <div id="answer-empty" class="panel-empty" hidden>

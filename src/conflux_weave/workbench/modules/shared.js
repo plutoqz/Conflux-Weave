@@ -3,6 +3,118 @@
 
 export const $ = (selector) => document.querySelector(selector);
 
+export function applyTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme);
+  const sunIcon = document.querySelector("#theme-toggle .icon-sun");
+  const moonIcon = document.querySelector("#theme-toggle .icon-moon");
+  if (theme === "dark") {
+    sunIcon?.setAttribute("hidden", "");
+    moonIcon?.removeAttribute("hidden");
+  } else {
+    sunIcon?.removeAttribute("hidden");
+    moonIcon?.setAttribute("hidden", "");
+  }
+}
+
+export function initTheme() {
+  const saved = localStorage.getItem("cw_theme");
+  const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const initialTheme = saved || (prefersDark ? "dark" : "light");
+  applyTheme(initialTheme);
+
+  const toggle = $("#theme-toggle");
+  if (toggle) {
+    toggle.addEventListener("click", () => {
+      const current = document.documentElement.getAttribute("data-theme") || "light";
+      const next = current === "dark" ? "light" : "dark";
+      applyTheme(next);
+      localStorage.setItem("cw_theme", next);
+    });
+  }
+
+  if (window.matchMedia) {
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
+      if (!localStorage.getItem("cw_theme")) {
+        applyTheme(e.matches ? "dark" : "light");
+      }
+    });
+  }
+}
+
+function highlightCode(rawCode, lang) {
+  const normLang = (lang || "").toLowerCase().trim();
+  const escapeHtml = (str) =>
+    str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+  if (!normLang || /^(text|plain|txt|log)$/.test(normLang)) {
+    return escapeHtml(rawCode);
+  }
+
+  let commentPattern = null;
+  let kwPattern = null;
+
+  if (/^(javascript|js|typescript|ts)$/.test(normLang)) {
+    commentPattern = /\/\/[^\n]*|\/\*[\s\S]*?\*\//;
+    kwPattern = /\b(const|let|var|function|return|if|else|for|while|import|export|from|class|extends|async|await|try|catch|finally|throw|new|this|typeof|instanceof|switch|case|default|break|continue|yield|null|undefined|true|false)\b/;
+  } else if (/^(python|py)$/.test(normLang)) {
+    commentPattern = /#[^\n]*/;
+    kwPattern = /\b(def|class|return|if|elif|else|for|while|import|from|as|try|except|finally|raise|with|lambda|yield|async|await|pass|None|True|False|is|not|in|and|or|self)\b/;
+  } else if (/^(json)$/.test(normLang)) {
+    kwPattern = /\b(true|false|null)\b/;
+  } else if (/^(bash|sh|shell|zsh)$/.test(normLang)) {
+    commentPattern = /#[^\n]*/;
+    kwPattern = /\b(if|then|else|elif|fi|case|esac|for|while|until|do|done|in|function|return|exit|local|export)\b/;
+  } else if (/^(sql)$/.test(normLang)) {
+    commentPattern = /--[^\n]*|\/\*[\s\S]*?\*\//;
+    kwPattern = /\b(select|from|where|insert|into|update|delete|create|table|drop|alter|index|join|inner|left|right|full|on|group|by|order|limit|offset|having|union|all|distinct|as|and|or|not|null|is|in|values)\b/i;
+  }
+
+  const parts = [];
+  if (commentPattern) parts.push(`(?<cmt>${commentPattern.source})`);
+  parts.push('(?<str>"[^"\\\\]*(?:\\\\.[^"\\\\]*)*"|\'[^\'\\\\]*(?:\\\\.[^\'\\\\]*)*\'|`[^`\\\\]*(?:\\\\.[^`\\\\]*)*`)');
+  if (kwPattern) parts.push(`(?<kw>${kwPattern.source})`);
+  parts.push('(?<num>\\b\\d+(?:\\.\\d+)?\\b)');
+
+  let combinedRegex;
+  try {
+    combinedRegex = new RegExp(parts.join("|"), "gm");
+  } catch {
+    return escapeHtml(rawCode);
+  }
+
+  let html = "";
+  let lastIndex = 0;
+  for (const match of rawCode.matchAll(combinedRegex)) {
+    const idx = match.index;
+    if (idx > lastIndex) {
+      html += escapeHtml(rawCode.slice(lastIndex, idx));
+    }
+    const val = match[0];
+    const groups = match.groups || {};
+    if (groups.cmt) {
+      html += `<span class="token-cmt">${escapeHtml(val)}</span>`;
+    } else if (groups.str) {
+      if (normLang === "json" && /:\s*$/.test(rawCode.slice(idx + val.length, idx + val.length + 5))) {
+        html += `<span class="token-prop">${escapeHtml(val)}</span>`;
+      } else {
+        html += `<span class="token-str">${escapeHtml(val)}</span>`;
+      }
+    } else if (groups.kw) {
+      html += `<span class="token-kw">${escapeHtml(val)}</span>`;
+    } else if (groups.num) {
+      html += `<span class="token-num">${escapeHtml(val)}</span>`;
+    } else {
+      html += escapeHtml(val);
+    }
+    lastIndex = idx + val.length;
+  }
+  if (lastIndex < rawCode.length) {
+    html += escapeHtml(rawCode.slice(lastIndex));
+  }
+  return html;
+}
+
+
 export const stateLabels = {
   pending: "等待处理",
   working: "研究中",
@@ -164,11 +276,45 @@ export function renderAnswer(node, content, mediaType) {
   const flushCallout = () => { if (callout) { body.append(callout); callout = null; } };
   const flushCode = () => {
     if (!code) return;
+    const wrapper = document.createElement("div");
+    wrapper.className = "code-block";
+    const header = document.createElement("div");
+    header.className = "code-block-header";
+    const langSpan = document.createElement("span");
+    langSpan.className = "code-lang";
+    langSpan.textContent = code.lang || "code";
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "code-copy-btn";
+    copyBtn.type = "button";
+    copyBtn.title = "复制代码";
+    copyBtn.setAttribute("aria-label", "复制代码");
+    copyBtn.innerHTML = '<svg class="icon icon-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg><svg class="icon icon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden><polyline points="20 6 9 17 4 12"/></svg><span>复制</span>';
+    const fullCode = code.lines.join("\n");
+    copyBtn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(fullCode);
+        copyBtn.querySelector(".icon-copy")?.setAttribute("hidden", "");
+        copyBtn.querySelector(".icon-check")?.removeAttribute("hidden");
+        const span = copyBtn.querySelector("span");
+        if (span) span.textContent = "已复制";
+        copyBtn.classList.add("copied");
+        setTimeout(() => {
+          copyBtn.querySelector(".icon-copy")?.removeAttribute("hidden");
+          copyBtn.querySelector(".icon-check")?.setAttribute("hidden", "");
+          if (span) span.textContent = "复制";
+          copyBtn.classList.remove("copied");
+        }, 2000);
+      } catch (err) {
+        showToast("复制失败");
+      }
+    });
+    header.append(langSpan, copyBtn);
     const pre = document.createElement("pre");
     const codeNode = document.createElement("code");
-    codeNode.textContent = code.lines.join("\n");
+    codeNode.innerHTML = highlightCode(fullCode, code.lang);
     pre.append(codeNode);
-    body.append(pre);
+    wrapper.append(header, pre);
+    body.append(wrapper);
     code = null;
   };
   const parseTableRow = (line) => {
@@ -203,7 +349,7 @@ export function renderAnswer(node, content, mediaType) {
     const line = lines[lineIndex];
     if (line.startsWith("```")) {
       flushParagraph(); flushList(); flushQuote(); flushCallout(); flushTable();
-      if (code) flushCode(); else code = { lines: [] };
+      if (code) flushCode(); else code = { lang: line.slice(3).trim(), lines: [] };
       continue;
     }
     if (code) { code.lines.push(line); continue; }
@@ -295,6 +441,7 @@ export function renderAnswer(node, content, mediaType) {
       const link = document.createElement("a");
       link.href = `#${heading.id}`;
       link.textContent = heading.textContent;
+      link.title = heading.textContent;
       link.addEventListener("click", (event) => {
         event.preventDefault();
         document.getElementById(heading.id)?.scrollIntoView({ behavior: "smooth", block: "start" });

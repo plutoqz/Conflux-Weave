@@ -33,3 +33,8 @@ var/*
 *.sqlite3
 *.db
 *.log
+
+# Temporary and local tool directories
+tmp/
+.workbuddy/
+.zcode/

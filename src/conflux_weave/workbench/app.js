@@ -3,6 +3,7 @@ import {
   api,
   familyLabels,
   formatDate,
+  initTheme,
   modeLabels,
   renderAnswer,
   showToast,
@@ -13,6 +14,7 @@ import "./modules/overview.js";
 import "./modules/chat.js";
 import "./modules/library.js?v=v0.3-library-ux-3";
 import "./modules/settings.js";
+import { createSparkbar } from "./modules/charts.js";
 
 const state = {
   bootstrapped: false,
@@ -34,14 +36,42 @@ const state = {
 const INSPECTOR_MEDIA = "(min-width: 1024px)";
 const inspectorMedia = window.matchMedia(INSPECTOR_MEDIA);
 
+let runFilter = "all";
+let runSearchQuery = "";
+
+function filterRuns(runs) {
+  return runs.filter((run) => {
+    if (runFilter === "completed" && run.state !== "completed" && run.state !== "complete") return false;
+    if (runFilter === "active" && ["completed", "complete", "cancelled", "failed", "expired"].includes(run.state)) return false;
+    if (runSearchQuery) {
+      const q = (run.query || "").toLowerCase();
+      const m = (run.status_message || "").toLowerCase();
+      const s = runSearchQuery.toLowerCase();
+      if (!q.includes(s) && !m.includes(s)) return false;
+    }
+    return true;
+  });
+}
+
 function makeRunItem(run) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = `run-item${state.selected?.run_id === run.run_id ? " selected" : ""}`;
   button.dataset.runId = run.run_id;
+
+  const header = document.createElement("div");
+  header.className = "run-item-top";
+
+  const dot = document.createElement("span");
+  dot.className = `run-status-dot ${run.state}`;
+  dot.setAttribute("aria-hidden", "true");
+
   const title = document.createElement("strong");
+  title.className = "run-item-title";
   title.textContent = run.query || "未命名研究";
   button.title = run.query || "未命名研究";
+  header.append(dot, title);
+
   const meta = document.createElement("span");
   meta.className = "item-meta";
   const runState = document.createElement("span");
@@ -50,16 +80,28 @@ function makeRunItem(run) {
   const date = document.createElement("span");
   date.textContent = formatDate(run.updated_at);
   meta.append(runState, date);
-  button.append(title, meta);
+
+  button.append(header, meta);
   button.addEventListener("click", () => selectRun(run.run_id));
   return button;
 }
 
 function renderRuns() {
   const list = $("#run-list");
-  list.replaceChildren(...state.runs.map(makeRunItem));
-  $("#load-more").hidden = !state.nextCursor;
+  const filtered = filterRuns(state.runs);
+  list.replaceChildren(...filtered.map(makeRunItem));
+  $("#load-more").hidden = !state.nextCursor || Boolean(runSearchQuery) || runFilter !== "all";
 }
+
+function updateSelectedRun(runId) {
+  const list = $("#run-list");
+  if (!list) return;
+  list.querySelectorAll(".run-item").forEach((btn) => {
+    btn.classList.toggle("selected", btn.dataset.runId === runId);
+  });
+}
+
+const artifactCache = new Map();
 
 async function loadRuns({ append = false } = {}) {
   const cursor = append && state.nextCursor ? `&cursor=${encodeURIComponent(state.nextCursor)}` : "";
@@ -102,13 +144,40 @@ function renderRun(run, prevRun = null) {
   $("#progress-bar").style.width = `${total ? Math.min(100, completed / total * 100) : 0}%`;
   const budget = run.budget || {};
   const context = run.research_context || {};
-  const tokens = (budget.input_tokens_used || 0) + (budget.output_tokens_used || 0);
+  const inputTokens = budget.input_tokens_used || 0;
+  const outputTokens = budget.output_tokens_used || 0;
+  const tokens = inputTokens + outputTokens;
   const prevTokens = (prevBudget.input_tokens_used || 0) + (prevBudget.output_tokens_used || 0);
   const tokenLimit = (budget.input_tokens_limit || 0) + (budget.output_tokens_limit || 0);
   $("#token-value").textContent = `${tokens.toLocaleString("zh-CN")} tokens`;
   $("#budget-state").textContent = tokenLimit ? `上限 ${tokenLimit.toLocaleString("zh-CN")}` : "未记录上限";
+
+  const tokenSpark = $("#token-sparkbar");
+  if (tokenSpark) {
+    tokenSpark.replaceChildren(createSparkbar({
+      segments: [
+        { label: "输入", value: inputTokens, color: "var(--seance)" },
+        { label: "输出", value: outputTokens, color: "var(--moss)" },
+      ],
+      height: 5,
+    }));
+  }
+
   $("#retrieval-value").textContent = `${budget.retrieval_rounds_used || 0} / ${budget.retrieval_rounds_limit || 0}`;
   $("#tool-value").textContent = `工具调用 ${budget.tool_calls_used || 0} / ${budget.tool_calls_limit || 0}`;
+
+  const retrievalSpark = $("#retrieval-sparkbar");
+  if (retrievalSpark) {
+    const roundsUsed = budget.retrieval_rounds_used || 0;
+    const toolsUsed = budget.tool_calls_used || 0;
+    retrievalSpark.replaceChildren(createSparkbar({
+      segments: [
+        { label: "轮次", value: roundsUsed, color: "var(--moss-deep)" },
+        { label: "调用", value: toolsUsed, color: "var(--report-purple)" },
+      ],
+      height: 5,
+    }));
+  }
   $("#cost-value").textContent = budget.estimated_cost_limit && budget.estimated_cost_limit !== "unavailable"
     ? budget.estimated_cost_limit : "未提供";
   $("#cost-state").textContent = budget.cost_enforcement === "unavailable" ? "未启用金额强制" : budget.cost_enforcement;
@@ -138,7 +207,7 @@ function renderRun(run, prevRun = null) {
   $("#retry-run").hidden = run.state !== "needs_attention";
   $("#fail-run").hidden = run.state !== "needs_attention";
   renderBoundaries(run.delivery, run.error);
-  renderRuns();
+  updateSelectedRun(run.run_id);
 }
 
 const boundaryKinds = {
@@ -168,18 +237,93 @@ function renderBoundaries(delivery, error) {
   section.hidden = !items.length;
 }
 
+function bindDocumentToolbar(run, content, evidenceIds) {
+  const toolbar = $("#document-toolbar");
+  if (!toolbar || !content) return;
+  toolbar.hidden = false;
+  const wordCount = (content.match(/[\u4e00-\u9fa5]|\b[a-zA-Z]+\b/g) || []).length;
+  const readMin = Math.max(1, Math.round(wordCount / 280));
+  const evCount = evidenceIds.length;
+  const stats = $("#doc-meta-stats");
+  if (stats) {
+    stats.textContent = `约 ${wordCount.toLocaleString("zh-CN")} 字 · 读完约 ${readMin} 分钟 · ${evCount} 条证据`;
+  }
+
+  const copyBtn = $("#doc-copy-markdown");
+  if (copyBtn) {
+    copyBtn.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(content);
+        const orig = copyBtn.innerHTML;
+        copyBtn.innerHTML = `
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color:#10b981;"><polyline points="20 6 9 17 4 12"/></svg>
+          <span style="color:#10b981;">已复制全文</span>
+        `;
+        setTimeout(() => { copyBtn.innerHTML = orig; }, 2000);
+      } catch {}
+    };
+  }
+
+  const dlBtn = $("#doc-download-markdown");
+  if (dlBtn) {
+    dlBtn.onclick = () => {
+      const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const safeName = (run.query || "research-report").replace(/[/\\?%*:|"<>]/g, "_").slice(0, 40);
+      a.href = url;
+      a.download = `${safeName}.md`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    };
+  }
+}
+
 async function loadDelivery(run) {
-  $("#answer-loading").hidden = false;
-  $("#answer-content").hidden = true;
-  $("#answer-empty").hidden = true;
-  const evidenceIds = run.delivery?.evidence_ids || [];
-  await loadEvidence(run.run_id, evidenceIds);
+  const answer = $("#answer-content");
+  const loading = $("#answer-loading");
+  const empty = $("#answer-empty");
+
   const artifactIds = run.delivery?.artifact_ids || [];
   if (!artifactIds.length) {
-    $("#answer-loading").hidden = true;
-    $("#answer-empty").hidden = false;
+    loading.hidden = true;
+    answer.hidden = true;
+    answer.classList.remove("loading-transition");
+    empty.hidden = false;
+    $("#document-toolbar")?.setAttribute("hidden", "");
     return;
   }
+
+  // Instant cache hit for completed runs: zero network latency, zero layout shift, zero flicker
+  const cacheKey = `${run.run_id}:${artifactIds.join(",")}`;
+  const cached = artifactCache.get(cacheKey);
+  if (cached) {
+    loading.hidden = true;
+    empty.hidden = true;
+    renderAnswer(answer, cached.content, cached.mediaType);
+    answer.hidden = false;
+    answer.classList.remove("loading-transition");
+    const evidenceIds = run.delivery?.evidence_ids || [];
+    loadEvidence(run.run_id, evidenceIds);
+    bindDocumentToolbar(run, cached.content, evidenceIds);
+    return;
+  }
+
+  // Non-collapsing transition: keep current content visible while dimmed during fetch
+  if (!answer.hidden && answer.children.length > 0) {
+    answer.classList.add("loading-transition");
+    loading.hidden = false;
+  } else {
+    loading.hidden = false;
+    answer.hidden = true;
+  }
+  empty.hidden = true;
+
+  const evidenceIds = run.delivery?.evidence_ids || [];
+  loadEvidence(run.run_id, evidenceIds);
+
   try {
     const artifacts = await Promise.all(artifactIds.map((artifactId) =>
       api(`/api/v1/runs/${encodeURIComponent(run.run_id)}/artifacts/${encodeURIComponent(artifactId)}/content`)
@@ -190,15 +334,21 @@ async function loadDelivery(run) {
       const parsed = JSON.parse(content);
       content = parsed.answer || parsed.report || JSON.stringify(parsed, null, 2);
     }
-    const answer = $("#answer-content");
+    if (run.is_terminal) {
+      artifactCache.set(cacheKey, { content, mediaType: report.artifact.media_type });
+    }
     renderAnswer(answer, content, report.artifact.media_type);
     answer.hidden = false;
+    bindDocumentToolbar(run, content, evidenceIds);
   } catch (error) {
-    $("#answer-empty").hidden = false;
+    answer.hidden = true;
+    empty.hidden = false;
+    $("#document-toolbar")?.setAttribute("hidden", "");
     $("#answer-empty strong").textContent = "交付结果暂时不可读";
     $("#answer-empty span").textContent = error.message;
   } finally {
-    $("#answer-loading").hidden = true;
+    loading.hidden = true;
+    answer.classList.remove("loading-transition");
   }
 }
 
@@ -612,6 +762,9 @@ inspectorMedia.addEventListener("change", (event) => {
 });
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !$("#evidence-inspector").hidden) closeInspector();
+  if (event.key === "[" && !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName)) {
+    toggleSidebar();
+  }
 });
 document.addEventListener("click", (event) => {
   const citation = event.target.closest(".citation-link");
@@ -663,5 +816,25 @@ registerView("research", {
   },
 });
 
+function initRunFilters() {
+  const searchInput = $("#run-search-input");
+  if (searchInput) {
+    searchInput.addEventListener("input", (e) => {
+      runSearchQuery = e.target.value.trim();
+      renderRuns();
+    });
+  }
+  document.querySelectorAll(".sidebar-pill").forEach((pill) => {
+    pill.addEventListener("click", () => {
+      document.querySelectorAll(".sidebar-pill").forEach((p) => p.classList.remove("active"));
+      pill.classList.add("active");
+      runFilter = pill.dataset.filter || "all";
+      renderRuns();
+    });
+  });
+}
+
+initTheme();
+initRunFilters();
 checkHealth().catch((error) => showToast(error.message));
 initRouter();
