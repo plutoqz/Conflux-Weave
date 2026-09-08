@@ -1,0 +1,279 @@
+{
+  "schema_version": "conflux-weave.fixture-manifest.v1",
+  "generated_at": "2026-09-08T11:20:00Z",
+  "fixtures": [
+    {
+      "category": "normal_embedded_image_and_caption",
+      "description": "Standard embedded bitmap with explicit caption, no transparent mask, standard colorspace.",
+      "filename": "2606.13053.pdf",
+      "file_path": "F:\\vscode\\AcademyHunter\\academy_hunter\\papers\\2606.13053.pdf",
+      "sha256": "9a1b15c0619641186594377d54c367d8271c2be3858fd56dcb975d42cee27521",
+      "size_bytes": 2400462,
+      "page_count": 15,
+      "page_width": 612.0,
+      "page_height": 792.0,
+      "key_pages": [
+        5,
+        12
+      ],
+      "key_assets": [
+        {
+          "page": 5,
+          "xref": 425,
+          "asset_kind": "embedded_image",
+          "width_px": 256,
+          "height_px": 158,
+          "bbox": {
+            "x": 141.7,
+            "y": 100.53,
+            "width": 59.16,
+            "height": 36.51
+          },
+          "caption": "Figure 1: Entity-grounded EA-WM overview.",
+          "expected_extraction": "extracted",
+          "expected_bytes": "raw_image_bytes"
+        },
+        {
+          "page": 12,
+          "xref": 441,
+          "asset_kind": "embedded_image",
+          "width_px": 1833,
+          "height_px": 712,
+          "bbox": {
+            "x": 86.04,
+            "y": 279.72,
+            "width": 439.91,
+            "height": 170.85
+          },
+          "caption": "Figure 2: Wine-rack H=20 online PPO proposal success rates. The top-2 verifier hybrid reaches",
+          "expected_extraction": "extracted",
+          "expected_bytes": "raw_image_bytes"
+        }
+      ],
+      "allowed_failures": []
+    },
+    {
+      "category": "duplicate_image_across_pages",
+      "description": "Identical image appearing on multiple pages (header/footer logo), content hash match.",
+      "filename": "2606.07299.pdf",
+      "file_path": "F:\\vscode\\AcademyHunter\\academy_hunter\\papers\\2606.07299.pdf",
+      "sha256": "f7a784f25d641916390227816d7b1bed171dcd20c9829c19118fc5db15a7b707",
+      "size_bytes": 6090444,
+      "page_count": 26,
+      "page_width": 612.0,
+      "page_height": 792.0,
+      "key_pages": [
+        1,
+        2
+      ],
+      "key_assets": [
+        {
+          "page": 1,
+          "xref": 120,
+          "asset_kind": "embedded_image",
+          "width_px": 383,
+          "height_px": 58,
+          "bbox": {
+            "x": 108.0,
+            "y": 27.0,
+            "width": 91.84,
+            "height": 13.95
+          },
+          "caption": null,
+          "expected_extraction": "extracted",
+          "expected_bytes": "raw_image_bytes"
+        },
+        {
+          "page": 2,
+          "xref": 120,
+          "asset_kind": "embedded_image",
+          "width_px": 383,
+          "height_px": 58,
+          "bbox": {
+            "x": 108.0,
+            "y": 27.0,
+            "width": 91.84,
+            "height": 13.95
+          },
+          "caption": null,
+          "expected_extraction": "duplicate",
+          "duplicate_of": "page 1 asset",
+          "expected_bytes": "deduplicated_artifact_ref"
+        }
+      ],
+      "allowed_failures": [
+        "duplicate_content"
+      ]
+    },
+    {
+      "category": "inline_mask_or_special_colorspace",
+      "description": "Soft mask (smask alpha channel) or Indexed color palette, tests transparency & palette.",
+      "filename": "2606.08146.pdf",
+      "file_path": "F:\\vscode\\AcademyHunter\\academy_hunter\\papers\\2606.08146.pdf",
+      "sha256": "671c2497092995b78e491cb767c82011d94c3ea206ed6e3f758320375cbc4c62",
+      "size_bytes": 1026242,
+      "page_count": 16,
+      "page_width": 612.0,
+      "page_height": 792.0,
+      "key_pages": [
+        6,
+        13
+      ],
+      "key_assets": [
+        {
+          "page": 6,
+          "xref": 678,
+          "asset_kind": "embedded_image",
+          "width_px": 154,
+          "height_px": 389,
+          "smask_xref": 813,
+          "bbox": {
+            "x": 503.86,
+            "y": 113.3,
+            "width": 36.88,
+            "height": 93.34
+          },
+          "caption": "Figure 1. Overall architecture of the SAGE framework.",
+          "expected_extraction": "extracted",
+          "notes": "Has smask 813 (alpha mask). Extraction preserves alpha or falls back to rendered_region."
+        },
+        {
+          "page": 13,
+          "xref": 726,
+          "asset_kind": "embedded_image",
+          "width_px": 1724,
+          "height_px": 1437,
+          "colorspace": "Indexed",
+          "bbox": {
+            "x": 92.55,
+            "y": 510.38,
+            "width": 165.46,
+            "height": 137.94
+          },
+          "caption": "Figure 4.",
+          "expected_extraction": "extracted",
+          "notes": "Indexed color palette properly decoded to RGB."
+        }
+      ],
+      "allowed_failures": [
+        "unsupported_color_space"
+      ]
+    },
+    {
+      "category": "vector_or_composite_figure",
+      "description": "Composite or vector figure combining drawings and embedded sub-images, tests region render.",
+      "filename": "2606.08049.pdf",
+      "file_path": "F:\\vscode\\AcademyHunter\\academy_hunter\\papers\\2606.08049.pdf",
+      "sha256": "c67e6fe9c33c665bd6f877b07b5d206fc5c0ebeed1cd8f8482980ed273ca8393",
+      "size_bytes": 2366622,
+      "page_count": 38,
+      "page_width": 612.0,
+      "page_height": 792.0,
+      "key_pages": [
+        14,
+        16
+      ],
+      "key_assets": [
+        {
+          "page": 14,
+          "xref": 664,
+          "asset_kind": "embedded_image",
+          "width_px": 1617,
+          "height_px": 371,
+          "bbox": {
+            "x": 111.96,
+            "y": 120.18,
+            "width": 388.07,
+            "height": 89.07
+          },
+          "caption": "Figure 3: Header-cell generalization for the GitLab merge-request lifecycle example.",
+          "expected_extraction": "extracted",
+          "notes": "Component of Figure 3. Complete figure can also be rendered as rendered_region."
+        }
+      ],
+      "allowed_failures": [
+        "embedded_image_unavailable"
+      ]
+    },
+    {
+      "category": "scanned_or_low_text_edge_case",
+      "description": "Low text density / resource-only images without page Do operator placement.",
+      "filename": "2607.02436.pdf",
+      "file_path": "F:\\vscode\\AcademyHunter\\academy_hunter\\papers\\2607.02436.pdf",
+      "sha256": "1f42486846dc2b197eb453fa1eb85a2a7b4c0752a91fde0aa7a4c2185fdbc9cc",
+      "size_bytes": 1335048,
+      "page_count": 23,
+      "page_width": 612.0,
+      "page_height": 792.0,
+      "key_pages": [
+        23
+      ],
+      "key_assets": [
+        {
+          "page": 23,
+          "xref": 113,
+          "asset_kind": "embedded_image",
+          "width_px": 945,
+          "height_px": 540,
+          "bbox": null,
+          "caption": null,
+          "expected_extraction": "degraded",
+          "expected_failure": "bbox_unavailable",
+          "notes": "Image exists in XObject resources but is not drawn directly via page Do operator."
+        }
+      ],
+      "allowed_failures": [
+        "bbox_unavailable",
+        "parent_segment_missing",
+        "scanned_page_detected"
+      ]
+    },
+    {
+      "category": "pure_scanned_page",
+      "description": "Synthetic pure scanned page fixture with 0 text characters and 1 full-page raster image.",
+      "filename": "sample_scanned_page.pdf",
+      "file_path": "tests\\fixtures\\multimodal\\sample_scanned_page.pdf",
+      "sha256": "47897e5c86c5b7b42e0e026690c4fb5a580cf4ef803250647b4746c01192b306",
+      "size_bytes": 1506536,
+      "page_count": 1,
+      "page_width": 595.0,
+      "page_height": 842.0,
+      "key_pages": [
+        1
+      ],
+      "key_assets": [
+        {
+          "page": 1,
+          "asset_kind": "scanned_page",
+          "expected_extraction": "extracted",
+          "expected_warnings": [
+            "scanned_page_detected",
+            "parent_segment_missing"
+          ]
+        }
+      ],
+      "allowed_failures": [
+        "scanned_page_detected",
+        "parent_segment_missing"
+      ]
+    },
+    {
+      "category": "text_only_negative_control",
+      "description": "100% text paper negative control with 0 images, tests zero-asset silent pass & no regression.",
+      "filename": "2606.08151.pdf",
+      "file_path": "F:\\vscode\\AcademyHunter\\academy_hunter\\papers\\2606.08151.pdf",
+      "sha256": "6cee7ec6bf01c44eb89c4212ac80e919240e39d408c3d052b8ad621b0ff12b46",
+      "size_bytes": 580277,
+      "page_count": 15,
+      "page_width": 612.0,
+      "page_height": 792.0,
+      "key_pages": [
+        1,
+        2,
+        3
+      ],
+      "key_assets": [],
+      "allowed_failures": []
+    }
+  ]
+}

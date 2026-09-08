@@ -94,6 +94,12 @@ class LocalArtifactStore:
         self._verify(path, digest)
         return path.read_bytes()
 
+    def read_bytes_by_id(self, artifact_id: str) -> bytes:
+        digest = artifact_id.removeprefix("artifact-sha256-")
+        path = self.path_for_digest(digest)
+        self._verify(path, digest)
+        return path.read_bytes()
+
     def path_for_digest(self, digest: str) -> Path:
         if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
             raise ValueError("digest must be a lowercase SHA-256 hex string")

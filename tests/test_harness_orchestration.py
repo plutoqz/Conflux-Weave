@@ -130,4 +130,5 @@ def test_durable_research_adapter_preserves_mode_and_rerun_key() -> None:
         "idempotency_key": "rerun:run-1:new",
         "parent_run_id": None,
         "follow_up_question": None,
+        "conversation_id": None,
     }

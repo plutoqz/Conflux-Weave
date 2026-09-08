@@ -1,0 +1,137 @@
+{
+  "benchmark_title": "pypdf vs PyMuPDF Read-Only Extraction Spike Benchmark",
+  "generated_at": "2026-09-08T11:20:00Z",
+  "environment": {
+    "python_version": "3.12.9",
+    "pymupdf_version": "1.27.2.3",
+    "pypdf_version": "6.14.2",
+    "os": "Windows"
+  },
+  "results": {
+    "normal": {
+      "file": "2606.13053.pdf",
+      "pages": 15,
+      "pypdf": {
+        "images_found": 5,
+        "bboxes_found": 0,
+        "total_bytes": 1630579,
+        "elapsed_sec": 0.3671,
+        "limitation": "No bounding boxes or page point positions available"
+      },
+      "pymupdf": {
+        "images_found": 5,
+        "unique_images": 5,
+        "bboxes_found": 5,
+        "masks_found": 0,
+        "total_bytes": 1769524,
+        "elapsed_sec": 0.3268,
+        "region_render_supported": true,
+        "sample_render_png_bytes": 18815
+      }
+    },
+    "duplicate": {
+      "file": "2606.07299.pdf",
+      "pages": 26,
+      "pypdf": {
+        "images_found": 50,
+        "bboxes_found": 0,
+        "total_bytes": 2814098,
+        "elapsed_sec": 1.8621,
+        "limitation": "Cannot detect page occurrence coordinates"
+      },
+      "pymupdf": {
+        "images_found": 50,
+        "unique_images": 16,
+        "bboxes_found": 56,
+        "masks_found": 48,
+        "total_bytes": 2453439,
+        "elapsed_sec": 1.7609,
+        "region_render_supported": true,
+        "sample_render_png_bytes": 3941
+      }
+    },
+    "masks_special": {
+      "file": "2606.08146.pdf",
+      "pages": 16,
+      "pypdf": {
+        "images_found": 8,
+        "bboxes_found": 0,
+        "total_bytes": 151672,
+        "elapsed_sec": 0.4001,
+        "limitation": "No awareness of soft masks (smask)"
+      },
+      "pymupdf": {
+        "images_found": 8,
+        "unique_images": 8,
+        "bboxes_found": 8,
+        "masks_found": 6,
+        "total_bytes": 148353,
+        "elapsed_sec": 0.2928,
+        "region_render_supported": true,
+        "sample_render_png_bytes": 9004
+      }
+    },
+    "drawings_vector": {
+      "file": "2606.08049.pdf",
+      "pages": 38,
+      "pypdf": {
+        "images_found": 14,
+        "bboxes_found": 0,
+        "total_bytes": 2206728,
+        "elapsed_sec": 0.8726,
+        "limitation": "Cannot inspect drawings or render composite regions"
+      },
+      "pymupdf": {
+        "images_found": 14,
+        "unique_images": 14,
+        "bboxes_found": 14,
+        "masks_found": 14,
+        "total_bytes": 1715040,
+        "elapsed_sec": 0.6807,
+        "region_render_supported": true,
+        "sample_render_png_bytes": 28867
+      }
+    },
+    "low_text": {
+      "file": "2607.02436.pdf",
+      "pages": 23,
+      "pypdf": {
+        "images_found": 115,
+        "bboxes_found": 0,
+        "total_bytes": 34410392,
+        "elapsed_sec": 15.105,
+        "limitation": "Severe performance degradation (15.1s) on complex XObject dictionaries"
+      },
+      "pymupdf": {
+        "images_found": 115,
+        "unique_images": 5,
+        "bboxes_found": 5,
+        "masks_found": 115,
+        "total_bytes": 7705598,
+        "elapsed_sec": 1.1278,
+        "region_render_supported": true,
+        "sample_render_png_bytes": 104816
+      }
+    },
+    "text_only": {
+      "file": "2606.08151.pdf",
+      "pages": 15,
+      "pypdf": {
+        "images_found": 0,
+        "bboxes_found": 0,
+        "total_bytes": 0,
+        "elapsed_sec": 0.1405
+      },
+      "pymupdf": {
+        "images_found": 0,
+        "unique_images": 0,
+        "bboxes_found": 0,
+        "masks_found": 0,
+        "total_bytes": 0,
+        "elapsed_sec": 0.0042,
+        "region_render_supported": false
+      }
+    }
+  },
+  "decision": "PyMuPDF selected as sole extraction engine for P2.0. pypdf retained only for legacy text segmentation in documents.py."
+}

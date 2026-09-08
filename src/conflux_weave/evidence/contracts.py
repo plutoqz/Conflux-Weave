@@ -45,6 +45,9 @@ class EvidenceRef:
     locator: dict[str, Any]
     quote: str
     extraction_method: str
+    modality: str = "text"
+    asset_id: str | None = None
+    artifact_ref: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

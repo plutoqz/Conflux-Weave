@@ -759,11 +759,11 @@ def build_deterministic_card_document(
     """Use validated Chinese evidence cards when Writer prose fails audit."""
     if not cards:
         return build_deterministic_document(objective, claims)
-    known = {claim.claim_id for claim in claims}
+    claim_by_id = {claim.claim_id: claim for claim in claims}
     used: set[str] = set()
     paragraphs: list[ReportParagraph] = []
     for card in cards:
-        claim_ids = tuple(item for item in card.claim_ids if item in known and item not in used)
+        claim_ids = tuple(item for item in card.claim_ids if item in claim_by_id and item not in used)
         if not claim_ids:
             continue
         used.update(claim_ids)
@@ -773,6 +773,9 @@ def build_deterministic_card_document(
             text = f"{text.rstrip('。')}。要点包括：{details}。"
         if card.scope_limits.strip():
             text += f" 适用边界：{card.scope_limits.strip().rstrip('。')}。"
+        claim_texts = "；".join(claim_by_id[cid].text for cid in claim_ids if cid in claim_by_id)
+        if claim_texts and claim_texts not in text:
+            text = f"{text} 原文声明：{claim_texts}。"
         paragraphs.append(ReportParagraph(text, claim_ids))
     paragraphs.extend(
         ReportParagraph(claim.text, (claim.claim_id,))

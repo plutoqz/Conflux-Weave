@@ -12,6 +12,7 @@ authors = [{ name = "Conflux-Weave contributors" }]
 dependencies = [
   "fastapi>=0.115,<1",
   "pypdf>=5,<7",
+  "pymupdf>=1.24,<2",
   "python-dotenv>=1,<2",
   "uvicorn>=0.34,<1",
   "lancedb>=0.22,<1",
@@ -31,8 +32,9 @@ dev = [
 packages = ["src/conflux_weave"]
 
 [tool.pytest.ini_options]
-addopts = "-ra"
+addopts = "-ra -o cache_dir=var/tmp/.pytest_cache"
 testpaths = ["tests"]
+pythonpath = ["src"]
 
 [tool.uv.sources]
 gpt-researcher = { git = "https://github.com/assafelovic/gpt-researcher" }

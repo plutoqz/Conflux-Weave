@@ -44,6 +44,8 @@ class ImportedDocument:
     segments_artifact: ArtifactRef
     segments: tuple[DocumentSegment, ...]
     media_type: str
+    assets_artifact: ArtifactRef | None = None
+    assets: tuple[Any, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,11 +57,24 @@ class DocumentReport:
 
 
 class LocalDocumentImporter:
-    def __init__(self, artifact_store: LocalArtifactStore, *, acquired_at: str | None = None) -> None:
+    def __init__(
+        self,
+        artifact_store: LocalArtifactStore,
+        *,
+        acquired_at: str | None = None,
+        extract_assets: bool = False,
+    ) -> None:
         self.artifact_store = artifact_store
         self.acquired_at = acquired_at or _utc_now()
+        self.extract_assets = extract_assets
 
-    def import_path(self, path: Path, *, producer_step_id: str = "step-document-import") -> ImportedDocument:
+    def import_path(
+        self,
+        path: Path,
+        *,
+        producer_step_id: str = "step-document-import",
+        extract_assets: bool | None = None,
+    ) -> ImportedDocument:
         if not path.is_file():
             raise FileNotFoundError(f"document not found: {path}")
         suffix = path.suffix.lower()
@@ -110,6 +125,25 @@ class LocalDocumentImporter:
             content_hash=f"sha256:{content_hash}",
             artifact_ref=source_artifact.artifact_id,
         )
+
+        assets_artifact = None
+        assets: tuple[Any, ...] = ()
+        should_extract = self.extract_assets if extract_assets is None else extract_assets
+        if suffix == ".pdf" and should_extract:
+            from conflux_weave.document_assets import PDFAssetExtractor
+
+            extractor = PDFAssetExtractor(self.artifact_store)
+            assets_manifest, assets_artifact = extractor.extract_document_assets(
+                raw,
+                document_id=document_id,
+                source_snapshot_id=snapshot.source_id,
+                source_artifact_id=source_artifact.artifact_id,
+                parent_segments=segments,
+                generated_at=self.acquired_at,
+                producer_step_id=producer_step_id,
+            )
+            assets = assets_manifest.assets
+
         snapshot_payload = {
             "schema_version": "conflux-weave.source-snapshot.v1",
             "source_id": snapshot.source_id,
@@ -120,6 +154,9 @@ class LocalDocumentImporter:
             "artifact_ref": snapshot.artifact_ref,
             "segments_artifact_ref": segments_artifact.artifact_id,
         }
+        if assets_artifact is not None:
+            snapshot_payload["assets_artifact_ref"] = assets_artifact.artifact_id
+
         snapshot_artifact = self.artifact_store.put_json(
             snapshot_payload,
             producer_step_id=producer_step_id,
@@ -133,6 +170,8 @@ class LocalDocumentImporter:
             segments_artifact=segments_artifact,
             segments=segments,
             media_type=media_type,
+            assets_artifact=assets_artifact,
+            assets=assets,
         )
 
     def build_report(

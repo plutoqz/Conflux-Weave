@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "conflux-weave.document-asset.v1",
+  "title": "DocumentAsset",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "asset_id",
+    "document_id",
+    "source_snapshot_id",
+    "page",
+    "asset_kind",
+    "artifact_ref",
+    "media_type",
+    "content_hash",
+    "width_px",
+    "height_px",
+    "bbox",
+    "coordinate_space",
+    "page_width",
+    "page_height",
+    "page_rotation",
+    "extraction_method",
+    "extraction_status"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "conflux-weave.document-asset.v1"
+    },
+    "asset_id": {
+      "type": "string",
+      "pattern": "^asset-sha256-[0-9a-f]{32}$"
+    },
+    "document_id": {
+      "type": "string"
+    },
+    "source_snapshot_id": {
+      "type": "string"
+    },
+    "page": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "asset_kind": {
+      "type": "string",
+      "enum": [
+        "embedded_image",
+        "rendered_region",
+        "scanned_page"
+      ]
+    },
+    "artifact_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "thumbnail_artifact_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "media_type": {
+      "type": "string",
+      "enum": [
+        "image/png",
+        "image/jpeg",
+        "image/webp"
+      ]
+    },
+    "content_hash": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "width_px": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "height_px": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "bbox": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "width": {
+          "type": "number",
+          "minimum": 0
+        },
+        "height": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "coordinate_space": {
+      "type": "string",
+      "const": "pdf_page_points_top_left"
+    },
+    "page_width": {
+      "type": "number",
+      "minimum": 0
+    },
+    "page_height": {
+      "type": "number",
+      "minimum": 0
+    },
+    "page_rotation": {
+      "type": "integer",
+      "enum": [
+        0,
+        90,
+        180,
+        270
+      ]
+    },
+    "caption": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "caption_locator": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "parent_segment_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "extraction_method": {
+      "type": "string"
+    },
+    "extraction_status": {
+      "type": "string",
+      "enum": [
+        "extracted",
+        "degraded",
+        "failed",
+        "duplicate"
+      ]
+    },
+    "duplicate_of_asset_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

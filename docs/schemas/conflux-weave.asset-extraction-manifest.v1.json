@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "conflux-weave.asset-extraction-manifest.v1",
+  "title": "AssetExtractionManifest",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "batch_id",
+    "extractor_name",
+    "extractor_version",
+    "config_hash",
+    "documents",
+    "total_assets",
+    "total_unique_contents",
+    "status_counts",
+    "started_at",
+    "completed_at",
+    "failures"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "conflux-weave.asset-extraction-manifest.v1"
+    },
+    "batch_id": {
+      "type": "string"
+    },
+    "extractor_name": {
+      "type": "string"
+    },
+    "extractor_version": {
+      "type": "string"
+    },
+    "config_hash": {
+      "type": "string"
+    },
+    "documents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "document_id",
+          "asset_count",
+          "status"
+        ],
+        "properties": {
+          "document_id": {
+            "type": "string"
+          },
+          "asset_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "manifest_artifact_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "total_assets": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "total_unique_contents": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "status_counts": {
+      "type": "object",
+      "required": [
+        "extracted",
+        "degraded",
+        "failed",
+        "duplicate"
+      ],
+      "properties": {
+        "extracted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "degraded": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "duplicate": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "started_at": {
+      "type": "string"
+    },
+    "completed_at": {
+      "type": "string"
+    },
+    "failures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "document_id",
+          "error"
+        ],
+        "properties": {
+          "document_id": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
