@@ -28,6 +28,7 @@ let paperItems = [];
 let paperSourceStates = [];
 let paperRequestedLimit = 20;
 let currentPillFilter = "all";
+const selectedDocuments = new Set();
 
 const STATUS_LABELS = {
   imported: "清单索引可用", parsed: "已解析，待索引", indexing: "正在建立索引",
@@ -186,6 +187,17 @@ function documentCard(item) {
   main.className = "library-item-main";
   const heading = document.createElement("h3");
   heading.textContent = item.title || item.relative_path || "未命名资料";
+  const select = document.createElement("input");
+  select.type = "checkbox";
+  select.className = "library-select-checkbox";
+  select.checked = selectedDocuments.has(item.record_id || item.document_id);
+  select.setAttribute("aria-label", `选择 ${item.title || item.relative_path || "资料"}`);
+  select.addEventListener("click", (event) => event.stopPropagation());
+  select.addEventListener("change", () => {
+    const id = item.record_id || item.document_id;
+    if (select.checked) selectedDocuments.add(id); else selectedDocuments.delete(id);
+    updateSelectionToolbar();
+  });
   const context = document.createElement("p");
   const authors = (item.authors || []).slice(0, 3).join("、");
   context.textContent = [item.year, authors, item.source_type || item.media_type].filter(Boolean).join(" · ") || item.media_type || "文档";
@@ -223,7 +235,7 @@ function documentCard(item) {
     match.textContent = "正文命中";
     tags.append(match);
   }
-  main.append(heading, context, tags);
+  main.append(select, heading, context, tags);
   if (item.match_snippet) {
     const snippet = document.createElement("p");
     snippet.className = "library-match-snippet";
@@ -271,6 +283,71 @@ function documentCard(item) {
   return article;
 }
 
+function updateSelectionToolbar() {
+  const toolbar = document.getElementById("library-batch-toolbar");
+  const count = document.getElementById("library-selection-count");
+  if (!toolbar || !count) return;
+  count.textContent = `已选择 ${selectedDocuments.size} 份`;
+  ["library-batch-index", "library-batch-remove", "library-selection-clear"].forEach((id) => {
+    document.getElementById(id).disabled = selectedDocuments.size === 0;
+  });
+  const selectAll = document.getElementById("library-selection-all");
+  selectAll.disabled = documentTotal === 0;
+}
+
+async function runBatchAction(action) {
+  if (!selectedDocuments.size) return;
+  const ids = [...selectedDocuments];
+  const label = action === "remove" ? "移出知识库" : "加入知识库";
+  try {
+    let documentCount = 0;
+    for (let start = 0; start < ids.length; start += 100) {
+      const batch = ids.slice(start, start + 100);
+      const result = await api("/api/v1/library/documents/batch", { method: "POST", body: JSON.stringify({ action, document_ids: batch }) });
+      documentCount += result.document_count || batch.length;
+    }
+    selectedDocuments.clear();
+    updateSelectionToolbar();
+    await load();
+    showToast(`${label}完成：${documentCount} 份资料。`);
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+function matchesPillFilter(item) {
+  if (currentPillFilter === "pdf") return item.media_type === "PDF";
+  if (currentPillFilter === "paper") return item.media_type !== "PDF" && item.media_type !== "Markdown";
+  if (currentPillFilter === "ready") return STATUS_GROUPS.ready.includes(item.status);
+  return true;
+}
+
+async function selectAllMatchingDocuments() {
+  const selectedBefore = new Set(selectedDocuments);
+  const params = new URLSearchParams({ q: searchInput.value.trim(), status: statusSelect.value, offset: "0", limit: "100" });
+  try {
+    let offset = 0;
+    let total = 0;
+    do {
+      params.set("offset", String(offset));
+      const payload = await api(`/api/v1/library/search?${params}`);
+      total = payload.total || 0;
+      const items = (payload.items || []).filter(matchesPillFilter);
+      items.forEach((item) => selectedDocuments.add(item.record_id || item.document_id));
+      offset += payload.items?.length || 0;
+      if (!payload.has_more) break;
+    } while (offset < total);
+    updateSelectionToolbar();
+    await loadDocuments();
+    showToast(`已选择当前筛选下的 ${selectedDocuments.size} 份资料。`);
+  } catch (error) {
+    selectedDocuments.clear();
+    selectedBefore.forEach((id) => selectedDocuments.add(id));
+    updateSelectionToolbar();
+    showToast(error.message);
+  }
+}
+
 async function loadDocuments({ append = false } = {}) {
   if (!append) documentOffset = 0;
   const params = new URLSearchParams({ q: searchInput.value.trim(), status: statusSelect.value, offset: String(documentOffset), limit: "30" });
@@ -279,13 +356,7 @@ async function loadDocuments({ append = false } = {}) {
     const payload = await api(`/api/v1/library/search?${params}`);
     documentTotal = payload.total || 0;
     let items = payload.items || [];
-    if (currentPillFilter === "pdf") {
-      items = items.filter((it) => it.media_type === "PDF");
-    } else if (currentPillFilter === "paper") {
-      items = items.filter((it) => it.media_type !== "PDF" && it.media_type !== "Markdown");
-    } else if (currentPillFilter === "ready") {
-      items = items.filter((it) => STATUS_GROUPS.ready.includes(it.status));
-    }
+    items = items.filter(matchesPillFilter);
     const cards = items.map(documentCard);
     if (append) list.append(...cards); else list.replaceChildren(...cards);
     documentOffset += cards.length;
@@ -295,6 +366,7 @@ async function loadDocuments({ append = false } = {}) {
     empty.querySelector("strong").textContent = "没有匹配的资料";
     empty.querySelector("span").textContent = "调整关键词或状态筛选后重试。";
     resultSummary.textContent = `匹配 ${documentTotal} 份，当前显示 ${documentOffset} 份`;
+    updateSelectionToolbar();
   } catch (error) {
     resultSummary.textContent = error.message;
     showToast(error.message);
@@ -315,11 +387,48 @@ async function openDetail(item) {
   });
   const content = document.getElementById("library-detail-content");
   content.textContent = "正在读取解析内容…";
+  const researchButton = document.createElement("button");
+  researchButton.className = "primary-button";
+  researchButton.type = "button";
+  researchButton.textContent = "基于此资料开始研究";
+  researchButton.addEventListener("click", async () => {
+    researchButton.disabled = true;
+    researchButton.textContent = "正在创建研究任务…";
+    try {
+      const result = await api(`/api/v1/library/documents/${encodeURIComponent(item.record_id || item.document_id)}/research`, { method: "POST", body: JSON.stringify({}) });
+      window.location.hash = `#/research/${encodeURIComponent(result.run_id)}`;
+    } catch (error) {
+      researchButton.disabled = false;
+      researchButton.textContent = "基于此资料开始研究";
+      showToast(error.message);
+    }
+  });
+  meta.append(researchButton);
   dialog.showModal();
   try {
     const detail = await api(`/api/v1/library/documents/${encodeURIComponent(item.record_id || item.document_id)}`);
+    const versions = detail.versions || [];
+    if (versions.length) {
+      const restore = document.createElement("button");
+      restore.className = "quiet-button";
+      restore.type = "button";
+      restore.textContent = `恢复历史版本（${versions.length}）`;
+      restore.addEventListener("click", async () => {
+        const versionIndex = Math.max(0, versions.length - 1);
+        try {
+          await api(`/api/v1/library/documents/${encodeURIComponent(item.record_id || item.document_id)}/restore`, { method: "POST", body: JSON.stringify({ version_index: versionIndex }) });
+          dialog.close();
+          await load();
+          showToast("已恢复最近一份历史版本。");
+        } catch (error) {
+          showToast(error.message);
+        }
+      });
+      meta.append(restore);
+    }
     const attempts = (item.fetch_attempts || []).map((attempt) => `${attempt.source} · ${attempt.url}\n${attempt.error}`).join("\n\n");
-    content.textContent = (detail.segments || []).map((segment) => `${segment.heading || segment.locator?.heading || "文档片段"}\n${segment.text}`).join("\n\n") || attempts || "暂无可预览内容。";
+    const versionText = versions.map((version, index) => `历史版本 ${index + 1}：${STATUS_LABELS[version.status] || version.status || "未知"} · ${version.updated_at || "时间未记录"}`).join("\n");
+    content.textContent = [versionText, (detail.segments || []).map((segment) => `${segment.heading || segment.locator?.heading || "文档片段"}\n${segment.text}`).join("\n\n") || attempts || "暂无可预览内容。"].filter(Boolean).join("\n\n");
   } catch (error) {
     content.textContent = error.message;
   }
@@ -498,6 +607,10 @@ searchInput.addEventListener("input", () => {
 statusSelect.addEventListener("change", () => loadDocuments());
 loadMoreButton.addEventListener("click", () => loadDocuments({ append: true }));
 document.getElementById("library-detail-close").addEventListener("click", () => document.getElementById("library-detail-dialog").close());
+document.getElementById("library-batch-index").addEventListener("click", () => runBatchAction("index"));
+document.getElementById("library-batch-remove").addEventListener("click", () => runBatchAction("remove"));
+document.getElementById("library-selection-all").addEventListener("click", selectAllMatchingDocuments);
+document.getElementById("library-selection-clear").addEventListener("click", () => { selectedDocuments.clear(); updateSelectionToolbar(); loadDocuments(); });
 document.querySelectorAll("[data-library-tab]").forEach((tab) => tab.addEventListener("click", () => setLibraryTab(tab.dataset.libraryTab)));
 paperSubmit.addEventListener("click", () => {
   paperRequestedLimit = Number(document.getElementById("paper-result-limit").value || 20);

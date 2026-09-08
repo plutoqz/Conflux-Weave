@@ -13,6 +13,7 @@ from conflux_weave.deep_research import (
     DeepResearchWorkflow,
     DeepSource,
     GPTResearcherBridge,
+    _research_query_facets,
 )
 from conflux_weave.provider import (
     OpenAICompatibleChatAdapter,
@@ -132,6 +133,56 @@ AUDIT = {"audits": [
 
 def read_artifact(store, artifact_id):
     return store.path_for_digest(artifact_id.removeprefix("artifact-sha256-")).read_text(encoding="utf-8")
+
+
+def test_research_query_facets_preserve_each_compound_workflow_stage():
+    queries = _research_query_facets(
+        "如何设计一个GIS智能体，实现矢量数据的自动下载、预处理、融合和质量评价工作？"
+    )
+
+    assert queries[0].startswith("如何设计一个GIS智能体")
+    assert len(queries) == 5
+    assert any("自动下载" in query for query in queries)
+    assert any("预处理" in query for query in queries)
+    assert any("融合" in query for query in queries)
+    assert any("质量评价" in query for query in queries)
+
+
+def test_local_chunks_round_robin_across_query_facets_and_sources():
+    from conflux_weave.retrieval import RetrievalDocument, RetrievalHit
+
+    class FacetRetrieval:
+        def __init__(self):
+            self.calls = []
+            self.document_by_id = {
+                name: RetrievalDocument(name, f"{name} evidence", f"source-{name}", {"page": 1})
+                for name in ("download", "preprocess", "fusion", "quality", "generic")
+            }
+
+        def search(self, query):
+            self.calls.append(query)
+            mapping = next(
+                (name for term, name in (("自动下载", "download"), ("预处理", "preprocess"), ("质量评价", "quality"), ("融合", "fusion")) if term in query),
+                "generic",
+            )
+            hits = (
+                RetrievalHit(mapping, 1.0, 1, f"source-{mapping}", {"page": 1}),
+                RetrievalHit("generic", 0.5, 2, "source-generic", {"page": 1}),
+            )
+            return SimpleNamespace(final=SimpleNamespace(hits=hits))
+
+    retrieval = FacetRetrieval()
+    bridge = GPTResearcherBridge(
+        ProviderConfig("https://provider.example/v1", "secret", "chat"),
+        retrieval=retrieval,
+        max_local_documents=5,
+    )
+    chunks, queries = bridge._local_chunks(
+        "如何设计一个GIS智能体，实现矢量数据的自动下载、预处理、融合和质量评价工作？"
+    )
+
+    assert retrieval.calls == list(queries)
+    assert {chunk.document_id for chunk in chunks} >= {"download", "preprocess", "fusion", "quality"}
 
 
 def test_gpt_researcher_bridge_passes_configured_model_to_all_roles(monkeypatch, tmp_path):
@@ -653,7 +704,7 @@ AUDIT3 = {"audits": [
 ]}
 
 
-def test_deep_workflow_merge_degrades_to_flat_report(tmp_path):
+def test_deep_workflow_merge_degrades_to_safe_flat_report(tmp_path):
     local_chunks = (DeepLocalChunk(
         "snap-local-1", "doc-9", {"page": 1},
         "SkillCenter 相关工作综述\nLocal corpus: skills bundle instructions. " * 4,
@@ -676,11 +727,12 @@ def test_deep_workflow_merge_degrades_to_flat_report(tmp_path):
     assert manifest["merge"]["status"] == "degraded"
     assert len(workflow.chat.transport.requests) == 8  # 规划最多 2 次 + 失败批次重试 + 起草核验写作审计
     report = read_artifact(store, result.report_artifact_id)
-    assert "## 附录：聚合引擎综合视图（未经本地核验）" in report
+    assert "## 附录：聚合引擎综合视图（未经本地核验）" not in report
+    assert manifest["engine_view"] == "omitted"
     assert any("证据融合规划" in item for item in result.limitations)
 
 
-def test_deep_workflow_fused_writer_falls_back_to_deterministic_fusion(tmp_path):
+def test_deep_workflow_fused_writer_falls_back_to_verified_claims(tmp_path):
     local_chunks = (DeepLocalChunk(
         "snap-local-1", "doc-9", {"page": 1},
         "SkillCenter 相关工作综述\nLocal corpus: skills bundle instructions. " * 4,
@@ -707,14 +759,12 @@ def test_deep_workflow_fused_writer_falls_back_to_deterministic_fusion(tmp_path)
     assert manifest["delivery_shape"] == "engine-fused"
     assert manifest["writer_status"] == "fallback"
     report = read_artifact(store, result.report_artifact_id)
-    # 确定性融合组装：引擎段落原文保留，匹配 Claim 逐字嵌入
-    assert "## 一、封装形态" in report and "## 二、生效条件" in report
-    assert "技能以文件夹为单位封装程序性知识，包含说明与脚本。" in report
+    # 融合 Writer 失败后不再把未经审计的引擎段落当成事实交付。
+    assert "## 一、封装形态" not in report and "## 二、生效条件" not in report
+    assert "技能以文件夹为单位封装程序性知识，包含说明与脚本。" not in report
     assert "Agents use skills to act on the world." in report
     assert "Memory writes are deduplicated by content hash." in report
-    assert "核验结果" in report
-    assert "模型融合写作未通过校验" not in report
-    assert any("确定性融合组装" in item for item in result.limitations)
+    assert any("安全报告" in item for item in result.limitations)
 
 
 def test_tavily_adapter_overrides_endpoint_and_adds_bearer(monkeypatch):

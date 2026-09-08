@@ -275,7 +275,7 @@ def test_render_report_document_layout_with_inline_citations():
     assert report.startswith(f"# {OBJECTIVE}")
     assert "## 回答摘要" in report
     assert "## 机制与评估" in report
-    assert "证据选择发生在工具动作之前，这一机制同时被后续评估所度量。 [1][2]" in report
+    assert "证据选择发生在工具动作之前，这一机制同时被后续评估所度量。[1][2]" in report
     assert "## 背景补充（模型知识 · 未经证据核验）" in report
     assert "### ○ 背景：证据绑定研究范式" in report
     assert "该机制在更大规模语料上的收益仍待验证。" in report
@@ -286,6 +286,30 @@ def test_render_report_document_layout_with_inline_citations():
     assert "`claim-0001` -> `evidence-0001`" in report
     assert "## 回答摘要" in report.split("## 来源")[0]
     assert "背景补充" not in report.split("## 来源")[1]
+
+
+def test_render_report_document_places_citations_after_matching_sentences():
+    document = ReportDocument(
+        objective=OBJECTIVE,
+        summary=ReportParagraph("工具动作依赖证据。评估衡量工具成功。", ("claim-0001", "claim-0002")),
+        sections=(
+            ReportSection(
+                "机制",
+                (ReportParagraph("工具动作前先选择证据。评估随后衡量工具成功。", ("claim-0001", "claim-0002")),),
+            ),
+        ),
+    )
+    report = render_report_document(
+        title=OBJECTIVE,
+        document=document,
+        claims=CLAIMS,
+        evidence=EVIDENCE,
+        citations=CITATIONS,
+        evidence_trust=TRUST,
+    )
+
+    assert "工具动作前先选择证据。[1] 评估随后衡量工具成功。[2]" in report
+    assert "评估随后衡量工具成功。[1][2]" not in report
 
 
 def test_require_closed_report_document_rejects_unknown_and_empty_references():

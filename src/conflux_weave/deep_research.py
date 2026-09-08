@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import tempfile
 import threading
@@ -45,6 +46,7 @@ from conflux_weave.merge import ClaimAssignment, MergePlan, ParagraphAssignment,
 from conflux_weave.provider import OpenAICompatibleChatAdapter, ProviderConfig
 from conflux_weave.report_writer import (
     WriterOutcome,
+    build_deterministic_card_document,
     build_deterministic_document,
     build_deterministic_fused_document,
     compose_fused_report_document,
@@ -73,6 +75,36 @@ _ENGINE_STATE_LOCK = threading.RLock()
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _research_query_facets(objective: str, *, max_queries: int = 5) -> tuple[str, ...]:
+    """Expand compound research questions without a domain-specific keyword map."""
+    normalized = re.sub(r"\s+", " ", objective).strip(" \t\r\n。！？!?；;")
+    if not normalized:
+        return ()
+    queries = [normalized]
+    clauses = [item.strip() for item in re.split(r"[，,。！？!?；;]+", normalized) if item.strip()]
+    context = clauses[0]
+    for clause in clauses:
+        if "、" not in clause:
+            continue
+        parts = [item.strip() for item in clause.split("、") if item.strip()]
+        if parts and "和" in parts[-1]:
+            left, right = (item.strip() for item in parts[-1].rsplit("和", 1))
+            if left and right:
+                parts[-1:] = [left, right]
+        subject = ""
+        if parts and "的" in parts[0]:
+            subject, parts[0] = (item.strip() for item in parts[0].rsplit("的", 1))
+        for part in parts:
+            candidate = " ".join(item for item in (context, subject, part) if item)
+            if candidate and candidate not in queries:
+                queries.append(candidate)
+    for clause in clauses[1:]:
+        candidate = f"{context} {clause}"
+        if candidate not in queries:
+            queries.append(candidate)
+    return tuple(queries[:max_queries])
 
 
 def _deterministic_recovery_plan(
@@ -200,7 +232,7 @@ class GPTResearcherBridge:
         original_tavily_init = self._install_tavily_adapter()
         original_text_loader = self._install_utf8_document_loader()
         try:
-            local_chunks = self._local_chunks(objective)
+            local_chunks, planned_queries = self._local_chunks(objective)
             config_payload = {
                 "SMART_LLM": engine_llm,
                 "FAST_LLM": engine_llm,
@@ -244,7 +276,7 @@ class GPTResearcherBridge:
                 context=context,
                 report_markdown=report,
                 # 引擎不暴露其规划 sub-queries；该字段保留为空（仅观测用途）。
-                planned_queries=(),
+                planned_queries=planned_queries,
                 costs_usd=float(researcher.get_costs() or 0.0),
                 token_usage={
                     "input_tokens": measured["input_tokens"],
@@ -428,13 +460,37 @@ class GPTResearcherBridge:
                 merged[url] = DeepSource(url=url, title=title or existing.title, content=content)
         return tuple(merged[url] for url in order)
 
-    def _local_chunks(self, objective: str) -> list[DeepLocalChunk]:
-        """本地语料 Top-N 命中：写入 DOC_PATH 供引擎聚合，同时直接进证据链。"""
+    def _local_chunks(self, objective: str) -> tuple[list[DeepLocalChunk], tuple[str, ...]]:
+        """Facet-aware local retrieval with round-robin coverage and source diversity."""
         if self._retrieval is None:
-            return []
-        run = self._retrieval.search(objective)
+            return [], ()
+        queries = _research_query_facets(objective)
+        runs = [self._retrieval.search(query) for query in queries]
+        candidates = []
+        max_hits = max((len(run.final.hits) for run in runs), default=0)
+        for rank in range(max_hits):
+            for run in runs:
+                if rank < len(run.final.hits):
+                    candidates.append(run.final.hits[rank])
+        selected = []
+        selected_documents: set[str] = set()
+        selected_sources: set[str] = set()
+        for prefer_new_source in (True, False):
+            for hit in candidates:
+                if hit.document_id in selected_documents:
+                    continue
+                source_id = hit.source_snapshot_id or hit.document_id
+                if prefer_new_source and source_id in selected_sources:
+                    continue
+                selected.append(hit)
+                selected_documents.add(hit.document_id)
+                selected_sources.add(source_id)
+                if len(selected) >= self._max_local_documents:
+                    break
+            if len(selected) >= self._max_local_documents:
+                break
         chunks = []
-        for hit in run.final.hits[: self._max_local_documents]:
+        for hit in selected:
             document = self._retrieval.document_by_id[hit.document_id]
             chunks.append(
                 DeepLocalChunk(
@@ -444,7 +500,7 @@ class GPTResearcherBridge:
                     text=document.text,
                 )
             )
-        return chunks
+        return chunks, queries
 
     def local_document_title(self, document_id: str, fallback: str) -> str:
         """本地来源标题（W3.5 紧凑引用）：基于检索索引分段表的首页标题。"""
@@ -627,7 +683,7 @@ class DeepResearchWorkflow:
         evidence = tuple(web_evidence) + local_evidence
 
         evidence_ms = int((time.monotonic() - bridge_started) * 1000) - bridge_ms
-        local_call_count = 1 if local_chunks else 0
+        local_call_count = max(1, len(result.planned_queries)) if local_chunks else 0
         provider_call_count = len(snapshot_records) + local_call_count + 1
         usage = {
             "input_tokens": int(result.token_usage.get("input_tokens", 0)),
@@ -773,7 +829,12 @@ class DeepResearchWorkflow:
             if document is None:
                 document = build_deterministic_document(objective, accepted_claims)
             if writer.status == "fallback":
-                limitations += ("报告正文为确定性融合组装：保留引擎事实，并按证据关系组织本地核验结论。",)
+                document = build_deterministic_card_document(
+                    objective,
+                    accepted_claims,
+                    distill.cards if distill.status == "ok" else (),
+                )
+                limitations += ("融合写作未通过校验，正文已降级为基于核验 Claim 与中文证据卡片的安全报告；未保留未经审计的引擎断言。",)
             note_lines = [f"正文骨架继承聚合引擎报告（{len(narrative.sections)} 节），本地核验结论按段落融入。"]
             if merge.plan.dropped:
                 note_lines.append(
@@ -803,7 +864,7 @@ class DeepResearchWorkflow:
             if merge is not None and merge.status == "degraded":
                 limitations += (f"证据融合规划未产出可用方案（{merge.reason}），报告按本地核验结论组装交付。",)
             write_started = time.monotonic()
-            if narrative is not None and engine_body:
+            if narrative is not None and engine_body and not (merge is not None and merge.status == "degraded"):
                 recovery_plan = _deterministic_recovery_plan(objective, narrative, accepted_claims)
                 document = build_deterministic_fused_document(objective, narrative, recovery_plan, accepted_claims)
                 report = render_fused_report(
@@ -839,7 +900,7 @@ class DeepResearchWorkflow:
                     evidence_trust={item.evidence_id: SourceTrustLevel.GENERAL_SOURCE for item in accepted_evidence},
                     limitations=limitations,
                 )
-                if engine_body:
+                if engine_body and not (merge is not None and merge.status == "degraded"):
                     report += (
                         "\n\n---\n\n## 附录：聚合引擎综合视图（未经本地核验）\n\n"
                         "> 以下内容由 GPT Researcher 生成，未经过本地 Claim/Verifier 链核验；"
@@ -847,7 +908,7 @@ class DeepResearchWorkflow:
                         + engine_body + "\n"
                     )
                 delivery_shape = "flat"
-                engine_view = "appended-unverified" if engine_body else "omitted"
+                engine_view = "appended-unverified" if engine_body and not (merge is not None and merge.status == "degraded") else "omitted"
             write_ms = int((time.monotonic() - write_started) * 1000)
         report_ref = self.store.put_bytes(
             report.encode("utf-8"),

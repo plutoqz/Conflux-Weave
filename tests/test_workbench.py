@@ -288,6 +288,11 @@ def test_library_uses_persistent_tabs_and_configurable_result_count() -> None:
     assert "item.doi" in library and "item.arxiv_id" in library and "item.authors" in library
     assert 'match.textContent = "正文命中"' in library
     assert 'api(`/api/v1/library/search?${params}`)' in library
+    assert 'id="library-selection-all"' in index
+    assert 'document.getElementById("library-selection-all").addEventListener' in library
+    assert 'start += 100' in library
+    assert 'limit: "100"' in library
+    assert "text-indent: 2em" in (root / "styles.css").read_text(encoding="utf-8")
     assert "item.match_snippet" in library
     assert 'retry.addEventListener("click", () => runPaperSearch(source.source))' in library
     assert 'id="paper-query-understanding"' in index

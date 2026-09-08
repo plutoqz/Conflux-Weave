@@ -20,7 +20,7 @@ from dotenv import dotenv_values
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from conflux_weave.chat import ChatService
 from conflux_weave.api_contracts import (
@@ -142,6 +142,22 @@ class LibraryPaperRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     action: Literal["metadata", "fulltext"] = "fulltext"
     paper: dict[str, Any]
+
+
+class LibraryBatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    document_ids: list[str] = Field(min_length=1, max_length=100)
+    action: Literal["index", "remove"] = "index"
+
+
+class LibraryResearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    objective: str | None = Field(default=None, max_length=4_000)
+
+
+class LibraryRestoreRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version_index: int = Field(ge=0, le=19)
 
 
 WORKBENCH_ROOT = Path(__file__).with_name("workbench")
@@ -294,6 +310,8 @@ def create_app(
                 result = chat_service.rag_answer(request.question, request.conversation_id)
             else:
                 result = chat_service.direct_answer(request.question, request.conversation_id)
+            if request.mode == "rag":
+                mark_library_usage([str(item.get("source_snapshot_id", "")) for item in result.get("citations", ())])
         except Exception as exc:
             return error_response(exc)
         return ChatAnswerResponse(
@@ -611,6 +629,8 @@ def create_app(
                 "doi": row.get("doi"),
                 "arxiv_id": row.get("arxiv_id"),
                 "error": row.get("error"),
+                "usage_count": int(row.get("usage_count", 0) or 0),
+                "usage_records": row.get("usage_records", [])[-10:],
                 "fetch_attempts": row.get("fetch_attempts", []),
                 "fetch_failure_artifact_id": row.get("fetch_failure_artifact_id"),
                 "manifest_indexed": bool(row.get("_manifest_indexed")),
@@ -708,13 +728,49 @@ def create_app(
             return JSONResponse(status_code=404, content={"code": "document_not_found", "message": "资料不存在。"})
         artifact_id = item.get("segments_artifact_id", "")
         if not artifact_id.startswith("artifact-sha256-"):
-            return {"document_id": document_id, "metadata": item, "segments": []}
+            return {"document_id": document_id, "metadata": item, "segments": [], "versions": item.get("versions", [])}
         try:
             path = repository.artifact_store.path_for_digest(artifact_id.removeprefix("artifact-sha256-"))
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError, json.JSONDecodeError):
             return {"document_id": document_id, "segments": []}
-        return {"document_id": document_id, "metadata": item, "segments": payload.get("segments", [])}
+        return {"document_id": document_id, "metadata": item, "segments": payload.get("segments", []), "versions": item.get("versions", [])}
+
+    @app.post("/api/v1/library/documents/{document_id}/research", response_model=ResearchTaskAcceptedResponse)
+    async def research_from_library_document(document_id: str, request: LibraryResearchRequest | None = None):
+        overview = await library_overview()
+        item = next((row for row in overview["items"] if row.get("document_id") == document_id or row.get("paper_id") == document_id), None)
+        if item is None:
+            return JSONResponse(status_code=404, content={"code": "document_not_found", "message": "资料不存在。"})
+        title = item.get("title") or document_id
+        objective = (request.objective if request else None) or f"请基于资料《{title}》开展研究，概括其核心问题、方法、证据和局限。"
+        conversation_id = f"conv-{uuid4().hex}"
+        try:
+            result = orchestrator.submit(TaskSubmission(task_kind="deep_research", input={"objective": objective, "conversation_id": conversation_id, "library_document_id": document_id}, requested_agent="durable_verified_research@v1"))
+            if chat_service is not None:
+                chat_service.record_research_message(conversation_id, "user", objective, result.run_id)
+            return ResearchTaskAcceptedResponse(task_id=result.task_id, run_id=result.run_id, created=result.created, state=query_service.get_run(result.run_id).state)
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/library/documents/{document_id}/restore")
+    async def restore_library_document(document_id: str, request: LibraryRestoreRequest):
+        path, rows = paper_registry()
+        row = next((item for item in rows if item.get("document_id") == document_id or item.get("paper_id") == document_id), None)
+        if row is None:
+            return JSONResponse(status_code=404, content={"code": "document_not_found", "message": "资料不存在。"})
+        versions = list(row.get("versions", []))
+        if request.version_index >= len(versions):
+            return JSONResponse(status_code=404, content={"code": "document_version_not_found", "message": "历史版本不存在。"})
+        version = versions[request.version_index]
+        restored = {**row}
+        for key in ("status", "segments_artifact_id", "source_artifact_id", "document_id", "error"):
+            if key in version and version[key] is not None:
+                restored[key] = version[key]
+        restored["restored_from_version"] = request.version_index
+        restored["restored_at"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        save_document_row(restored)
+        return {"status": restored.get("status", "parsed"), "document_id": document_id, "restored_from_version": request.version_index}
 
     def retrieval_documents(document: Any) -> tuple[RetrievalDocument, ...]:
         return tuple(
@@ -764,10 +820,34 @@ def create_app(
         except (OSError, ValueError):
             existing = []
         identity = row.get("document_id") or row.get("relative_path")
+        prior = next((item for item in existing if (item.get("document_id") or item.get("relative_path")) == identity), None)
+        if prior and prior != row:
+            history = list(prior.get("versions", []))
+            history.append({key: prior.get(key) for key in ("status", "segments_artifact_id", "source_artifact_id", "updated_at", "error") if key in prior})
+            row = {**row, "versions": history[-20:]}
+        row.setdefault("updated_at", datetime.now(UTC).isoformat().replace("+00:00", "Z"))
         existing = [item for item in existing if (item.get("document_id") or item.get("relative_path")) != identity]
         existing.append(row)
         registry_path.parent.mkdir(parents=True, exist_ok=True)
         registry_path.write_text(json.dumps(existing, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    def mark_library_usage(source_snapshot_ids: list[str], *, run_id: str | None = None) -> None:
+        wanted = {item for item in source_snapshot_ids if item}
+        if not wanted:
+            return
+        path, rows = paper_registry()
+        changed = False
+        for row in rows:
+            identity = str(row.get("source_snapshot_id") or row.get("document_id") or "")
+            if identity not in wanted:
+                continue
+            row["usage_count"] = int(row.get("usage_count", 0) or 0) + 1
+            records = list(row.get("usage_records", []))
+            records.append({"used_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"), "run_id": run_id})
+            row["usage_records"] = records[-50:]
+            changed = True
+        if changed:
+            path.write_text(json.dumps(rows, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     @app.post("/api/v1/library/documents/{document_id}/index")
     async def reindex_library_document(document_id: str) -> dict[str, Any]:
@@ -792,6 +872,51 @@ def create_app(
             return JSONResponse(status_code=502, content={"code": "document_index_failed", "message": f"加入知识库失败：{exc}"})
         save_document_row({**row, "status": "knowledge_ready", "error": None, "index_added_count": result.get("added_count", 0), "embedding_artifacts": result.get("embedding_artifacts", [])})
         return {"status": "knowledge_ready", "document_id": row.get("document_id"), "added_count": result.get("added_count", 0)}
+
+    @app.post("/api/v1/library/documents/batch")
+    async def batch_library_documents(request: LibraryBatchRequest) -> dict[str, Any]:
+        """Apply one explicit lifecycle action to a bounded set of documents."""
+        registry_path, rows = paper_registry()
+        requested = tuple(dict.fromkeys(item.strip() for item in request.document_ids if item.strip()))
+        if not requested:
+            return JSONResponse(status_code=422, content={"code": "document_ids_empty", "message": "至少选择一份资料。"})
+        selected = [row for row in rows if row.get("document_id") in requested or row.get("paper_id") in requested]
+        if not selected:
+            return JSONResponse(status_code=404, content={"code": "document_not_found", "message": "未找到可操作的资料。"})
+        if request.action == "remove":
+            if retrieval_pipeline is None:
+                return JSONResponse(status_code=503, content={"code": "index_unavailable", "message": "知识库索引服务未就绪。"})
+            chunk_ids: list[str] = []
+            for row in selected:
+                artifact_id = str(row.get("segments_artifact_id", ""))
+                if not artifact_id.startswith("artifact-sha256-"):
+                    continue
+                try:
+                    path = repository.artifact_store.path_for_digest(artifact_id.removeprefix("artifact-sha256-"))
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                    chunk_ids.extend(str(segment.get("segment_id")) for segment in payload.get("segments", []) if segment.get("segment_id"))
+                except (OSError, ValueError, json.JSONDecodeError):
+                    continue
+            try:
+                result = await asyncio.to_thread(retrieval_pipeline.remove_documents, tuple(chunk_ids))
+            except Exception as exc:
+                return JSONResponse(status_code=422, content={"code": "document_remove_failed", "message": str(exc)})
+            for row in selected:
+                save_document_row({**row, "status": "parsed", "removed_from_knowledge_base": True, "error": None})
+            return {"status": "parsed", "action": "remove", "document_count": len(selected), "deleted_count": result.get("deleted_count", 0)}
+
+        indexed = 0
+        failures: list[dict[str, str]] = []
+        for row in selected:
+            identifier = str(row.get("document_id") or row.get("paper_id"))
+            try:
+                response = await reindex_library_document(identifier)
+                if isinstance(response, JSONResponse) and response.status_code >= 400:
+                    raise RuntimeError(f"索引失败（HTTP {response.status_code}）")
+                indexed += 1
+            except Exception as exc:
+                failures.append({"document_id": identifier, "error": str(exc)})
+        return {"status": "partial" if failures else "knowledge_ready", "action": "index", "document_count": len(selected), "indexed_count": indexed, "failures": failures}
 
     @app.post("/api/v1/library/documents")
     async def import_library_document(request: Request, filename: str = Query(..., min_length=1, max_length=240)) -> dict[str, Any]:
@@ -965,6 +1090,11 @@ def create_app(
         if all(item["status"] == "failed" for item in source_states):
             return JSONResponse(status_code=502, content={"code": "all_paper_sources_failed", "message": "所有论文来源均请求失败。", "sources": source_states})
         query_terms = () if identifier_kind else tuple(term for term in re.findall(r"[a-zA-Z][a-zA-Z0-9-]{1,}", " ".join(queries).lower()) if term not in stopwords)
+        if not identifier_kind and not required_terms and len(query_terms) >= 2:
+            # Direct English topics need a small precision guard too; without it
+            # arXiv can satisfy a broad geographic token while dropping the
+            # method/agent concept that defines the user's query.
+            required_terms = tuple(dict.fromkeys(query_terms[:2]))
         merged = merge_and_rank(records, query_terms=query_terms, max_results=max(1, len(records)), sort=sort, required_terms=required_terms, required_concepts=required_concepts)
         papers = merged[:max_results]
         overall = "partial" if any(item["status"] in {"failed", "partial"} for item in source_states) else "success"
@@ -1004,10 +1134,17 @@ def create_app(
         }
         identity_keys = {paper.paper_id, paper.doi, re.sub(r"v\d+$", "", paper.arxiv_id or "", flags=re.IGNORECASE)} - {None, ""}
         kept = []
+        prior = None
         for existing in rows:
             existing_keys = {existing.get("paper_id"), existing.get("doi"), re.sub(r"v\d+$", "", str(existing.get("arxiv_id") or ""), flags=re.IGNORECASE)} - {None, ""}
             if identity_keys.isdisjoint(existing_keys):
                 kept.append(existing)
+            else:
+                prior = existing
+        if prior and prior.get("status") != status:
+            history = list(prior.get("versions", []))
+            history.append({key: prior.get(key) for key in ("status", "document_id", "segments_artifact_id", "updated_at", "error") if key in prior})
+            row["versions"] = history[-20:]
         kept.append(row)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(kept, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

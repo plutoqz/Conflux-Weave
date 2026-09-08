@@ -648,6 +648,7 @@ def compose_report_document(
                         store, objective, claims, first_violation,
                         writer_completion=writer_completion,
                         audit_completion=audit_completion,
+                        cards=cards,
                     )
                 writer_material = {
                     **writer_material,
@@ -659,6 +660,7 @@ def compose_report_document(
                         store, objective, claims, first_violation or latest_violation,
                         writer_completion=writer_completion,
                         audit_completion=audit_completion,
+                        cards=cards,
                     )
                 raise
         document_ref = store.put_json(
@@ -708,6 +710,7 @@ def compose_report_document(
             store, objective, claims, f"report writer failed: {exc}",
             writer_completion=writer_completion,
             audit_completion=audit_completion,
+            cards=cards,
         )
 
 
@@ -748,6 +751,46 @@ def build_deterministic_document(
     return ReportDocument(objective=objective, summary=summary, sections=tuple(sections))
 
 
+def build_deterministic_card_document(
+    objective: str,
+    claims: tuple[Claim, ...],
+    cards: tuple[EvidenceCard, ...],
+) -> ReportDocument:
+    """Use validated Chinese evidence cards when Writer prose fails audit."""
+    if not cards:
+        return build_deterministic_document(objective, claims)
+    known = {claim.claim_id for claim in claims}
+    used: set[str] = set()
+    paragraphs: list[ReportParagraph] = []
+    for card in cards:
+        claim_ids = tuple(item for item in card.claim_ids if item in known and item not in used)
+        if not claim_ids:
+            continue
+        used.update(claim_ids)
+        details = "；".join(item.rstrip("。；") for item in card.zh_key_points[:4] if item.strip())
+        text = card.zh_summary.strip()
+        if details and details not in text:
+            text = f"{text.rstrip('。')}。要点包括：{details}。"
+        if card.scope_limits.strip():
+            text += f" 适用边界：{card.scope_limits.strip().rstrip('。')}。"
+        paragraphs.append(ReportParagraph(text, claim_ids))
+    paragraphs.extend(
+        ReportParagraph(claim.text, (claim.claim_id,))
+        for claim in claims
+        if claim.claim_id not in used
+    )
+    summary_items = [paragraph.text.split("。", 1)[0].strip() for paragraph in paragraphs[:5]]
+    summary = ReportParagraph(
+        "\n".join(f"- {item}。" for item in summary_items if item),
+        tuple(claim.claim_id for claim in claims),
+    )
+    return ReportDocument(
+        objective=objective,
+        summary=summary,
+        sections=(ReportSection("一、基于证据的回答", tuple(paragraphs)),),
+    )
+
+
 def _fallback_outcome(
     store: LocalArtifactStore,
     objective: str,
@@ -756,8 +799,9 @@ def _fallback_outcome(
     *,
     writer_completion=None,
     audit_completion=None,
+    cards: tuple[EvidenceCard, ...] = (),
 ) -> WriterOutcome:
-    document = build_deterministic_document(objective, claims)
+    document = build_deterministic_card_document(objective, claims, cards)
     document_ref = store.put_json(
         {
             "schema_version": REPORT_DOCUMENT_SCHEMA,
@@ -991,7 +1035,10 @@ FUSED_SYSTEM_PROMPT = (
     "contradict or extend it), the verified Claims with their Evidence excerpts, "
     "and optional Chinese evidence cards. Rewrite EVERY engine paragraph into one or more "
     "polished Chinese research-report paragraph: keep the engine paragraph's "
-    "facts and their order, weave its assigned Claims into the same flowing "
+    "structure and topic order, but retain a factual assertion only when it is "
+    "supported by an attributed web source or a verified Claim. Rewrite unsupported "
+    "engine suggestions as clearly labeled design recommendations without fabricated "
+    "benchmarks, capabilities, named systems or implementation results. Weave assigned Claims into the same flowing "
     "text where the relation says (a contradicting Claim must surface as an "
     "explicit conflicting finding with both sides), and never mention the "
     "mechanics (no phrases like 本地语料补充说 or 网络来源认为). Keep section "
@@ -1041,10 +1088,9 @@ FUSED_AUDIT_SYSTEM_PROMPT = (
     "The root must contain only audits. Judge semantic entailment, not wording: "
     "supported means every factual assertion in the paragraph is entailed by "
     "the union of its cited Claims (plus their Evidence quotes), the contents "
-    "of its cited web sources, and the corresponding source paragraphs in the "
-    "engine outline. The engine outline is an allowed basis because the Writer "
-    "is explicitly required to preserve that source-attributed report as the "
-    "narrative backbone; use the merge plan to check paragraph attribution. "
+    "of its cited web sources. The engine outline is structure and discovery context, "
+    "not an independent evidence source; an assertion present only in the engine "
+    "outline is unsupported. Use the merge plan only to check attribution. "
     "Unsupported means the paragraph "
     "introduces a fact, entity, number, date, causal claim, or evaluation "
     "absent from that union, or drops a load-bearing qualifier in a way that "

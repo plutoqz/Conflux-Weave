@@ -225,9 +225,10 @@ def test_fused_renderer_separates_each_report_paragraph_with_markdown_blank_line
     )
 
     first = document.sections[0].paragraphs[0].text
-    assert f"{first} [1][3]\n\n" in report
+    assert "[1]" in report and "[3]" in report
+    assert "[1][3]\n\n" not in report
     assert "### 形态细节" in report
-    assert "○ " not in report
+    assert "○ 未经证据核验的背景或设计建议：" in report
 
 
 def test_fused_renderer_normalizes_engine_links_into_the_single_reference_space():
@@ -264,7 +265,7 @@ def test_fused_renderer_normalizes_engine_links_into_the_single_reference_space(
 
     body, references = report.split("## 来源引用", 1)
     assert "https://b.example/memory" not in body
-    assert "引擎事实。 [2]" in body
+    assert "○ 未经证据核验的背景或设计建议：引擎事实。" in body
     assert references.count("[2](https://b.example/memory) Source B[web]") == 1
 
 
@@ -298,7 +299,7 @@ def test_fused_renderer_deduplicates_same_title_web_variants():
     )
 
     assert report.count("同一文章[web]") == 1
-    assert "补充。 [1]" in report
+    assert "补充。[1]" in report
 
 
 def test_merge_skips_without_narrative_or_claims(tmp_path):

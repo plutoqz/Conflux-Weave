@@ -56,6 +56,8 @@ PARENTHETICAL_MARKDOWN_LINK = re.compile(
     r"[（(]\s*\[[^\]]+\]\([^)\s]+\)\s*[）)]"
 )
 STANDALONE_BOLD = re.compile(r"^\*\*(.+?)\*\*$")
+LATIN_TERM = re.compile(r"[a-z0-9][a-z0-9_-]{2,}", re.IGNORECASE)
+HAN_RUN = re.compile(r"[\u3400-\u9fff]+")
 
 
 def _normalized_url(value: str) -> str:
@@ -80,6 +82,60 @@ def _clean_fused_text(text: str) -> str:
     cleaned = MARKDOWN_LINK.sub(lambda match: match.group(1), cleaned)
     cleaned = re.sub(r"[ \t]+([,.;:!?，。；：！？])", r"\1", cleaned)
     return cleaned.strip()
+
+
+def _citation_terms(text: str) -> set[str]:
+    """Extract stable English terms and short CJK n-grams for sentence matching."""
+    terms = {match.group(0).casefold() for match in LATIN_TERM.finditer(text)}
+    for match in HAN_RUN.finditer(text):
+        value = match.group(0)
+        for width in (2, 3):
+            terms.update(value[index:index + width] for index in range(len(value) - width + 1))
+    return terms
+
+
+def _split_sentences(text: str) -> list[str]:
+    sentences: list[str] = []
+    start = 0
+    for index, character in enumerate(text):
+        boundary = character in "。！？；!?;\n"
+        if character == ".":
+            boundary = index + 1 == len(text) or text[index + 1].isspace()
+        if boundary:
+            sentence = text[start:index + 1].strip()
+            if sentence:
+                sentences.append(sentence)
+            start = index + 1
+    tail = text[start:].strip()
+    if tail:
+        sentences.append(tail)
+    return sentences
+
+
+def _render_sentence_citations(
+    text: str,
+    supports: list[tuple[str, str]],
+    marker_for_keys,
+) -> str:
+    """Place each source marker after the sentence it most directly supports."""
+    sentences = _split_sentences(text)
+    if not sentences or not supports:
+        return text
+    sentence_terms = [_citation_terms(sentence) for sentence in sentences]
+    assigned: list[list[str]] = [[] for _ in sentences]
+    for support_index, (key, support_text) in enumerate(supports):
+        terms = _citation_terms(support_text)
+        scores = [len(terms & candidate) for candidate in sentence_terms]
+        best_score = max(scores, default=0)
+        sentence_index = scores.index(best_score) if best_score else support_index % len(sentences)
+        if key not in assigned[sentence_index]:
+            assigned[sentence_index].append(key)
+    rendered = []
+    for sentence, keys in zip(sentences, assigned, strict=True):
+        marker = marker_for_keys(tuple(keys)) if keys else ""
+        rendered.append(f"{sentence}{marker}")
+    separator = "\n" if "\n" in text else " "
+    return separator.join(rendered)
 
 
 def origin_lane(item: EvidenceRef) -> str:
@@ -240,10 +296,16 @@ def render_report_document(
         )
         return "".join(f"[{index}]" for index in indexes)
 
+    claim_by_id = {claim.claim_id: claim for claim in claims}
+
+    def cited_text(text: str, claim_ids: tuple[str, ...]) -> str:
+        supports = [(claim_id, claim_by_id[claim_id].text) for claim_id in claim_ids]
+        return _render_sentence_citations(text, supports, markers)
+
     lines = [f"# {title}", ""]
     lines.extend(REPORT_LEGEND_LINES)
     lines.extend(("", "## 回答摘要", ""))
-    lines.append(f"{document.summary.text} {markers(document.summary.claim_ids)}".rstrip())
+    lines.append(cited_text(document.summary.text, document.summary.claim_ids))
     lines.append("")
     for section in document.sections:
         lines.extend((f"## {section.heading}", ""))
@@ -251,7 +313,7 @@ def render_report_document(
             if paragraph.unverified:
                 lines.append(f"○ {paragraph.text}")
             else:
-                lines.append(f"{paragraph.text} {markers(paragraph.claim_ids)}".rstrip())
+                lines.append(cited_text(paragraph.text, paragraph.claim_ids))
         lines.append("")
     if document.background:
         lines.extend(("## 背景补充（模型知识 · 未经证据核验）", ""))
@@ -287,7 +349,6 @@ def render_report_document(
         )
         lines.append("")
     lines.append("")
-    claim_by_id = {claim.claim_id: claim for claim in claims}
     lines.extend(("### 审计附录（Evidence 汇总）", ""))
     lines.extend(_evidence_summary_lines(citations, evidence_by_id, claim_by_id, evidence_trust))
     return "\n".join(lines).rstrip() + "\n"
@@ -362,6 +423,7 @@ def render_fused_report(
     require_closed_report_document(document, claims)
     evidence_by_id = {item.evidence_id: item for item in evidence}
     citations_by_claim: dict[str, list[Citation]] = {}
+    claim_by_id = {claim.claim_id: claim for claim in claims}
     for citation in citations:
         citations_by_claim.setdefault(citation.claim_id, []).append(citation)
     web_key_by_url = {
@@ -453,6 +515,24 @@ def render_fused_report(
                 keys.append(source_id)
         return keys
 
+    def paragraph_supports(paragraph: ReportParagraph) -> list[tuple[str, str]]:
+        support_text: dict[str, list[str]] = {}
+        for match in MARKDOWN_LINK.finditer(paragraph.text):
+            target = match.group(2)
+            key = web_key_by_url.get(_normalized_url(target)) if target.startswith(("http://", "https://")) else None
+            if key:
+                support_text.setdefault(key, []).append(match.group(1))
+        for claim_id in paragraph.claim_ids:
+            claim_text = claim_by_id[claim_id].text
+            for key in claim_source_keys(claim_id):
+                support_text.setdefault(key, []).append(claim_text)
+        for source_id in paragraph.web_source_ids:
+            title = str(web_registry.get(source_id, {}).get("title", source_id))
+            support_text.setdefault(source_id, []).append(title)
+        for key in paragraph_keys(paragraph):
+            support_text.setdefault(key, []).append(reference_entry(key).title)
+        return [(key, " ".join(values)) for key, values in support_text.items()]
+
     register_keys(claim_source_keys_union(document.summary.claim_ids, citations_by_claim, evidence_by_id))
     for section in document.sections:
         for paragraph in section.paragraphs:
@@ -465,9 +545,17 @@ def render_fused_report(
         indexes = {numbers[key_aliases.get(key, key)] for key in keys}
         return "".join(f"[{number}]" for number in sorted(indexes))
 
+    def cited_fused_text(text: str, supports: list[tuple[str, str]]) -> str:
+        return _render_sentence_citations(text, supports, markers)
+
     lines = [f"# {title}", ""]
     lines.extend(("## 问题与来源说明", ""))
-    lines.append(f"总体结论：{thesis} {markers(claim_source_keys_union(document.summary.claim_ids, citations_by_claim, evidence_by_id))}".rstrip())
+    summary_supports = [
+        (key, claim_by_id[claim_id].text)
+        for claim_id in document.summary.claim_ids
+        for key in claim_source_keys(claim_id)
+    ]
+    lines.append(cited_fused_text(f"总体结论：{thesis}", summary_supports))
     lines.append("")
     lines.extend((
         "> [web] 网络来源：聚合引擎综合的网络资料，未经本地核验；",
@@ -487,8 +575,10 @@ def render_fused_report(
             subheading = STANDALONE_BOLD.match(text)
             if subheading and "\n" not in text:
                 lines.append(f"### {subheading.group(1)}")
+            elif paragraph.unverified:
+                lines.append(f"○ 未经证据核验的背景或设计建议：{text}")
             else:
-                lines.append(f"{text} {markers(paragraph_keys(paragraph))}".rstrip())
+                lines.append(cited_fused_text(text, paragraph_supports(paragraph)))
             # Markdown 以空行定义段落。没有这行时，前端安全渲染器会把同一
             # 小节的所有非空行合并到同一个 <p> 中。
             lines.append("")

@@ -285,7 +285,9 @@ class DurableResearchRuntime:
         provider_call_limit = 23 if task_kind == VERIFIED_RESEARCH_TASK else (
             32 if task_kind == DEEP_RESEARCH_TASK else 2 + 6 * max_subquestions
         )
-        retrieval_round_limit = (3 if task_kind == VERIFIED_RESEARCH_TASK else (4 if task_kind == DEEP_RESEARCH_TASK else max_subquestions))
+        # Deep research uses one engine retrieval boundary plus up to five local
+        # facet queries so compound questions do not collapse onto one topic.
+        retrieval_round_limit = (3 if task_kind == VERIFIED_RESEARCH_TASK else (6 if task_kind == DEEP_RESEARCH_TASK else max_subquestions))
         # W3.5 融合交付在引擎批次之上新增合并规划与融合写作+审计轮次；
         # 深度研究的墙钟与 token 预算放宽到 30 分钟量级。
         if task_kind == DEEP_RESEARCH_TASK:

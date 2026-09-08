@@ -128,6 +128,17 @@ class LanceDBDenseIndex:
             "status": "published",
         }
 
+    def delete(self, document_ids: tuple[str, ...]) -> dict[str, Any]:
+        """Remove chunks by stable chunk id from the published table."""
+        if self.table is None:
+            return {"status": "already_absent", "deleted_count": 0}
+        ids = tuple(dict.fromkeys(str(item) for item in document_ids if str(item)))
+        if not ids:
+            return {"status": "already_absent", "deleted_count": 0}
+        escaped = ", ".join(json.dumps(item) for item in ids)
+        self.table.delete(f"chunk_id IN ({escaped})")
+        return {"status": "published", "deleted_count": len(ids)}
+
     def search(self, query_vector: tuple[float, ...], *, top_k: int = 10, where: str | None = None) -> RetrievalQueryResult:
         if self.table is None:
             raise RuntimeError("LanceDB table is not published")

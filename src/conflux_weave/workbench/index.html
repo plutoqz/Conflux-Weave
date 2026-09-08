@@ -317,6 +317,7 @@
               <button type="button" class="library-pill" data-pill-filter="ready">已索引可用 <span class="library-pill-count" id="pill-count-ready">182</span></button>
             </div>
             <div class="library-toolbar"><input id="library-search" type="search" placeholder="搜索标题、作者、正文、DOI 或 arXiv ID" aria-label="搜索资料"><select id="library-status" aria-label="按状态筛选"><option value="">全部状态</option><option value="ready">正文可用</option><option value="metadata">仅元数据</option><option value="processing">处理中</option><option value="failed">处理失败</option></select></div>
+              <div class="library-batch-toolbar" id="library-batch-toolbar"><span id="library-selection-count">已选择 0 份</span><button id="library-selection-all" class="quiet-button" type="button">全选当前结果</button><button id="library-batch-index" class="quiet-button" type="button" disabled>加入知识库</button><button id="library-batch-remove" class="quiet-button" type="button" disabled>移出知识库</button><button id="library-selection-clear" class="icon-button" type="button" aria-label="取消全选" title="取消全选" disabled>×</button></div>
             <div id="library-list" class="library-list"></div>
             <button id="library-load-more" class="quiet-button library-load-more" type="button" hidden>加载更多</button>
             <p id="library-empty" class="panel-empty" hidden><strong>还没有资料</strong><span>论文获取和本地文档导入将在资料库中统一接入。</span></p>

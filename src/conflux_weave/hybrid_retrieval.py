@@ -91,6 +91,25 @@ class HybridRetrievalPipeline:
             self.bm25 = BM25Retriever(combined)
             return {**update, "added_count": len(pending), "embedding_artifacts": artifacts}
 
+    def remove_documents(self, document_ids: tuple[str, ...]) -> dict[str, Any]:
+        """Remove indexed chunks and rebuild the sparse view from the survivors."""
+        ids = tuple(dict.fromkeys(str(item) for item in document_ids if str(item)))
+        if not ids:
+            return {"status": "already_absent", "deleted_count": 0}
+        with self._index_lock:
+            existing = set(self.document_by_id)
+            removed = tuple(item for item in ids if item in existing)
+            if not removed:
+                return {"status": "already_absent", "deleted_count": 0}
+            remaining = tuple(document for document in self.documents if document.document_id not in set(removed))
+            if not remaining:
+                raise ValueError("知识库至少需要保留一份资料")
+            result = self.dense_index.delete(removed)
+            self.documents = remaining
+            self.document_by_id = {document.document_id: document for document in remaining}
+            self.bm25 = BM25Retriever(remaining)
+            return {**result, "deleted_count": len(removed)}
+
     def search(
         self,
         query: str,

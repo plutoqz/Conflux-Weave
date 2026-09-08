@@ -911,6 +911,11 @@ textarea:focus-visible,
 
 .library-toolbar, .paper-search-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; margin-bottom: 14px; }
 .library-toolbar { grid-template-columns: minmax(0, 1fr) 150px; }
+.library-batch-toolbar { display: flex; align-items: center; gap: 8px; margin: -4px 0 12px; padding: 8px 10px; border: 1px solid var(--rule-soft); background: color-mix(in srgb, var(--moss) 5%, var(--chalk)); }
+.library-batch-toolbar span { margin-right: auto; color: var(--muted); font-size: 12px; }
+.library-batch-toolbar button:disabled { opacity: 0.45; cursor: not-allowed; }
+.library-select-checkbox { width: 16px; height: 16px; margin: 2px 8px 0 0; accent-color: var(--moss); }
+.library-item-main { min-width: 0; }
 .library-toolbar input, .library-toolbar select, .paper-search-bar input, .paper-filter-row input, .paper-filter-row select { width: 100%; min-width: 0; height: 40px; border: 1px solid var(--rule); background: var(--chalk); padding: 8px 11px; color: var(--ink); font: inherit; }
 .paper-search-bar .primary-button { height: 40px; }
 .paper-search-controls { border-bottom: 1px solid var(--rule-soft); padding-bottom: 14px; }
@@ -1677,15 +1682,13 @@ textarea:focus-visible,
 .answer-body { display: grid; gap: 16px; }
 .answer-body p {
   margin: 0 0 0.85em;
-  text-indent: 0;
+  text-indent: 2em;
   line-height: 1.75;
 }
 .answer-body p:last-child {
   margin-bottom: 0;
 }
-.answer-body p:has(> a.citation-link),
-.answer-body p:has(> code),
-.answer-body p:has(> strong:first-child) {
+.answer-body p:has(> code:only-child) {
   text-indent: 0;
 }
 .answer-body h3,

@@ -20,7 +20,7 @@ from conflux_weave.library_papers import (
 )
 from conflux_weave.paper_discovery import ArxivPaper
 from conflux_weave.runtime import LocalArtifactStore, SQLiteRuntimeRepository
-from conflux_weave.server import LibraryPaperRequest, WorkerLoop, create_app
+from conflux_weave.server import LibraryBatchRequest, LibraryPaperRequest, LibraryRestoreRequest, WorkerLoop, create_app
 
 
 class StaticTransport:
@@ -332,3 +332,42 @@ def test_fulltext_import_becomes_knowledge_ready_only_after_incremental_index(tm
     assert pipeline.documents[0].document_id.endswith("segment-0001")
     registry = json.loads((tmp_path / "db" / "library-registry.json").read_text(encoding="utf-8"))
     assert registry[0]["status"] == "knowledge_ready"
+
+
+def test_library_restore_exposes_version_recovery_action(tmp_path):
+    store = LocalArtifactStore(tmp_path / "artifacts")
+    repository = SQLiteRuntimeRepository(tmp_path / "db" / "runtime.sqlite3", store)
+    registry = tmp_path / "db" / "library-registry.json"
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_text(json.dumps([{
+        "document_id": "document-1",
+        "relative_path": "paper.pdf",
+        "status": "index_failed",
+        "versions": [{"status": "knowledge_ready", "segments_artifact_id": "artifact-sha256-old"}],
+    }]), encoding="utf-8")
+    app = create_app(repository, PassiveRuntime(), worker=WorkerLoop(PassiveRuntime(), interval_seconds=10))
+    restore = next(item.endpoint for item in app.routes if item.path == "/api/v1/library/documents/{document_id}/restore")
+    result = asyncio.run(restore("document-1", LibraryRestoreRequest(version_index=0)))
+    assert result["status"] == "knowledge_ready"
+    saved = json.loads(registry.read_text(encoding="utf-8"))
+    assert saved[0]["segments_artifact_id"] == "artifact-sha256-old"
+
+
+def test_library_batch_remove_calls_pipeline_and_marks_rows(tmp_path):
+    store = LocalArtifactStore(tmp_path / "artifacts")
+    repository = SQLiteRuntimeRepository(tmp_path / "db" / "runtime.sqlite3", store)
+    registry = tmp_path / "db" / "library-registry.json"
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_text(json.dumps([{"document_id": "document-1", "status": "knowledge_ready", "segments_artifact_id": ""}]), encoding="utf-8")
+
+    class Pipeline:
+        def remove_documents(self, ids):
+            return {"deleted_count": len(ids)}
+
+    pipeline = Pipeline()
+    app = create_app(repository, PassiveRuntime(), worker=WorkerLoop(PassiveRuntime(), interval_seconds=10), retrieval_pipeline=pipeline)
+    batch = next(item.endpoint for item in app.routes if item.path == "/api/v1/library/documents/batch")
+    result = asyncio.run(batch(LibraryBatchRequest(action="remove", document_ids=["document-1"])))
+    assert result["status"] == "parsed"
+    saved = json.loads(registry.read_text(encoding="utf-8"))
+    assert saved[0]["removed_from_knowledge_base"] is True
