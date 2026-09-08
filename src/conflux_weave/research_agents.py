@@ -161,7 +161,7 @@ def _parse_verifier_assessments(
 
 
 class VerifiedResearchWorkflow:
-    def __init__(self, store: LocalArtifactStore, retrieval: HybridRetrievalPipeline, chat: OpenAICompatibleChatAdapter, *, corpus_scope: str = "configured paper corpus") -> None:
+    def __init__(self, store: LocalArtifactStore, retrieval: Any, chat: OpenAICompatibleChatAdapter, *, corpus_scope: str = "configured paper corpus") -> None:
         if not corpus_scope.strip():
             raise ValueError("corpus_scope must not be empty")
         self.store, self.retrieval, self.chat = store, retrieval, chat
@@ -320,20 +320,51 @@ class VerifiedResearchWorkflow:
         return queries, refs, warning
 
     @staticmethod
-    def _merge_hits(runs: tuple[HybridRetrievalRun, ...]):
+    def _merge_hits(runs: tuple[Any, ...]):
         merged: dict[str, object] = {}
         for run in runs:
-            for hit in run.final.hits:
-                existing = merged.get(hit.document_id)
-                if existing is None or hit.score > existing.score:
-                    merged[hit.document_id] = hit
-        return tuple(sorted(merged.values(), key=lambda hit: hit.score, reverse=True))
+            if hasattr(run, "fused_hits"):
+                for hit in run.fused_hits:
+                    existing = merged.get(hit.hit_id)
+                    if existing is None or hit.score > getattr(existing, "score", 0.0):
+                        merged[hit.hit_id] = hit
+            else:
+                for hit in run.final.hits:
+                    existing = merged.get(hit.document_id)
+                    if existing is None or hit.score > getattr(existing, "score", 0.0):
+                        merged[hit.document_id] = hit
+        return tuple(sorted(merged.values(), key=lambda hit: getattr(hit, "score", 0.0), reverse=True))
 
     def _evidence(self, merged_hits) -> tuple[EvidenceRef, ...]:
         evidence = []
         for index, hit in enumerate(merged_hits[:EVIDENCE_LIMIT], 1):
-            document = self.retrieval.document_by_id[hit.document_id]
-            evidence.append(EvidenceRef(f"evidence-{index:04d}", hit.source_snapshot_id or "", hit.locator or {}, document.text[:EVIDENCE_QUOTE_CHARS], "hybrid-lancedb-rerank-page-chunk-v2"))
+            if getattr(hit, "modality", "text") == "image":
+                evidence.append(
+                    EvidenceRef(
+                        f"evidence-{index:04d}",
+                        hit.source_snapshot_id or "",
+                        hit.locator or {},
+                        hit.text or "",
+                        "multimodal-image-retrieval-v1",
+                        modality="image",
+                        asset_id=hit.asset_id,
+                        artifact_ref=hit.artifact_ref,
+                    )
+                )
+            else:
+                doc_id = getattr(hit, "document_id", None) or getattr(hit, "hit_id", "")
+                document = self.retrieval.document_by_id.get(doc_id)
+                text = document.text[:EVIDENCE_QUOTE_CHARS] if document else (getattr(hit, "text", "") or "")[:EVIDENCE_QUOTE_CHARS]
+                evidence.append(
+                    EvidenceRef(
+                        f"evidence-{index:04d}",
+                        hit.source_snapshot_id or "",
+                        hit.locator or {},
+                        text,
+                        "hybrid-lancedb-rerank-page-chunk-v2",
+                        modality="text",
+                    )
+                )
         return tuple(evidence)
 
     def _draft(self, objective: str, evidence: tuple[EvidenceRef, ...], *, repair: bool, prior_claims=(), assessments=(), fix_note=None):
@@ -344,6 +375,8 @@ class VerifiedResearchWorkflow:
                     "evidence_id": item.evidence_id,
                     "origin": origin_lane(item),
                     "quote": item.quote,
+                    "modality": item.modality,
+                    **({"asset_id": item.asset_id} if item.asset_id else {}),
                 }
                 for item in evidence
             ],
@@ -412,8 +445,17 @@ class VerifiedResearchWorkflow:
     @staticmethod
     def _retrieval_payload(queries, runs, merged_hits):
         def rows(result): return [{"chunk_id":hit.document_id,"score":hit.score,"rank":hit.rank,"source_snapshot_id":hit.source_snapshot_id,"locator":hit.locator} for hit in result.hits]
-        def run_payload(run): return {"query":run.query,"rerank_status":run.rerank_status,"bm25":rows(run.bm25),"dense":rows(run.dense),"hybrid":rows(run.hybrid),"final":rows(run.final),"embedding_request":run.embedding_request_artifact,"embedding_response":run.embedding_response_artifact,"rerank_request":run.rerank_request_artifact,"rerank_response":run.rerank_response_artifact}
-        merged_rows = [{"chunk_id":hit.document_id,"score":hit.score,"rank":hit.rank,"source_snapshot_id":hit.source_snapshot_id,"locator":hit.locator} for hit in merged_hits]
+        def run_payload(run):
+            if hasattr(run, "fused_hits"):
+                return {
+                    "query": run.query,
+                    "fusion_strategy": run.fusion_strategy,
+                    "final": [{"chunk_id": getattr(h, "hit_id", getattr(h, "document_id", "")), "score": h.score, "rank": h.rank, "source_snapshot_id": h.source_snapshot_id, "locator": h.locator} for h in run.final.hits],
+                    "fused_hits": [{"hit_id": h.hit_id, "score": h.score, "rank": h.rank, "modality": h.modality, "source_snapshot_id": h.source_snapshot_id, "asset_id": h.asset_id, "page": h.page, "locator": h.locator} for h in run.fused_hits],
+                    "text_run": run_payload(run.text_run) if run.text_run is not None else None,
+                }
+            return {"query":run.query,"rerank_status":run.rerank_status,"bm25":rows(run.bm25),"dense":rows(run.dense),"hybrid":rows(run.hybrid),"final":rows(run.final),"embedding_request":run.embedding_request_artifact,"embedding_response":run.embedding_response_artifact,"rerank_request":run.rerank_request_artifact,"rerank_response":run.rerank_response_artifact}
+        merged_rows = [{"chunk_id":getattr(hit, "document_id", getattr(hit, "hit_id", "")),"score":hit.score,"rank":getattr(hit, "rank", idx),"source_snapshot_id":hit.source_snapshot_id,"locator":hit.locator,"modality":getattr(hit, "modality", "text")} for idx, hit in enumerate(merged_hits, 1)]
         return {"queries":list(queries),"runs":[run_payload(run) for run in runs],"final":merged_rows}
 
     def _harness_trace(self, objective, plan_ref, retrieval_ref, report_ref, evidence, coverage):

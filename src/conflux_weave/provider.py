@@ -35,6 +35,8 @@ class ProviderConfig:
     reranker_model: str | None = None
     # 深度研究引擎（GPT Researcher）专用模型；缺省回退到 chat 模型。
     engine_model: str | None = None
+    # 多模态图片向量模型（P2.1）
+    image_embedding_model: str | None = None
 
     @classmethod
     def from_environment(cls, dotenv_path: Path | None = None) -> ProviderConfig:
@@ -52,6 +54,11 @@ class ProviderConfig:
         embedding_model = read_setting("CONFLUX_WEAVE_PROVIDER_EMBEDDING_MODEL") or None
         reranker_model = read_setting("CONFLUX_WEAVE_PROVIDER_RERANKER_MODEL") or None
         engine_model = read_setting("CONFLUX_WEAVE_PROVIDER_ENGINE_MODEL") or None
+        image_embedding_model = (
+            read_setting("CONFLUX_WEAVE_PROVIDER_IMAGE_EMBEDDING_MODEL")
+            or read_setting("CONFLUX_WEAVE_IMAGE_EMBEDDING_MODEL")
+            or None
+        )
         missing = [
             name
             for name, value in (
@@ -72,7 +79,7 @@ class ProviderConfig:
             )
         return cls(base_url=base_url.rstrip("/"), api_key=api_key, model=model,
                    embedding_model=embedding_model, reranker_model=reranker_model,
-                   engine_model=engine_model)
+                   engine_model=engine_model, image_embedding_model=image_embedding_model)
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +153,7 @@ class ProviderPortError(RuntimeError):
         recovery_action: str,
     ) -> None:
         self.code = code
+        self.message = message
         self.retryable = retryable
         self.status_code = status_code
         self.request_artifact_ref = request_artifact_ref

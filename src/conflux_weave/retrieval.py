@@ -11,7 +11,10 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Iterable
+from typing import TYPE_CHECKING, Any, Iterable, Mapping, Sequence
+
+if TYPE_CHECKING:
+    from conflux_weave.multimodal_indexing import MultimodalRetrievalHit
 
 
 _TOKEN_RE = re.compile(r"[a-z0-9_]+|[\u4e00-\u9fff]+", re.IGNORECASE)
@@ -94,6 +97,134 @@ def reciprocal_rank_fusion(*results: RetrievalQueryResult, top_k: int = 10, k: i
             metadata.setdefault(hit.document_id, hit)
     ordered = sorted(scores, key=lambda doc_id: (-scores[doc_id], doc_id))[:top_k]
     return RetrievalQueryResult(results[0].query, RetrievalStrategy.HYBRID, tuple(RetrievalHit(doc_id, scores[doc_id], rank, metadata[doc_id].source_snapshot_id, metadata[doc_id].locator) for rank, doc_id in enumerate(ordered, 1)))
+
+
+@dataclass(frozen=True, slots=True)
+class MultimodalFusionHit:
+    """A fused retrieval hit representing either a text chunk or an image asset."""
+
+    hit_id: str
+    score: float
+    rank: int
+    modality: str
+    source_snapshot_id: str
+    locator: dict[str, Any]
+    text: str | None = None
+    asset_id: str | None = None
+    artifact_ref: str | None = None
+    thumbnail_artifact_ref: str | None = None
+    page: int | None = None
+    bbox: dict[str, float] | None = None
+    coordinate_space: str | None = None
+    parent_chunk_ids: tuple[str, ...] = ()
+    embedding_model: str | None = None
+    index_version: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MultimodalRetrievalResult:
+    """Combined multimodal retrieval result preserving source hits and fused rankings."""
+
+    query: str
+    text_hits: tuple[RetrievalHit, ...]
+    image_hits: tuple[MultimodalRetrievalHit, ...]
+    fused_hits: tuple[MultimodalFusionHit, ...]
+    fusion_strategy: str = "reciprocal_rank_fusion"
+
+
+def multimodal_reciprocal_rank_fusion(
+    text_hits: Sequence[RetrievalHit],
+    image_hits: Sequence[MultimodalRetrievalHit],
+    *,
+    text_by_id: Mapping[str, str] | None = None,
+    top_k: int = 10,
+    k: int = 60,
+    text_weight: float = 1.0,
+    image_weight: float = 1.0,
+) -> tuple[MultimodalFusionHit, ...]:
+    """Fuse text hits and image hits using Reciprocal Rank Fusion without comparing raw cosine scores.
+
+    Formula:
+        For text hit at 1-based rank r: score = text_weight / (k + r)
+        For image hit at 1-based rank r: score = image_weight / (k + r)
+
+    Tie-breaking: (-score, hit_id).
+    Returns top_k fused hits.
+    """
+    if top_k <= 0 or k <= 0:
+        raise ValueError("top_k and k must be positive")
+    if text_weight <= 0 or image_weight <= 0:
+        raise ValueError("text_weight and image_weight must be positive")
+
+    fused_items: dict[str, MultimodalFusionHit] = {}
+
+    for hit in text_hits:
+        rrf_score = text_weight / (k + hit.rank)
+        page = None
+        if isinstance(hit.locator, dict):
+            page_val = hit.locator.get("page")
+            if isinstance(page_val, int):
+                page = page_val
+        text_content = text_by_id.get(hit.document_id) if text_by_id else None
+
+        fused_items[hit.document_id] = MultimodalFusionHit(
+            hit_id=hit.document_id,
+            score=rrf_score,
+            rank=0,
+            modality="text",
+            source_snapshot_id=hit.source_snapshot_id or "",
+            locator=dict(hit.locator or {}),
+            text=text_content,
+            page=page,
+        )
+
+    for hit in image_hits:
+        rrf_score = image_weight / (k + hit.rank)
+        fused_items[hit.asset_id] = MultimodalFusionHit(
+            hit_id=hit.asset_id,
+            score=rrf_score,
+            rank=0,
+            modality=hit.modality,
+            source_snapshot_id=hit.source_snapshot_id,
+            locator=dict(hit.locator or {}),
+            text=hit.caption,
+            asset_id=hit.asset_id,
+            artifact_ref=hit.artifact_ref,
+            thumbnail_artifact_ref=hit.thumbnail_artifact_ref,
+            page=hit.page,
+            bbox=hit.bbox,
+            coordinate_space=hit.coordinate_space,
+            parent_chunk_ids=hit.parent_chunk_ids,
+            embedding_model=hit.embedding_model,
+            index_version=hit.index_version,
+        )
+
+    sorted_items = sorted(
+        fused_items.values(),
+        key=lambda item: (-item.score, item.hit_id),
+    )[:top_k]
+
+    return tuple(
+        MultimodalFusionHit(
+            hit_id=item.hit_id,
+            score=item.score,
+            rank=rank,
+            modality=item.modality,
+            source_snapshot_id=item.source_snapshot_id,
+            locator=item.locator,
+            text=item.text,
+            asset_id=item.asset_id,
+            artifact_ref=item.artifact_ref,
+            thumbnail_artifact_ref=item.thumbnail_artifact_ref,
+            page=item.page,
+            bbox=item.bbox,
+            coordinate_space=item.coordinate_space,
+            parent_chunk_ids=item.parent_chunk_ids,
+            embedding_model=item.embedding_model,
+            index_version=item.index_version,
+        )
+        for rank, item in enumerate(sorted_items, 1)
+    )
 
 
 @dataclass(frozen=True, slots=True)

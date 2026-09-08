@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 
 from dotenv import dotenv_values
 from fastapi import FastAPI, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -37,6 +37,10 @@ from conflux_weave.api_contracts import (
     DeepResearchTaskRequest,
     ApiErrorResponse,
     ArtifactContentResponse,
+    DocumentAssetDetailResponse,
+    DocumentAssetsResponse,
+    MultimodalFusionHitResponse,
+    MultimodalRetrievalResultResponse,
     FixtureResearchTaskRequest,
     FollowUpResearchTaskRequest,
     ProviderConfigResponse,
@@ -162,6 +166,56 @@ class LibraryRestoreRequest(BaseModel):
 
 WORKBENCH_ROOT = Path(__file__).with_name("workbench")
 mimetypes.add_type("text/javascript", ".js")
+
+ALLOWED_IMAGE_MIMES: set[str] = {"image/png", "image/jpeg", "image/webp"}
+MAX_IMAGE_SIZE_BYTES: int = 20_000_000
+
+
+def _validate_image_magic_bytes(content: bytes, media_type: str) -> bool:
+    if media_type == "image/png":
+        return content.startswith(b"\x89PNG\r\n\x1a\n")
+    if media_type in {"image/jpeg", "image/jpg"}:
+        return content.startswith(b"\xff\xd8\xff")
+    if media_type == "image/webp":
+        return content[:4] == b"RIFF" and len(content) >= 12 and content[8:12] == b"WEBP"
+    return False
+
+
+def _build_asset_detail_response(asset: dict[str, Any]) -> DocumentAssetDetailResponse:
+    asset_id = str(asset["asset_id"])
+    status = str(asset.get("extraction_status", "extracted"))
+    has_art = bool(asset.get("artifact_ref"))
+    content_url = f"/api/v1/library/assets/{asset_id}/content" if (has_art and status != "failed") else None
+    has_thumb = bool(asset.get("thumbnail_artifact_ref"))
+    thumbnail_url = f"/api/v1/library/assets/{asset_id}/content?variant=thumbnail" if has_thumb else None
+    return DocumentAssetDetailResponse(
+        schema_version=asset.get("schema_version", "conflux-weave.document-asset.v1"),
+        asset_id=asset_id,
+        document_id=str(asset.get("document_id", "")),
+        source_snapshot_id=str(asset.get("source_snapshot_id", "")),
+        page=int(asset.get("page", 1)),
+        asset_kind=str(asset.get("asset_kind", "embedded_image")),
+        artifact_ref=asset.get("artifact_ref"),
+        thumbnail_artifact_ref=asset.get("thumbnail_artifact_ref"),
+        media_type=str(asset.get("media_type", "image/png")),
+        content_hash=asset.get("content_hash"),
+        width_px=int(asset.get("width_px", 0) or 0),
+        height_px=int(asset.get("height_px", 0) or 0),
+        bbox=asset.get("bbox"),
+        coordinate_space=str(asset.get("coordinate_space", "pdf_page_points_top_left")),
+        page_width=float(asset.get("page_width", 0.0) or 0.0),
+        page_height=float(asset.get("page_height", 0.0) or 0.0),
+        page_rotation=int(asset.get("page_rotation", 0) or 0),
+        caption=asset.get("caption"),
+        caption_locator=asset.get("caption_locator"),
+        parent_segment_ids=tuple(asset.get("parent_segment_ids", ())),
+        extraction_method=str(asset.get("extraction_method", "pymupdf-v1")),
+        extraction_status=status,
+        duplicate_of_asset_id=asset.get("duplicate_of_asset_id"),
+        warnings=tuple(asset.get("warnings", ())),
+        content_url=content_url,
+        thumbnail_url=thumbnail_url,
+    )
 
 
 def create_app(
@@ -616,7 +670,10 @@ def create_app(
                 "record_id": row.get("document_id") or row.get("paper_id") or identity,
                 "paper_id": row.get("paper_id", ""),
                 "document_id": row.get("document_id", ""),
+                "source_artifact_id": row.get("source_artifact_id", ""),
                 "segments_artifact_id": row.get("segments_artifact_id", ""),
+                "assets_artifact_id": row.get("assets_artifact_id", ""),
+                "asset_count": int(row.get("asset_count", 0) or 0),
                 "source": row.get("source_snapshot_id") or row.get("document_id") or relative,
                 "media_type": "PDF" if row.get("document_id") and (relative.lower().endswith(".pdf") or row.get("paper_id")) else "论文元数据" if row.get("paper_id") else "Markdown",
                 "status": item_status,
@@ -786,11 +843,30 @@ def create_app(
     async def index_document(document: Any) -> dict[str, Any]:
         if retrieval_pipeline is None:
             raise RuntimeError("知识库索引服务未就绪")
-        return await asyncio.to_thread(
+        res = await asyncio.to_thread(
             retrieval_pipeline.add_documents,
             retrieval_documents(document),
             producer_step_id="step-library-incremental-index",
         )
+        if (
+            getattr(retrieval_pipeline, "is_multimodal_active", lambda: False)()
+            and getattr(document, "assets", None)
+            and getattr(retrieval_pipeline, "image_embedding", None) is not None
+            and getattr(retrieval_pipeline, "image_index", None) is not None
+        ):
+            try:
+                from conflux_weave.multimodal_indexing import build_image_index
+                await asyncio.to_thread(
+                    build_image_index,
+                    document.assets,
+                    retrieval_pipeline.image_embedding,
+                    repository.artifact_store,
+                    retrieval_pipeline.image_index,
+                    producer_step_id="step-library-asset-index",
+                )
+            except Exception as asset_exc:
+                pass
+        return res
 
     async def index_segments(source_snapshot_id: str, segments: list[dict[str, Any]]) -> dict[str, Any]:
         if retrieval_pipeline is None:
@@ -848,6 +924,189 @@ def create_app(
             changed = True
         if changed:
             path.write_text(json.dumps(rows, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    _manifest_cache: dict[str, dict[str, Any]] = {}
+
+    def _load_manifest_payload(art_id: str) -> dict[str, Any] | None:
+        if art_id in _manifest_cache:
+            return _manifest_cache[art_id]
+        if not str(art_id).startswith("artifact-sha256-"):
+            return None
+        try:
+            p = repository.artifact_store.path_for_digest(str(art_id).removeprefix("artifact-sha256-"))
+            if p.is_file():
+                payload = json.loads(p.read_text(encoding="utf-8"))
+                _manifest_cache[art_id] = payload
+                return payload
+        except Exception:
+            pass
+        return None
+
+    async def get_or_extract_document_assets(item: dict[str, Any]) -> dict[str, Any] | None:
+        art_id = item.get("assets_artifact_id")
+        if art_id and str(art_id).startswith("artifact-sha256-"):
+            payload = _load_manifest_payload(str(art_id))
+            if payload:
+                return payload
+
+        source_art_id = item.get("source_artifact_id")
+        media_type = str(item.get("media_type", ""))
+        rel = str(item.get("relative_path", ""))
+        is_pdf = media_type == "PDF" or rel.lower().endswith(".pdf") or item.get("paper_id")
+        if source_art_id and str(source_art_id).startswith("artifact-sha256-") and is_pdf:
+            try:
+                source_path = repository.artifact_store.path_for_digest(str(source_art_id).removeprefix("artifact-sha256-"))
+                if source_path.is_file():
+                    from conflux_weave.document_assets import PDFAssetExtractor
+                    raw = source_path.read_bytes()
+                    extractor = PDFAssetExtractor(repository.artifact_store)
+                    doc_id = str(item.get("document_id") or item.get("record_id") or "doc")
+                    snap_id = str(item.get("source") or item.get("source_snapshot_id") or doc_id)
+                    segments_art_id = str(item.get("segments_artifact_id", ""))
+                    segments = ()
+                    if segments_art_id.startswith("artifact-sha256-"):
+                        try:
+                            sp = repository.artifact_store.path_for_digest(segments_art_id.removeprefix("artifact-sha256-"))
+                            seg_payload = json.loads(sp.read_text(encoding="utf-8"))
+                            segments = tuple(seg_payload.get("segments", ()))
+                        except Exception:
+                            pass
+                    manifest, art = extractor.extract_document_assets(
+                        raw,
+                        document_id=doc_id,
+                        source_snapshot_id=snap_id,
+                        source_artifact_id=str(source_art_id),
+                        parent_segments=segments,
+                    )
+                    item["assets_artifact_id"] = art.artifact_id
+                    item["asset_count"] = manifest.asset_count
+                    save_document_row(item)
+                    manifest_dict = manifest.to_dict()
+                    _manifest_cache[art.artifact_id] = manifest_dict
+                    return manifest_dict
+            except Exception:
+                pass
+        return None
+
+    async def resolve_registered_asset(asset_id: str) -> dict[str, Any] | None:
+        overview = await library_overview()
+        for doc in overview.get("items", []):
+            art_id = doc.get("assets_artifact_id")
+            if not art_id:
+                continue
+            payload = _load_manifest_payload(str(art_id))
+            if not payload:
+                continue
+            for a in payload.get("assets", []):
+                if a.get("asset_id") == asset_id:
+                    return a
+        return None
+
+    @app.get("/api/v1/library/documents/{document_id}/assets", response_model=DocumentAssetsResponse)
+    async def library_document_assets(document_id: str):
+        overview = await library_overview()
+        item = next((row for row in overview["items"] if row.get("document_id") == document_id or row.get("paper_id") == document_id or row.get("record_id") == document_id), None)
+        if item is None:
+            return JSONResponse(status_code=404, content={"code": "document_not_found", "message": "资料不存在。"})
+
+        assets_payload = await get_or_extract_document_assets(item)
+        if not assets_payload:
+            return DocumentAssetsResponse(
+                document_id=document_id,
+                assets_artifact_id=None,
+                asset_count=0,
+                unique_content_count=0,
+                status_counts={},
+                items=(),
+            )
+
+        items = tuple(_build_asset_detail_response(a) for a in assets_payload.get("assets", []))
+        return DocumentAssetsResponse(
+            document_id=document_id,
+            assets_artifact_id=item.get("assets_artifact_id") or assets_payload.get("assets_artifact_id"),
+            asset_count=len(items),
+            unique_content_count=int(assets_payload.get("unique_content_count", len(items))),
+            status_counts=assets_payload.get("status_counts", {}),
+            items=items,
+        )
+
+    @app.get("/api/v1/library/assets/{asset_id}", response_model=DocumentAssetDetailResponse)
+    async def library_asset_detail(asset_id: str):
+        asset = await resolve_registered_asset(asset_id)
+        if asset is None:
+            return JSONResponse(status_code=404, content={"code": "asset_not_found", "message": "图片资产不存在。"})
+        return _build_asset_detail_response(asset)
+
+    @app.get("/api/v1/library/assets/{asset_id}/content")
+    async def library_asset_content(asset_id: str, variant: Literal["original", "thumbnail"] = "original"):
+        asset = await resolve_registered_asset(asset_id)
+        if asset is None:
+            return JSONResponse(status_code=404, content={"code": "asset_not_found", "message": "图片资产不存在。"})
+
+        if variant == "thumbnail":
+            ref = asset.get("thumbnail_artifact_ref")
+            if not ref:
+                return JSONResponse(status_code=404, content={"code": "thumbnail_not_found", "message": "该资产无缩略图。"})
+            media_type = "image/png"
+        else:
+            if asset.get("extraction_status") == "failed" or not asset.get("artifact_ref"):
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "code": "asset_content_unavailable",
+                        "message": "该图片资产未成功提取原始图片或无有效内容。",
+                        "asset_id": asset_id,
+                        "extraction_status": asset.get("extraction_status", "failed"),
+                        "warnings": asset.get("warnings", []),
+                    },
+                )
+            ref = asset.get("artifact_ref")
+            media_type = asset.get("media_type", "image/png")
+
+        if media_type not in ALLOWED_IMAGE_MIMES:
+            return JSONResponse(
+                status_code=415,
+                content={"code": "unsupported_media_type", "message": f"不支持的图片类型: {media_type}"},
+            )
+
+        if not str(ref).startswith("artifact-sha256-"):
+            return JSONResponse(status_code=404, content={"code": "artifact_file_missing", "message": "图片底层文件标识异常。"})
+
+        digest = str(ref).removeprefix("artifact-sha256-")
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            return JSONResponse(status_code=400, content={"code": "invalid_artifact_digest", "message": "非法的摘要格式。"})
+
+        try:
+            file_path = repository.artifact_store.path_for_digest(digest)
+        except Exception:
+            return JSONResponse(status_code=404, content={"code": "artifact_file_missing", "message": "图片底层文件缺失。"})
+
+        if not file_path.is_file():
+            return JSONResponse(status_code=404, content={"code": "artifact_file_missing", "message": "图片底层文件缺失。"})
+
+        file_size = file_path.stat().st_size
+        if file_size > MAX_IMAGE_SIZE_BYTES:
+            return JSONResponse(
+                status_code=413,
+                content={"code": "asset_too_large", "message": f"图片资产超过最大允许大小 ({MAX_IMAGE_SIZE_BYTES // (1024*1024)}MB)。"},
+            )
+
+        raw_bytes = file_path.read_bytes()
+        if not _validate_image_magic_bytes(raw_bytes, media_type):
+            return JSONResponse(
+                status_code=422,
+                content={"code": "corrupted_asset", "message": "图片内容已损坏或格式与元数据不匹配。"},
+            )
+
+        headers = {
+            "Content-Type": media_type,
+            "Content-Disposition": "inline",
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Length": str(file_size),
+        }
+        return Response(content=raw_bytes, media_type=media_type, headers=headers)
+
 
     @app.post("/api/v1/library/documents/{document_id}/index")
     async def reindex_library_document(document_id: str) -> dict[str, Any]:
@@ -931,7 +1190,7 @@ def create_app(
             handle.write(payload)
             temporary_path = Path(handle.name)
         try:
-            imported = LocalDocumentImporter(repository.artifact_store).import_path(temporary_path)
+            imported = LocalDocumentImporter(repository.artifact_store, extract_assets=True).import_path(temporary_path)
         except (OSError, UnicodeDecodeError, UnsupportedDocumentError, ValueError) as exc:
             registry_path = repository.database_path.with_name("library-registry.json")
             try:
@@ -951,6 +1210,9 @@ def create_app(
             registry_path.write_text(json.dumps(existing, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             return JSONResponse(status_code=422, content={"code": "document_parse_quality_failed", "message": "PDF 已保存，但未提取到有效正文。"})
         row = {"relative_path": safe_name, "document_id": imported.document_id, "source_snapshot_id": imported.source_snapshot.source_id, "source_artifact_id": imported.source_artifact.artifact_id, "segments_artifact_id": imported.segments_artifact.artifact_id, "status": "parsed", "segment_count": len(imported.segments), "character_count": sum(len(segment.text) for segment in imported.segments), "size_bytes": len(payload)}
+        if getattr(imported, "assets_artifact", None) is not None:
+            row["assets_artifact_id"] = imported.assets_artifact.artifact_id
+            row["asset_count"] = len(getattr(imported, "assets", ()))
         save_document_row(row)
         if retrieval_pipeline is None:
             return {"status": "parsed", "document_id": imported.document_id, "source_snapshot_id": imported.source_snapshot.source_id, "segment_count": len(imported.segments), "media_type": imported.media_type, "message": "文档已解析，但知识库索引服务未就绪。"}
@@ -962,6 +1224,74 @@ def create_app(
             return JSONResponse(status_code=502, content={"code": "document_index_failed", "message": f"文档已解析，但加入知识库失败：{exc}", "document_id": imported.document_id})
         save_document_row({**row, "status": "knowledge_ready", "index_added_count": index_result.get("added_count", 0), "embedding_artifacts": index_result.get("embedding_artifacts", [])})
         return {"status": "knowledge_ready", "document_id": imported.document_id, "source_snapshot_id": imported.source_snapshot.source_id, "segment_count": len(imported.segments), "media_type": imported.media_type}
+
+    @app.post("/api/v1/library/search", response_model=MultimodalRetrievalResultResponse)
+    async def library_multimodal_search(
+        query: str = Query(..., min_length=1, max_length=400),
+        top_k: int = Query(10, ge=1, le=50),
+        image_k: int = Query(5, ge=0, le=20),
+    ):
+        if retrieval_pipeline is None:
+            return JSONResponse(status_code=503, content={"code": "index_unavailable", "message": "知识库检索服务未就绪。"})
+        try:
+            if hasattr(retrieval_pipeline, "search"):
+                run = await asyncio.to_thread(
+                    retrieval_pipeline.search,
+                    query,
+                    fusion_k=top_k,
+                    image_k=image_k,
+                )
+                if hasattr(run, "fused_hits"):
+                    hit_responses = tuple(
+                        MultimodalFusionHitResponse(
+                            hit_id=h.hit_id,
+                            score=h.score,
+                            rank=h.rank,
+                            modality=h.modality,
+                            source_snapshot_id=h.source_snapshot_id,
+                            locator=h.locator,
+                            text=h.text,
+                            asset_id=h.asset_id,
+                            artifact_ref=h.artifact_ref,
+                            thumbnail_artifact_ref=h.thumbnail_artifact_ref,
+                            page=h.page,
+                            bbox=h.bbox,
+                            coordinate_space=h.coordinate_space,
+                            parent_chunk_ids=h.parent_chunk_ids,
+                            embedding_model=h.embedding_model,
+                            index_version=h.index_version,
+                        )
+                        for h in run.fused_hits
+                    )
+                    return MultimodalRetrievalResultResponse(
+                        query=query,
+                        text_hits_count=len(run.text_run.final.hits) if run.text_run else 0,
+                        image_hits_count=len(run.image_hits),
+                        fusion_strategy=run.fusion_strategy,
+                        fused_hits=hit_responses,
+                    )
+            text_run = await asyncio.to_thread(retrieval_pipeline.search, query)
+            hit_responses = tuple(
+                MultimodalFusionHitResponse(
+                    hit_id=h.document_id,
+                    score=h.score,
+                    rank=h.rank,
+                    modality="text",
+                    source_snapshot_id=h.source_snapshot_id or "",
+                    locator=h.locator or {},
+                    text="",
+                )
+                for h in text_run.final.hits[:top_k]
+            )
+            return MultimodalRetrievalResultResponse(
+                query=query,
+                text_hits_count=len(text_run.final.hits),
+                image_hits_count=0,
+                fusion_strategy="text_only",
+                fused_hits=hit_responses,
+            )
+        except Exception as exc:
+            return JSONResponse(status_code=500, content={"code": "retrieval_failed", "message": str(exc)})
 
     @app.post("/api/v1/library/papers/search")
     async def search_library_papers(
@@ -1190,7 +1520,7 @@ def create_app(
             handle.write(fetched.content)
             temporary_path = Path(handle.name)
         try:
-            document = await asyncio.to_thread(LocalDocumentImporter(repository.artifact_store).import_path, temporary_path, producer_step_id="step-library-paper-parse")
+            document = await asyncio.to_thread(LocalDocumentImporter(repository.artifact_store, extract_assets=True).import_path, temporary_path, producer_step_id="step-library-paper-parse")
             character_count = sum(len(segment.text) for segment in document.segments)
             if not document.segments or character_count < 200:
                 save_paper_row(paper, "parse_failed", error=f"正文提取质量不足：{len(document.segments)} 个有效页面，{character_count} 个字符。", document_id=document.document_id, source_artifact_id=document.source_artifact.artifact_id, size_bytes=len(fetched.content), page_count=fetched.page_count, final_pdf_url=fetched.final_url)
@@ -1201,6 +1531,9 @@ def create_app(
         finally:
             temporary_path.unlink(missing_ok=True)
         indexed_values = {"document_id": document.document_id, "source_snapshot_id": document.source_snapshot.source_id, "source_artifact_id": document.source_artifact.artifact_id, "segments_artifact_id": document.segments_artifact.artifact_id, "segment_count": len(document.segments), "character_count": character_count, "size_bytes": len(fetched.content), "page_count": fetched.page_count, "final_pdf_url": fetched.final_url, "pdf_source": fetched.source, "fetch_attempt_artifact_id": fetched.attempt_artifact_id}
+        if getattr(document, "assets_artifact", None) is not None:
+            indexed_values["assets_artifact_id"] = document.assets_artifact.artifact_id
+            indexed_values["asset_count"] = len(getattr(document, "assets", ()))
         if retrieval_pipeline is None:
             save_paper_row(paper, "parsed", **indexed_values)
             return {"status": "parsed", "paper_id": paper.paper_id, "document_id": document.document_id, "segment_count": len(document.segments), "character_count": character_count, "message": "论文已解析，但知识库索引服务未就绪。"}
@@ -1227,7 +1560,7 @@ def create_app(
         if view is None:
             return ProviderConfigResponse(
                 base_url="", model="", embedding_model="", reranker_model="",
-                engine_model="", contact_email="", api_key_configured=False, api_key_hint=None,
+                engine_model="", image_embedding_model="", contact_email="", api_key_configured=False, api_key_hint=None,
             )
         return ProviderConfigResponse(
             base_url=view.base_url,
@@ -1235,6 +1568,7 @@ def create_app(
             embedding_model=view.embedding_model,
             reranker_model=view.reranker_model,
             engine_model=view.engine_model,
+            image_embedding_model=getattr(view, "image_embedding_model", ""),
             contact_email=view.contact_email,
             api_key_configured=view.api_key_configured,
             api_key_hint=view.api_key_hint,
@@ -1267,6 +1601,7 @@ def create_app(
                 embedding_model=request.embedding_model,
                 reranker_model=request.reranker_model,
                 engine_model=request.engine_model,
+                image_embedding_model=request.image_embedding_model,
                 contact_email=request.contact_email,
             )
             return ProviderConfigUpdateResponse(
@@ -1276,6 +1611,7 @@ def create_app(
                     embedding_model=view.embedding_model,
                     reranker_model=view.reranker_model,
                     engine_model=view.engine_model,
+                    image_embedding_model=getattr(view, "image_embedding_model", ""),
                     contact_email=view.contact_email,
                     api_key_configured=view.api_key_configured,
                     api_key_hint=view.api_key_hint,
@@ -1453,12 +1789,46 @@ def build_local_app(
                 store,
                 repository.database_path.with_name("library-registry.json"),
             )
-            retrieval = HybridRetrievalPipeline(
+            text_pipeline = HybridRetrievalPipeline(
                 documents,
                 LanceDBDenseIndex(lancedb_root, table_name="paper_chunks"),
                 OpenAICompatibleEmbeddingAdapter(store, config),
                 OpenAICompatibleRerankerAdapter(store, config),
             )
+
+            # Multimodal Pipeline integration (P2.1 & P2.2)
+            from conflux_weave.multimodal_indexing import (
+                LanceDBImageIndex,
+                OpenAICompatibleImageEmbeddingAdapter,
+            )
+            from conflux_weave.multimodal_retrieval import (
+                MultimodalRetrievalPipeline,
+                is_multimodal_env_enabled,
+            )
+
+            image_index = LanceDBImageIndex(
+                lancedb_root, table_name="image_assets_v1", artifact_store=store
+            )
+            image_model = (
+                getattr(config, "image_embedding_model", None)
+                or os.environ.get("CONFLUX_WEAVE_PROVIDER_IMAGE_EMBEDDING_MODEL")
+                or os.environ.get("CONFLUX_WEAVE_IMAGE_EMBEDDING_MODEL")
+            )
+            image_embedding = None
+            if image_model:
+                image_embedding = OpenAICompatibleImageEmbeddingAdapter(
+                    store, config, model=image_model
+                )
+
+            multimodal_pipeline = MultimodalRetrievalPipeline(
+                text_pipeline,
+                image_index=image_index,
+                image_embedding=image_embedding,
+                artifact_store=store,
+                enabled=is_multimodal_env_enabled(),
+            )
+            retrieval = multimodal_pipeline
+            retrieval_pipeline = multimodal_pipeline
             verified = VerifiedResearchWorkflow(
                 store,
                 retrieval,
@@ -1470,7 +1840,6 @@ def build_local_app(
                 verified,
                 OpenAICompatibleChatAdapter(store, config),
             )
-            retrieval_pipeline = retrieval
             try:
                 from conflux_weave.deep_research import (
                     DeepResearchWorkflow,
