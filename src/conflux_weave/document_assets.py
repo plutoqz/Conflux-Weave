@@ -294,9 +294,15 @@ class PDFAssetExtractor:
 
         page_to_segments: dict[int, list[str]] = defaultdict(list)
         for seg in parent_segments:
-            page_no = seg.locator.get("page") if hasattr(seg, "locator") and isinstance(seg.locator, dict) else None
-            if page_no is not None and hasattr(seg, "segment_id"):
-                page_to_segments[int(page_no)].append(seg.segment_id)
+            if isinstance(seg, dict):
+                loc = seg.get("locator")
+                seg_id = seg.get("segment_id")
+            else:
+                loc = getattr(seg, "locator", None)
+                seg_id = getattr(seg, "segment_id", None)
+            page_no = loc.get("page") if isinstance(loc, dict) else None
+            if page_no is not None and seg_id:
+                page_to_segments[int(page_no)].append(str(seg_id))
 
         for page_idx in range(len(doc)):
             page = doc[page_idx]

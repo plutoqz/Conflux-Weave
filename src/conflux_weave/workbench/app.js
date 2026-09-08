@@ -386,10 +386,11 @@ async function loadEvidence(runId, evidenceIds) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "evidence-item";
+    const isImage = item.modality === "image" || Boolean(item.asset_id);
     const title = document.createElement("strong");
-    title.textContent = `证据 ${index + 1}`;
+    title.textContent = `证据 ${index + 1}${isImage ? " · 图片" : ""}`;
     const quote = document.createElement("span");
-    quote.textContent = item.quote;
+    quote.textContent = item.quote || (isImage ? "（图片证据）" : "（无正文）");
     const source = document.createElement("small");
     const page = item.locator?.page ? ` · p.${item.locator.page}` : "";
     source.textContent = `${item.source_snapshot_id}${page}`;
@@ -402,16 +403,258 @@ async function loadEvidence(runId, evidenceIds) {
   $("#evidence-section").hidden = !available.length;
 }
 
+async function renderEvidenceData(prefix, item, index) {
+  const isImage = item.modality === "image" || Boolean(item.asset_id);
+  $(`#${prefix}-title`).textContent = `证据 ${index + 1}${isImage ? " (图片)" : ""}`;
+  $(`#${prefix}-source`).textContent = item.source_snapshot_id;
+  $(`#${prefix}-method`).textContent = item.extraction_method;
+  $(`#${prefix}-locator`).textContent = JSON.stringify(item.locator, null, 2);
+
+  const imgContainer = $(`#${prefix}-image-container`);
+  const imgToolbar = $(`#${prefix}-image-toolbar`);
+  const tabOrig = $(`#${prefix}-tab-orig`);
+  const tabThumb = $(`#${prefix}-tab-thumb`);
+  const imgLink = $(`#${prefix}-image-link`);
+  const imgEl = $(`#${prefix}-image`);
+  const imgError = $(`#${prefix}-image-error`);
+  const warningsEl = $(`#${prefix}-warnings`);
+  const captionCard = $(`#${prefix}-caption-card`);
+  const captionEl = $(`#${prefix}-caption`);
+  const quoteEl = $(`#${prefix}-quote`);
+  const pageRow = $(`#${prefix}-page-row`);
+  const pageEl = $(`#${prefix}-page`);
+  const bboxRow = $(`#${prefix}-bbox-row`);
+  const bboxEl = $(`#${prefix}-bbox`);
+  const parentChunksRow = $(`#${prefix}-parent-chunks-row`);
+  const parentChunksEl = $(`#${prefix}-parent-chunks`);
+  const assetRow = $(`#${prefix}-asset-row`);
+  const assetIdEl = $(`#${prefix}-asset-id`);
+  const artifactRow = $(`#${prefix}-artifact-row`);
+  const artifactRefEl = $(`#${prefix}-artifact-ref`);
+  const thumbRefRow = $(`#${prefix}-thumb-ref-row`);
+  const thumbRefEl = $(`#${prefix}-thumb-artifact-ref`);
+
+  if (!isImage) {
+    if (imgContainer) imgContainer.hidden = true;
+    if (warningsEl) warningsEl.hidden = true;
+    if (captionCard) captionCard.hidden = true;
+    if (quoteEl) {
+      quoteEl.hidden = false;
+      quoteEl.textContent = item.quote || "";
+    }
+    if (pageRow) pageRow.hidden = true;
+    if (bboxRow) bboxRow.hidden = true;
+    if (parentChunksRow) parentChunksRow.hidden = true;
+    if (assetRow) assetRow.hidden = true;
+    if (artifactRow) artifactRow.hidden = true;
+    if (thumbRefRow) thumbRefRow.hidden = true;
+    return;
+  }
+
+  // Image mode setup
+  if (imgContainer) imgContainer.hidden = false;
+  if (imgError) imgError.hidden = true;
+  if (captionCard) captionCard.hidden = false;
+  if (captionEl) captionEl.textContent = item.quote || "（无图注）";
+  if (quoteEl) quoteEl.hidden = true;
+
+  // Initial fallbacks from item metadata
+  const initPage = item.locator?.page;
+  if (pageRow) {
+    if (initPage) {
+      pageRow.hidden = false;
+      if (pageEl) pageEl.textContent = `第 ${initPage} 页`;
+    } else {
+      pageRow.hidden = true;
+    }
+  }
+
+  const initBbox = item.locator?.bbox;
+  if (bboxRow) {
+    if (initBbox && typeof initBbox === "object") {
+      bboxRow.hidden = false;
+      if (bboxEl) bboxEl.textContent = `x: ${initBbox.x}, y: ${initBbox.y}, w: ${initBbox.width}, h: ${initBbox.height}`;
+    } else {
+      bboxRow.hidden = true;
+    }
+  }
+
+  if (assetRow) {
+    if (item.asset_id) {
+      assetRow.hidden = false;
+      if (assetIdEl) assetIdEl.textContent = item.asset_id;
+    } else {
+      assetRow.hidden = true;
+    }
+  }
+
+  if (artifactRow) {
+    if (item.artifact_ref) {
+      artifactRow.hidden = false;
+      if (artifactRefEl) artifactRefEl.textContent = item.artifact_ref;
+    } else {
+      artifactRow.hidden = true;
+    }
+  }
+
+  let origUrl = item.asset_id ? `/api/v1/library/assets/${encodeURIComponent(item.asset_id)}/content?variant=original` : "";
+  let thumbUrl = item.asset_id ? `/api/v1/library/assets/${encodeURIComponent(item.asset_id)}/content?variant=thumbnail` : "";
+
+  function setVariant(variant) {
+    if (!imgEl) return;
+    imgEl.hidden = false;
+    if (imgError) imgError.hidden = true;
+    if (variant === "thumbnail") {
+      imgEl.src = thumbUrl;
+      if (tabThumb) { tabThumb.classList.add("active"); tabThumb.setAttribute("aria-selected", "true"); }
+      if (tabOrig) { tabOrig.classList.remove("active"); tabOrig.setAttribute("aria-selected", "false"); }
+      if (imgLink) imgLink.href = thumbUrl;
+    } else {
+      imgEl.src = origUrl;
+      if (tabOrig) { tabOrig.classList.add("active"); tabOrig.setAttribute("aria-selected", "true"); }
+      if (tabThumb) { tabThumb.classList.remove("active"); tabThumb.setAttribute("aria-selected", "false"); }
+      if (imgLink) imgLink.href = origUrl;
+    }
+  }
+
+  if (tabOrig) {
+    tabOrig.onclick = (e) => { e.preventDefault(); setVariant("original"); };
+  }
+  if (tabThumb) {
+    tabThumb.onclick = (e) => { e.preventDefault(); setVariant("thumbnail"); };
+  }
+
+  if (imgEl) {
+    imgEl.hidden = false;
+    imgEl.alt = item.quote || "证据图片";
+    imgEl.onerror = () => {
+      imgEl.hidden = true;
+      if (imgError) {
+        imgError.hidden = false;
+        imgError.textContent = "图片加载失败或该资产无可用图片。";
+      }
+    };
+    if (origUrl) {
+      setVariant("original");
+    }
+  }
+
+  if (item.asset_id) {
+    try {
+      const detail = await api(`/api/v1/library/assets/${encodeURIComponent(item.asset_id)}`);
+
+      if (detail.content_url) origUrl = detail.content_url;
+      if (detail.thumbnail_url) thumbUrl = detail.thumbnail_url;
+
+      if (imgToolbar) {
+        imgToolbar.hidden = false;
+        if (imgLink) imgLink.href = origUrl;
+        if (tabThumb) {
+          tabThumb.style.display = detail.thumbnail_artifact_ref ? "inline-block" : "none";
+        }
+      }
+
+      const warnings = Array.isArray(detail.warnings) ? [...detail.warnings] : [];
+      if (warnings.length && warningsEl) {
+        warningsEl.hidden = false;
+        warningsEl.replaceChildren(...warnings.map((w) => {
+          const tag = document.createElement("span");
+          tag.className = "evidence-warning-tag";
+          tag.textContent = w;
+          return tag;
+        }));
+      } else if (warningsEl) {
+        warningsEl.hidden = true;
+      }
+
+      if (detail.extraction_status === "failed") {
+        if (imgEl) imgEl.hidden = true;
+        if (imgError) {
+          imgError.hidden = false;
+          imgError.textContent = `图片提取降级/失败: ${warnings.join(", ") || "render_failed"}`;
+        }
+      }
+
+      if (captionEl) {
+        captionEl.textContent = detail.caption || item.quote || "（无图注）";
+      }
+
+      const pageVal = detail.page || initPage;
+      if (pageRow) {
+        if (pageVal) {
+          pageRow.hidden = false;
+          if (pageEl) pageEl.textContent = `第 ${pageVal} 页`;
+        } else {
+          pageRow.hidden = true;
+        }
+      }
+
+      const b = detail.bbox || initBbox;
+      if (bboxRow) {
+        if (b && typeof b === "object") {
+          bboxRow.hidden = false;
+          const space = detail.coordinate_space ? ` (${detail.coordinate_space})` : "";
+          if (bboxEl) bboxEl.textContent = `x: ${b.x}, y: ${b.y}, w: ${b.width}, h: ${b.height}${space}`;
+        } else {
+          bboxRow.hidden = true;
+        }
+      }
+
+      const parentIds = Array.isArray(detail.parent_segment_ids) && detail.parent_segment_ids.length > 0
+        ? detail.parent_segment_ids
+        : [];
+      if (parentChunksRow) {
+        parentChunksRow.hidden = false;
+        if (parentChunksEl) {
+          if (parentIds.length > 0) {
+            parentChunksEl.replaceChildren(...parentIds.map((pid) => {
+              const chip = document.createElement("span");
+              chip.className = "evidence-chunk-tag";
+              chip.textContent = pid;
+              return chip;
+            }));
+          } else {
+            parentChunksEl.textContent = "无关联父 Chunk";
+          }
+        }
+      }
+
+      if (detail.source_snapshot_id) $(`#${prefix}-source`).textContent = detail.source_snapshot_id;
+      if (detail.extraction_method) $(`#${prefix}-method`).textContent = detail.extraction_method;
+
+      const artRef = detail.artifact_ref || item.artifact_ref;
+      if (artifactRow) {
+        if (artRef) {
+          artifactRow.hidden = false;
+          if (artifactRefEl) artifactRefEl.textContent = artRef;
+        } else {
+          artifactRow.hidden = true;
+        }
+      }
+
+      if (thumbRefRow) {
+        if (detail.thumbnail_artifact_ref) {
+          thumbRefRow.hidden = false;
+          if (thumbRefEl) thumbRefEl.textContent = detail.thumbnail_artifact_ref;
+        } else {
+          thumbRefRow.hidden = true;
+        }
+      }
+    } catch {
+      if (imgToolbar) imgToolbar.hidden = false;
+    }
+  } else {
+    if (warningsEl) warningsEl.hidden = true;
+    if (thumbRefRow) thumbRefRow.hidden = true;
+  }
+}
+
 function openEvidence(item, index, trigger) {
   if (inspectorMedia.matches) {
     openInspector(index, trigger);
     return;
   }
-  $("#evidence-title").textContent = `证据 ${index + 1}`;
-  $("#evidence-quote").textContent = item.quote;
-  $("#evidence-source").textContent = item.source_snapshot_id;
-  $("#evidence-method").textContent = item.extraction_method;
-  $("#evidence-locator").textContent = JSON.stringify(item.locator, null, 2);
+  renderEvidenceData("evidence", item, index);
   $("#evidence-dialog").showModal();
 }
 
@@ -420,11 +663,7 @@ function openInspector(index, trigger = state.inspectorTrigger) {
   state.inspectorTrigger = trigger;
   const item = state.evidenceList[index];
   if (!item) return;
-  $("#insp-title").textContent = `证据 ${index + 1}`;
-  $("#insp-quote").textContent = item.quote;
-  $("#insp-source").textContent = item.source_snapshot_id;
-  $("#insp-method").textContent = item.extraction_method;
-  $("#insp-locator").textContent = JSON.stringify(item.locator, null, 2);
+  renderEvidenceData("insp", item, index);
   $("#insp-position").textContent = `${index + 1} / ${state.evidenceList.length}`;
   $("#insp-prev").disabled = index <= 0;
   $("#insp-next").disabled = index >= state.evidenceList.length - 1;

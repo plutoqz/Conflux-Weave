@@ -252,10 +252,11 @@ def _evidence_summary_lines(
         item = evidence_by_id[citation.evidence_id]
         trust = evidence_trust[item.evidence_id]
         locator = json.dumps(item.locator, ensure_ascii=False, sort_keys=True)
+        extra = f"；图片资产 `{item.asset_id}`" if (item.modality == "image" or item.asset_id) else ""
         lines.append(
             f"[{citation.display_index}] `{claim_by_id[citation.claim_id].claim_id}` -> "
             f"`{item.evidence_id}`；来源 {TRUST_MARKERS[trust]}；SourceSnapshot "
-            f"`{item.source_snapshot_id}`；locator `{locator}`。"
+            f"`{item.source_snapshot_id}`{extra}；locator `{locator}`。"
         )
     return lines
 
@@ -342,10 +343,11 @@ def render_report_document(
         trust = evidence_trust[item.evidence_id]
         locator = json.dumps(item.locator, ensure_ascii=False, sort_keys=True)
         lane_marker = LANE_MARKERS.get(origin_lane(item), "")
+        asset_info = f" · 图片资产 `{item.asset_id}`" if (item.modality == "image" or item.asset_id) else ""
         lines.append(
             f"- [{citation.display_index}] 来源 {TRUST_MARKERS[trust]}"
             + (f" {lane_marker}" if lane_marker else "")
-            + f" · SourceSnapshot `{item.source_snapshot_id}` · 定位 `{locator}`"
+            + f" · SourceSnapshot `{item.source_snapshot_id}`{asset_info} · 定位 `{locator}`"
         )
         lines.append("")
     lines.append("")

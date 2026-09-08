@@ -292,6 +292,107 @@ class EvidenceResponse(_ApiModel):
     locator: dict[str, Any]
     quote: str
     extraction_method: str
+    modality: Literal["text", "image"] = "text"
+    asset_id: str | None = None
+    artifact_ref: str | None = None
+
+
+class DocumentAssetDetailResponse(_ApiModel):
+    schema_version: str = "conflux-weave.document-asset.v1"
+    asset_id: str
+    document_id: str
+    source_snapshot_id: str
+    page: int
+    asset_kind: str
+    artifact_ref: str | None
+    thumbnail_artifact_ref: str | None = None
+    media_type: str
+    content_hash: str | None = None
+    width_px: int
+    height_px: int
+    bbox: dict[str, float] | None = None
+    coordinate_space: str = "pdf_page_points_top_left"
+    page_width: float
+    page_height: float
+    page_rotation: int = 0
+    caption: str | None = None
+    caption_locator: dict[str, Any] | None = None
+    parent_segment_ids: tuple[str, ...] = ()
+    extraction_method: str
+    extraction_status: str
+    duplicate_of_asset_id: str | None = None
+    warnings: tuple[str, ...] = ()
+    content_url: str | None = None
+    thumbnail_url: str | None = None
+
+
+class DocumentAssetsResponse(_ApiModel):
+    document_id: str
+    assets_artifact_id: str | None = None
+    asset_count: int
+    unique_content_count: int
+    status_counts: dict[str, int]
+    items: tuple[DocumentAssetDetailResponse, ...]
+
+
+class MultimodalRetrievalHitResponse(_ApiModel):
+    asset_id: str
+    score: float
+    rank: int
+    modality: str = "image"
+    source_snapshot_id: str
+    document_id: str
+    page: int
+    bbox: dict[str, float] | None = None
+    coordinate_space: str = "pdf_page_points_top_left"
+    parent_chunk_ids: tuple[str, ...] = ()
+    caption: str | None = None
+    artifact_ref: str
+    thumbnail_artifact_ref: str | None = None
+    embedding_model: str
+    index_version: str
+    locator: dict[str, Any] = Field(default_factory=dict)
+
+
+class MultimodalIndexManifestResponse(_ApiModel):
+    schema_version: str = "conflux-weave.multimodal-index-manifest.v1"
+    index_type: str = "lancedb_image"
+    table_name: str
+    database_path: str
+    asset_count: int
+    dimensions: int
+    embedding_model: str
+    corpus_hash: str
+    status: str
+    published_at: str
+    index_artifact_id: str | None = None
+
+
+class MultimodalFusionHitResponse(_ApiModel):
+    hit_id: str
+    score: float
+    rank: int
+    modality: Literal["text", "image"]
+    source_snapshot_id: str
+    locator: dict[str, Any] = Field(default_factory=dict)
+    text: str | None = None
+    asset_id: str | None = None
+    artifact_ref: str | None = None
+    thumbnail_artifact_ref: str | None = None
+    page: int | None = None
+    bbox: dict[str, float] | None = None
+    coordinate_space: str | None = None
+    parent_chunk_ids: tuple[str, ...] = ()
+    embedding_model: str | None = None
+    index_version: str | None = None
+
+
+class MultimodalRetrievalResultResponse(_ApiModel):
+    query: str
+    text_hits_count: int
+    image_hits_count: int
+    fusion_strategy: str = "reciprocal_rank_fusion"
+    fused_hits: tuple[MultimodalFusionHitResponse, ...] = ()
 
 
 class ReadinessCheckResponse(_ApiModel):
@@ -312,6 +413,7 @@ class ProviderConfigResponse(_ApiModel):
     embedding_model: str
     reranker_model: str
     engine_model: str = ""
+    image_embedding_model: str = ""
     contact_email: str = ""
     api_key_configured: bool
     api_key_hint: str | None = None
@@ -324,6 +426,7 @@ class ProviderConfigUpdateRequest(_ApiModel):
     embedding_model: str | None = Field(default=None, max_length=200)
     reranker_model: str | None = Field(default=None, max_length=200)
     engine_model: str | None = Field(default=None, max_length=200)
+    image_embedding_model: str | None = Field(default=None, max_length=200)
     contact_email: str | None = Field(default=None, max_length=320)
 
     @field_validator("base_url")
@@ -816,6 +919,8 @@ __all__ = [
     "ArtifactMetadataResponse",
     "BudgetResponse",
     "DeliveryResponse",
+    "DocumentAssetDetailResponse",
+    "DocumentAssetsResponse",
     "EvidenceResponse",
     "FixtureResearchTaskRequest",
     "FollowUpResearchTaskRequest",
@@ -850,6 +955,10 @@ __all__ = [
     "ChatMessageRecord",
     "ChatMessageRequest",
     "DeepResearchTaskRequest",
+    "MultimodalFusionHitResponse",
+    "MultimodalIndexManifestResponse",
+    "MultimodalRetrievalHitResponse",
+    "MultimodalRetrievalResultResponse",
     "decode_run_cursor",
     "encode_run_cursor",
     "map_exception",

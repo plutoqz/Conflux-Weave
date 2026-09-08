@@ -378,7 +378,7 @@ async function openDetail(item) {
   document.getElementById("library-detail-title").textContent = item.title || item.relative_path;
   const meta = document.getElementById("library-detail-meta");
   meta.replaceChildren();
-  [["来源", item.source], ["类型", item.media_type], ["状态", STATUS_LABELS[item.status] || item.status], ["片段", String(item.segment_count || 0)], ["字符", Number(item.character_count || 0).toLocaleString()], ["大小", formatBytes(item.size_bytes)], ["失败原因", item.error]].forEach(([label, value]) => {
+  [["来源", item.source], ["类型", item.media_type], ["状态", STATUS_LABELS[item.status] || item.status], ["片段", String(item.segment_count || 0)], ["图片资产", item.asset_count ? `${item.asset_count} 个` : "无"], ["字符", Number(item.character_count || 0).toLocaleString()], ["大小", formatBytes(item.size_bytes)], ["失败原因", item.error]].forEach(([label, value]) => {
     if (!value && label === "失败原因") return;
     const row = document.createElement("div");
     row.innerHTML = `<dt>${label}</dt><dd></dd>`;

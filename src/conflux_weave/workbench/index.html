@@ -569,10 +569,32 @@
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
           </button>
         </header>
+        <div id="insp-image-container" class="inspector-image-wrap" hidden>
+          <div class="inspector-image-toolbar" id="insp-image-toolbar" hidden>
+            <div class="inspector-image-tabs" role="tablist">
+              <button type="button" class="inspector-tab active" id="insp-tab-orig" role="tab" aria-selected="true">原图</button>
+              <button type="button" class="inspector-tab" id="insp-tab-thumb" role="tab" aria-selected="false">缩略图</button>
+            </div>
+            <a id="insp-image-link" class="inspector-tab-link" target="_blank" rel="noopener">在新标签打开</a>
+          </div>
+          <img id="insp-image" class="inspector-image" alt="证据图片" />
+          <div id="insp-image-error" class="inspector-image-error" hidden></div>
+        </div>
+        <div id="insp-warnings" class="inspector-warnings" hidden></div>
+        <div id="insp-caption-card" class="inspector-caption-card" hidden>
+          <span class="inspector-caption-label">图注</span>
+          <p id="insp-caption" class="inspector-caption-text"></p>
+        </div>
         <blockquote id="insp-quote" class="inspector-quote"></blockquote>
         <dl class="evidence-meta">
           <div><dt>来源快照</dt><dd id="insp-source"></dd></div>
+          <div id="insp-page-row" hidden><dt>页码</dt><dd id="insp-page"></dd></div>
+          <div id="insp-bbox-row" hidden><dt>位置范围</dt><dd id="insp-bbox"></dd></div>
+          <div id="insp-parent-chunks-row" hidden><dt>父 Chunk</dt><dd id="insp-parent-chunks"></dd></div>
           <div><dt>提取方式</dt><dd id="insp-method"></dd></div>
+          <div id="insp-asset-row" hidden><dt>资产编号</dt><dd><code id="insp-asset-id"></code></dd></div>
+          <div id="insp-artifact-row" hidden><dt>原始 Artifact</dt><dd><code id="insp-artifact-ref"></code></dd></div>
+          <div id="insp-thumb-ref-row" hidden><dt>缩略图 Artifact</dt><dd><code id="insp-thumb-artifact-ref"></code></dd></div>
           <div><dt>定位</dt><dd><pre id="insp-locator"></pre></dd></div>
         </dl>
         <footer class="inspector-nav">
@@ -676,10 +698,32 @@
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
           </button>
         </header>
+        <div id="evidence-image-container" class="inspector-image-wrap" hidden>
+          <div class="inspector-image-toolbar" id="evidence-image-toolbar" hidden>
+            <div class="inspector-image-tabs" role="tablist">
+              <button type="button" class="inspector-tab active" id="evidence-tab-orig" role="tab" aria-selected="true">原图</button>
+              <button type="button" class="inspector-tab" id="evidence-tab-thumb" role="tab" aria-selected="false">缩略图</button>
+            </div>
+            <a id="evidence-image-link" class="inspector-tab-link" target="_blank" rel="noopener">在新标签打开</a>
+          </div>
+          <img id="evidence-image" class="inspector-image" alt="证据图片" />
+          <div id="evidence-image-error" class="inspector-image-error" hidden></div>
+        </div>
+        <div id="evidence-warnings" class="inspector-warnings" hidden></div>
+        <div id="evidence-caption-card" class="inspector-caption-card" hidden>
+          <span class="inspector-caption-label">图注</span>
+          <p id="evidence-caption" class="inspector-caption-text"></p>
+        </div>
         <blockquote id="evidence-quote"></blockquote>
         <dl class="evidence-meta">
           <div><dt>来源快照</dt><dd id="evidence-source"></dd></div>
+          <div id="evidence-page-row" hidden><dt>页码</dt><dd id="evidence-page"></dd></div>
+          <div id="evidence-bbox-row" hidden><dt>位置范围</dt><dd id="evidence-bbox"></dd></div>
+          <div id="evidence-parent-chunks-row" hidden><dt>父 Chunk</dt><dd id="evidence-parent-chunks"></dd></div>
           <div><dt>提取方式</dt><dd id="evidence-method"></dd></div>
+          <div id="evidence-asset-row" hidden><dt>资产编号</dt><dd><code id="evidence-asset-id"></code></dd></div>
+          <div id="evidence-artifact-row" hidden><dt>原始 Artifact</dt><dd><code id="evidence-artifact-ref"></code></dd></div>
+          <div id="evidence-thumb-ref-row" hidden><dt>缩略图 Artifact</dt><dd><code id="evidence-thumb-artifact-ref"></code></dd></div>
           <div><dt>定位</dt><dd><pre id="evidence-locator"></pre></dd></div>
         </dl>
       </article>

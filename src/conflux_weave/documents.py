@@ -381,6 +381,11 @@ def import_pdf_corpus(
                            source_artifact_id=imported.source_artifact.artifact_id,
                            segments_artifact_id=imported.segments_artifact.artifact_id,
                            segment_count=len(imported.segments))
+                if imported.assets_artifact is not None:
+                    row.update(
+                        assets_artifact_id=imported.assets_artifact.artifact_id,
+                        asset_count=len(imported.assets),
+                    )
             except Exception as exc:
                 row.update(status="parse_failed", error_type=type(exc).__name__, error=str(exc)[:500])
         rows.append(row)
