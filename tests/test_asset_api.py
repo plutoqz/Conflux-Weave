@@ -527,4 +527,3 @@ def test_on_demand_extraction_preserves_parent_chunk_lineage(tmp_path: Path):
     detail_res = client.get(f"/api/v1/library/assets/{asset_item['asset_id']}")
     assert detail_res.status_code == 200
     assert "seg-p1-target-chunk" in detail_res.json()["parent_segment_ids"]
-
