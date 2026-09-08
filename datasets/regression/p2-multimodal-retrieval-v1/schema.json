@@ -1,0 +1,88 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MultimodalRetrievalTestCase",
+  "type": "object",
+  "required": [
+    "case_id",
+    "query",
+    "expected_answerable",
+    "figure_kind",
+    "split",
+    "label_source"
+  ],
+  "properties": {
+    "case_id": {
+      "type": "string"
+    },
+    "query": {
+      "type": "string"
+    },
+    "expected_answerable": {
+      "type": "boolean"
+    },
+    "expected_document_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "expected_source_snapshot_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "expected_asset_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "expected_page": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "expected_bbox": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "width": {
+          "type": "number"
+        },
+        "height": {
+          "type": "number"
+        }
+      }
+    },
+    "expected_caption": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "figure_kind": {
+      "type": "string"
+    },
+    "split": {
+      "type": "string",
+      "enum": [
+        "test",
+        "validation",
+        "train"
+      ]
+    },
+    "label_source": {
+      "type": "string"
+    }
+  }
+}

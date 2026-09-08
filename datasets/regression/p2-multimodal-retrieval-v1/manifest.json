@@ -1,0 +1,40 @@
+{
+  "dataset_id": "p2-multimodal-retrieval-v1",
+  "version": "1.0.0",
+  "status": "frozen",
+  "schema_version": "conflux-weave.multimodal-retrieval-benchmark.v1",
+  "created_at": "2026-09-08",
+  "case_count": 40,
+  "positive_case_count": 30,
+  "negative_case_count": 10,
+  "paper_count": 10,
+  "target_papers": [
+    "2606.08049.pdf",
+    "2606.08146.pdf",
+    "2606.08367.pdf",
+    "2606.08529.pdf",
+    "2606.08531.pdf",
+    "2606.08596.pdf",
+    "2606.08661.pdf",
+    "2606.08702.pdf",
+    "2606.09198.pdf",
+    "2606.09399.pdf"
+  ],
+  "file_hashes": {
+    "cases.jsonl": "d3670df3fcb7808f31d9f26625d3ee7187f34b394b978305d737f73ab2b8d505",
+    "schema.json": "8c4ab4dcf3b33e27d4c4fce6ebb97b39a5f6c5607af2a39c7ff0fb16aeeb58db",
+    "README.md": "028ccada8688f2761fc30817eac2f031d13328d03e282f1042610d555b0a00ed"
+  },
+  "thresholds": {
+    "image_recall_at_5": 0.8,
+    "mrr": 0.6,
+    "localization_accuracy": 1.0,
+    "evidence_closure": 1.0,
+    "unanswerable_fpr": 0.1
+  },
+  "conditions": [
+    "text_only",
+    "caption_baseline",
+    "joint_embedding"
+  ]
+}
