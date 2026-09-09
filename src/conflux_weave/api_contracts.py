@@ -241,6 +241,61 @@ class RunSummaryResponse(_ApiModel):
     updated_at: str
 
 
+class DocumentAnalyzeRequest(_ApiModel):
+    path: str | None = None
+    document_id: str | None = None
+    title: str | None = None
+    focus: str | None = None
+
+
+class DocumentNoteSectionResponse(_ApiModel):
+    section_id: str
+    title: str
+    level: int
+    content: str
+    source_segments: tuple[str, ...] = ()
+    citations: tuple[str, ...] = ()
+    asset_refs: tuple[str, ...] = ()
+
+
+class DocumentNoteResponse(_ApiModel):
+    note_id: str
+    document_id: str
+    title: str
+    version: int
+    parent_note_id: str | None = None
+    applied_patch_id: str | None = None
+    executive_summary: str
+    sections: tuple[DocumentNoteSectionResponse, ...] = ()
+    key_concepts: tuple[dict[str, str], ...] = ()
+    visual_assets: tuple[dict[str, Any], ...] = ()
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    markdown_content: str
+    html_content: str
+    created_at: str
+
+
+class NotePatchRequest(_ApiModel):
+    instruction: str = Field(min_length=1, max_length=2_000)
+    target_version: int = Field(ge=1)
+    operations: tuple[dict[str, Any], ...] = ()
+
+
+class NoteRevisionItem(_ApiModel):
+    note_id: str
+    version: int
+    parent_note_id: str | None = None
+    applied_patch_id: str | None = None
+    instruction: str = ""
+    created_at: str = ""
+
+
+class NoteRevisionsResponse(_ApiModel):
+    note_id: str
+    current_version: int
+    revisions: tuple[NoteRevisionItem, ...] = ()
+
+
 class RunPageResponse(_ApiModel):
     items: tuple[RunSummaryResponse, ...]
     next_cursor: str | None
@@ -919,11 +974,17 @@ __all__ = [
     "ArtifactMetadataResponse",
     "BudgetResponse",
     "DeliveryResponse",
+    "DocumentAnalyzeRequest",
     "DocumentAssetDetailResponse",
     "DocumentAssetsResponse",
+    "DocumentNoteResponse",
+    "DocumentNoteSectionResponse",
     "EvidenceResponse",
     "FixtureResearchTaskRequest",
     "FollowUpResearchTaskRequest",
+    "NotePatchRequest",
+    "NoteRevisionItem",
+    "NoteRevisionsResponse",
     "ProgressResponse",
     "ProviderConfigResponse",
     "ProviderConfigTestRequest",

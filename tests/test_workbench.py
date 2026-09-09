@@ -267,6 +267,42 @@ def test_workbench_w55_layout_and_keyboard_contracts_are_local_and_responsive() 
     assert "event.preventDefault()" in script
 
 
+def test_workbench_ux32_zen_focus_and_right_pane_tri_pane_contracts() -> None:
+    from pathlib import Path
+
+    root = Path(__file__).parents[1] / "src" / "conflux_weave" / "workbench"
+    index = (root / "index.html").read_text(encoding="utf-8")
+    styles = (root / "styles.css").read_text(encoding="utf-8")
+    script = (root / "app.js").read_text(encoding="utf-8")
+    shared = (root / "modules" / "shared.js").read_text(encoding="utf-8")
+
+    # Zen Focus Mode contracts
+    assert 'id="run-rail-mini"' in index
+    assert ".run-rail-mini" in styles
+    assert ".run-mini-dot" in styles
+    assert "--sidebar-w: 48px" in styles
+    assert "renderRunRailMini" in script
+    assert 'event.key === "["' in script
+
+    # Adaptive Studio Tri-Pane & Right Pane Tab Fusion contracts
+    assert 'id="insp-pane-tabs"' in index
+    assert 'id="tab-toc-from-insp"' in index
+    assert 'id="tab-evidence-from-insp"' in index
+    assert 'tab-evidence-from-toc' in shared
+    assert "conflux:open-inspector" in shared
+    assert "conflux:open-inspector" in script
+    assert ".right-pane-tabs" in styles
+    assert ".right-pane-tab" in styles
+    assert ".report-toc-rail" in styles
+    assert "grid-column: 3" in styles
+    assert '.app-shell[data-inspector="open"] .report-toc-rail' in styles
+
+    # Strict offline / zero-CDN guarantee
+    for file_content in (index, styles, script, shared):
+        assert "http://" not in file_content
+        assert "https://" not in file_content
+
+
 def test_library_uses_persistent_tabs_and_configurable_result_count() -> None:
     from pathlib import Path
 
@@ -319,3 +355,56 @@ def test_workbench_reads_only_registered_delivery_text(tmp_path) -> None:
         "recovery_action": None,
         "retryable": False,
     }
+
+
+def test_workbench_p2_document_note_studio_contracts() -> None:
+    from pathlib import Path
+
+    root = Path(__file__).parents[1] / "src" / "conflux_weave" / "workbench"
+    index = (root / "index.html").read_text(encoding="utf-8")
+    styles = (root / "styles.css").read_text(encoding="utf-8")
+    app_js = (root / "app.js").read_text(encoding="utf-8")
+    notes_js = (root / "modules" / "notes.js").read_text(encoding="utf-8")
+    library_js = (root / "modules" / "library.js").read_text(encoding="utf-8")
+
+    # Verify DOM elements in index.html
+    assert 'id="document-analyze-dialog"' in index
+    assert 'id="document-note-dialog"' in index
+    assert 'id="note-html-frame"' in index
+    assert 'id="note-md-view"' in index
+    assert 'id="note-patch-input"' in index
+    assert 'id="note-patch-submit"' in index
+    assert 'id="note-studio-revisions"' in index
+    assert 'id="note-tab-html"' in index
+    assert 'id="note-tab-md"' in index
+
+    # Verify CSS rules
+    assert ".document-note-dialog" in styles
+    assert ".note-studio-container" in styles
+    assert ".note-patch-studio" in styles
+    assert ".library-note-button" in styles
+
+    # Verify JS modules wiring
+    assert 'import "./modules/notes.js"' in app_js
+    assert "openAnalyzeDialog" in library_js
+    assert "library-note-button" in library_js
+    assert "AI 研读 / 生成权威笔记" in library_js
+    assert "/api/v1/documents/analyze" in notes_js
+    assert "/api/v1/notes/" in notes_js
+    assert "/patch" in notes_js
+    assert "/revisions" in notes_js
+    assert "status === 409" in notes_js
+
+    # Verify layout alignment and dialog close contracts
+    assert '.app-shell:not([data-section="research"]) .workspace' in styles
+    assert 'grid-column: 1' in styles
+    assert 'id="analyze-dialog-close"' in index
+    assert 'type="button"' in index
+    assert "analyze-dialog-close" in notes_js
+    assert "border-bottom: 2px solid var(--moss)" in styles
+
+    # Verify zero external CDN
+    for js_src in (index, styles, app_js, notes_js):
+        assert "http://" not in js_src
+        assert "https://" not in js_src
+

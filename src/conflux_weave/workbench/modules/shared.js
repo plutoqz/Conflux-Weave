@@ -431,9 +431,12 @@ export function renderAnswer(node, content, mediaType) {
     const toc = document.createElement("nav");
     toc.className = "report-toc";
     toc.setAttribute("aria-label", "报告目录");
-    const tocTitle = document.createElement("strong");
-    tocTitle.textContent = "报告目录";
-    toc.append(tocTitle);
+    const isAnswerRail = node.id === "answer-content" && Boolean(document.querySelector("#report-toc-rail"));
+    if (!isAnswerRail) {
+      const tocTitle = document.createElement("strong");
+      tocTitle.textContent = "报告目录";
+      toc.append(tocTitle);
+    }
     const listNode = document.createElement("ul");
     headings.forEach((heading) => {
       const itemNode = document.createElement("li");
@@ -451,7 +454,38 @@ export function renderAnswer(node, content, mediaType) {
     toc.append(listNode);
     const rail = node.id === "answer-content" ? document.querySelector("#report-toc-rail") : null;
     if (rail) {
-      rail.replaceChildren(toc);
+      const header = document.createElement("div");
+      header.className = "report-toc-header";
+      const titleStrong = document.createElement("strong");
+      titleStrong.textContent = "报告目录";
+      header.appendChild(titleStrong);
+
+      const tabsWrap = document.createElement("div");
+      tabsWrap.className = "right-pane-tabs";
+      tabsWrap.setAttribute("role", "tablist");
+      tabsWrap.setAttribute("aria-label", "辅助视图切换");
+      tabsWrap.style.display = "none";
+
+      const tocTab = document.createElement("button");
+      tocTab.type = "button";
+      tocTab.className = "right-pane-tab active";
+      tocTab.setAttribute("role", "tab");
+      tocTab.setAttribute("aria-selected", "true");
+      tocTab.innerHTML = `<svg class="icon tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="21" x2="3" y1="6" y2="6"/><line x1="15" x2="3" y1="12" y2="12"/><line x1="17" x2="3" y1="18" y2="18"/></svg><span>目录</span>`;
+
+      const evTab = document.createElement("button");
+      evTab.type = "button";
+      evTab.className = "right-pane-tab";
+      evTab.id = "tab-evidence-from-toc";
+      evTab.setAttribute("role", "tab");
+      evTab.setAttribute("aria-selected", "false");
+      evTab.innerHTML = `<svg class="icon tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" x2="8" y1="13" y2="13"/><line x1="16" x2="8" y1="17" y2="17"/></svg><span>证据</span>`;
+      evTab.addEventListener("click", () => {
+        window.dispatchEvent(new CustomEvent("conflux:open-inspector"));
+      });
+
+      tabsWrap.append(tocTab, evTab);
+      rail.replaceChildren(header, tabsWrap, toc);
       rail.hidden = false;
       rail.closest(".app-shell")?.setAttribute("data-toc", "open");
     } else {

@@ -55,7 +55,7 @@ export function createDonutChart({
     const strokeOffset = -accumulatedOffset;
 
     const circleTpl = document.createElement("template");
-    circleTpl.innerHTML = `<svg><circle class="cw-donut-segment" cx="${center}" cy="${center}" r="${radius}" fill="none" stroke="${seg.color || "var(--moss)"}" stroke-width="${strokeWidth}" stroke-dasharray="${strokeDash} ${circumference}" stroke-dashoffset="${strokeOffset}" stroke-linecap="round" transform="rotate(-90 ${center} ${center})"></circle></svg>`;
+    circleTpl.innerHTML = `<svg><circle class="cw-donut-segment" cx="${center}" cy="${center}" r="${radius}" fill="none" stroke="${seg.color || "var(--moss)"}" stroke-width="${strokeWidth}" stroke-dasharray="${strokeDash} ${Math.max(0, circumference - strokeDash)}" stroke-dashoffset="${strokeOffset}" stroke-linecap="round" transform="rotate(-90 ${center} ${center})" style="transform-origin: 0 0;"></circle></svg>`;
     const circle = circleTpl.content.querySelector("circle");
     if (circle) {
       circle.dataset.label = seg.label;

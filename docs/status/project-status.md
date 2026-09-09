@@ -486,3 +486,30 @@ route. Asset cache strings were bumped accordingly (`?v=v0.3-ux1-6`).
 本轮工程整改顺序固定为：先同步状态文档，再隔离 GPT Researcher 的进程级配置状态，最后
 拆分 Writer 模块。真实深度研究 Run、成本/延迟和报告人工评审不在本轮执行范围，下一唯一验收
 点由用户手动执行。
+
+## P2 多模态 RAG 与图片资产体系开发状态（2026-09-08）
+
+P2.0 ~ P2.3 多模态 RAG 核心技术闭环已全链路打通并完成基准评测与默认路径裁决。
+
+| 工作包 | 当前状态 | 证据边界 |
+| --- | --- | --- |
+| P2.0-A 资产抽取与 Lineage | `implemented_and_validated_offline` | PyMuPDF 原生图表与矢量区域渲染、`DocumentAsset` JSON Schema、SHA-256 寻址与父 Chunk Lineage 闭包； |
+| P2.0-B 图片资产 API 与 Inspector | `implemented_and_validated_browser_and_regression` | 受限图片流式读取、MIME 校验、安全越权防护、Workbench 移动/桌面/打印端 Evidence Inspector 双向图文回溯； |
+| P2.1 图片向量索引 | `implemented_and_validated_offline` | LanceDB `image_assets_v1` 独立表族、原子发布与批次回滚机制； |
+| P2.2 跨模态检索与 RRF 融合 | `implemented_and_validated_offline` | 文本查图、图片查文、跨模态 RRF 排序融合与 Evidence 上下文组装； |
+| P2.3 冻结评测与路径裁决 | `validated_offline_and_benchmark` | 40 真实论文基准（`p2-multimodal-retrieval-v1`）：Recall@5=0.900, MRR=0.867, 定位与闭包率 100%, 负例误召回 0.00；裁决默认纯文本，支持 Caption 零成本降级与 Joint 多模态路径。 |
+
+## DocumentAgent 与权威笔记工坊（2026-09-09）
+
+按照《Conflux-Weave 设计文档 v0.3》第 9.2 节规范，实现端到端文档分析与连续笔记修订：
+
+| 模块 | 当前状态 | 证据边界 |
+| --- | --- | --- |
+| DocumentAgent 解析与生成 | `implemented_and_validated` | 支持 PDF、Markdown、HTML、DOCX 多格式结构解析，提炼核心概念与视觉资产，生成中文化分级结构与权威笔记； |
+| DocumentNote 与 Patch 修订 | `implemented_and_validated` | 实现 `NotePatch` 乐观锁结构化补丁，支持段落替换/插入/删除与概念更新，严格拦截版本冲突（`409 version_conflict`）； |
+| 笔记 API 边界 | `implemented_and_validated` | 新增 `/api/v1/documents/analyze`、`/api/v1/notes/{id}`、`/api/v1/notes/{id}/patch`、`/api/v1/notes/{id}/revisions`； |
+| Note Studio 工作台前端 | `implemented_and_validated` | 资料库研读弹窗、HTML/Markdown 实时预览、版本历史切换与补丁编辑器；严格满足零外部 CDN、本地离线与样式隔离契约； |
+| UX-3.2 导轨与三栏演播室 | `implemented_and_validated` | 快捷键 `[` 一键折叠 48px Zen 模式图标轨、右侧目录与证据抽屉无缝 Tab 融合。 |
+
+截至本节更新，项目完整离线回归测试为 `545 passed, 4 warnings in 47.96s`。
+

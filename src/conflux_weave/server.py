@@ -37,8 +37,14 @@ from conflux_weave.api_contracts import (
     DeepResearchTaskRequest,
     ApiErrorResponse,
     ArtifactContentResponse,
+    DocumentAnalyzeRequest,
     DocumentAssetDetailResponse,
     DocumentAssetsResponse,
+    DocumentNoteResponse,
+    DocumentNoteSectionResponse,
+    NotePatchRequest,
+    NoteRevisionItem,
+    NoteRevisionsResponse,
     MultimodalFusionHitResponse,
     MultimodalRetrievalResultResponse,
     FixtureResearchTaskRequest,
@@ -58,6 +64,16 @@ from conflux_weave.api_contracts import (
     WorkbenchQueryService,
     map_exception,
 )
+from conflux_weave.document_agent import DocumentAgent
+from conflux_weave.document_notes import (
+    NOTE_SCHEMA_VERSION,
+    DocumentNote,
+    NotePatch,
+    NoteSection,
+    PatchOperation,
+    load_note_artifact,
+)
+from conflux_weave.documents import LocalDocumentImporter
 from conflux_weave.config_store import (
     ConfigValidationError,
     ProviderConfigView,
@@ -667,6 +683,8 @@ def create_app(
             items.append({
                 "title": row.get("title") or Path(relative).stem or relative,
                 "relative_path": relative,
+                "path": row.get("path", ""),
+                "sha256": row.get("sha256", ""),
                 "record_id": row.get("document_id") or row.get("paper_id") or identity,
                 "paper_id": row.get("paper_id", ""),
                 "document_id": row.get("document_id", ""),
@@ -1672,6 +1690,362 @@ def create_app(
             )
         except Exception as exc:
             return ProviderConfigTestResponse(ok=False, message=str(exc) or "连接失败。")
+
+    def _get_notes_registry_path() -> Path | None:
+        db_path = getattr(repository, "database_path", None)
+        if db_path is not None:
+            return Path(db_path).with_name("notes-registry.json")
+        return None
+
+    def _get_document_agent() -> DocumentAgent | None:
+        store = getattr(repository, "artifact_store", None)
+        if store is None:
+            return None
+        return DocumentAgent(
+            store,
+            chat_adapter=getattr(chat_service, "_chat", None) if chat_service is not None else None,
+        )
+
+    def load_notes_registry() -> list[dict[str, Any]]:
+        reg_path = _get_notes_registry_path()
+        if not reg_path or not reg_path.is_file():
+            return []
+        try:
+            return json.loads(reg_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+
+    def save_note_entry(note: DocumentNote) -> None:
+        reg_path = _get_notes_registry_path()
+        if not reg_path:
+            return
+        notes = load_notes_registry()
+        entry = {
+            "note_id": note.note_id,
+            "document_id": note.document_id,
+            "title": note.title,
+            "version": note.version,
+            "parent_note_id": note.parent_note_id,
+            "applied_patch_id": note.applied_patch_id,
+            "instruction": note.metadata.get("revision_instruction", ""),
+            "created_at": note.created_at,
+        }
+        existing_idx = next((i for i, item in enumerate(notes) if item.get("note_id") == note.note_id), -1)
+        if existing_idx >= 0:
+            notes[existing_idx] = entry
+        else:
+            notes.append(entry)
+        reg_path.parent.mkdir(parents=True, exist_ok=True)
+        reg_path.write_text(json.dumps(notes, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    @app.post("/api/v1/documents/analyze", response_model=DocumentNoteResponse)
+    async def analyze_document_endpoint(request: DocumentAnalyzeRequest):
+        store = getattr(repository, "artifact_store", None)
+        doc_agent = _get_document_agent()
+        if store is None or doc_agent is None:
+            return JSONResponse(status_code=503, content={"code": "service_unavailable", "message": "文档分析服务未配置存储。"})
+        importer = LocalDocumentImporter(store)
+        doc_path: Path | None = None
+        doc_suffix: str | None = None
+
+        # 1. Direct path check
+        if request.path:
+            p = Path(request.path)
+            if p.is_file():
+                doc_path = p
+            elif (Path.cwd() / p).is_file():
+                doc_path = (Path.cwd() / p).resolve()
+            elif config_paths and config_paths.get("workspace_root") and (Path(config_paths["workspace_root"]) / p).is_file():
+                doc_path = (Path(config_paths["workspace_root"]) / p).resolve()
+
+        # 2. Library lookup by document_id or path
+        if not doc_path:
+            overview = await library_overview()
+            items = overview.get("items", [])
+            search_keys = [k for k in (request.document_id, request.path) if k]
+            target_item = None
+            for key in search_keys:
+                target_item = next(
+                    (
+                        it for it in items
+                        if it.get("document_id") == key
+                        or it.get("record_id") == key
+                        or it.get("paper_id") == key
+                        or it.get("relative_path") == key
+                        or str(key).endswith(str(it.get("relative_path", "")))
+                    ),
+                    None,
+                )
+                if target_item:
+                    break
+
+            if target_item:
+                # Check status: if metadata-only without fulltext
+                status = target_item.get("status")
+                if status in {"metadata_saved", "oa_unavailable", "fetch_failed"}:
+                    return JSONResponse(
+                        status_code=400,
+                        content={
+                            "code": "fulltext_unavailable",
+                            "message": "该资料目前仅有元数据，尚未获取到全文 PDF。请先在资料库点击“获取全文并加入知识库”。",
+                        },
+                    )
+
+                # Check if item has explicit file path
+                explicit_path = target_item.get("path")
+                if explicit_path and Path(explicit_path).is_file():
+                    doc_path = Path(explicit_path)
+
+                # Check if sha256 or source_artifact_id in artifact store
+                if not doc_path:
+                    source_art = str(target_item.get("source_artifact_id", ""))
+                    digest = ""
+                    if source_art.startswith("artifact-sha256-"):
+                        digest = source_art.removeprefix("artifact-sha256-")
+                    elif target_item.get("sha256"):
+                        digest = str(target_item["sha256"])
+
+                    if digest:
+                        try:
+                            p = store.path_for_digest(digest)
+                            if p.is_file():
+                                doc_path = p
+                                media = str(target_item.get("media_type", "")).lower()
+                                rel = str(target_item.get("relative_path", "")).lower()
+                                doc_suffix = ".pdf" if ("pdf" in media or rel.endswith(".pdf")) else (".md" if ("markdown" in media or rel.endswith(".md")) else ".pdf")
+                        except Exception:
+                            pass
+
+                # Check relative_path candidates if not found in store
+                if not doc_path:
+                    rel = target_item.get("relative_path")
+                    if rel and not rel.startswith("paper:"):
+                        ws_root = Path(config_paths.get("workspace_root", "")) if config_paths and config_paths.get("workspace_root") else Path.cwd()
+                        for root_dir in [
+                            Path.cwd(),
+                            ws_root,
+                            Path("var") / "acceptance" / "v0.3-s1" / "corpus",
+                            Path("var") / "workspace",
+                            Path((config_paths or {}).get("corpus_manifest", "")).parent,
+                        ]:
+                            cand = (root_dir / rel).resolve()
+                            if cand.is_file():
+                                doc_path = cand
+                                break
+
+                # Fallback to synthesized markdown from segments_artifact_id if raw file not present
+                if not doc_path:
+                    segments_art = str(target_item.get("segments_artifact_id", ""))
+                    if segments_art.startswith("artifact-sha256-"):
+                        seg_digest = segments_art.removeprefix("artifact-sha256-")
+                        try:
+                            p = store.path_for_digest(seg_digest)
+                            if p.is_file():
+                                seg_data = json.loads(p.read_text(encoding="utf-8"))
+                                segs = seg_data.get("segments", [])
+                                if segs:
+                                    content = f"# {target_item.get('title', 'Document')}\n\n"
+                                    for s in segs:
+                                        t = s.get("text", "").strip()
+                                        if t:
+                                            content += f"{t}\n\n"
+                                    temp_dir = Path("var") / "cache" / "notes_extracted"
+                                    temp_dir.mkdir(parents=True, exist_ok=True)
+                                    temp_file = temp_dir / f"{target_item.get('document_id') or seg_digest}.md"
+                                    temp_file.write_text(content, encoding="utf-8")
+                                    doc_path = temp_file
+                                    doc_suffix = ".md"
+                        except Exception:
+                            pass
+
+        if not doc_path or not doc_path.is_file():
+            return JSONResponse(status_code=404, content={"code": "document_not_found", "message": "未找到指定文档，请检查路径或文档ID。"})
+
+        try:
+            imported = await asyncio.to_thread(importer.import_path, doc_path, suffix=doc_suffix)
+            note = await asyncio.to_thread(
+                doc_agent.analyze_document,
+                imported,
+                focus=request.focus,
+                title=request.title,
+            )
+            save_note_entry(note)
+            return DocumentNoteResponse(
+                note_id=note.note_id,
+                document_id=note.document_id,
+                title=note.title,
+                version=note.version,
+                parent_note_id=note.parent_note_id,
+                applied_patch_id=note.applied_patch_id,
+                executive_summary=note.executive_summary,
+                sections=tuple(
+                    DocumentNoteSectionResponse(
+                        section_id=s.section_id,
+                        title=s.title,
+                        level=s.level,
+                        content=s.content,
+                        source_segments=s.source_segments,
+                        citations=s.citations,
+                        asset_refs=s.asset_refs,
+                    )
+                    for s in note.sections
+                ),
+                key_concepts=note.key_concepts,
+                visual_assets=note.visual_assets,
+                metadata=note.metadata,
+                markdown_content=note.markdown_content,
+                html_content=note.html_content,
+                created_at=note.created_at,
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.get("/api/v1/notes/{note_id}", response_model=DocumentNoteResponse)
+    async def get_note_endpoint(note_id: str):
+        store = getattr(repository, "artifact_store", None)
+        if store is None:
+            return JSONResponse(status_code=503, content={"code": "service_unavailable", "message": "笔记存储服务未就绪。"})
+        try:
+            try:
+                note_obj = load_note_artifact(note_id, store)
+            except (KeyError, ValueError):
+                note_obj = None
+            if note_obj is None:
+                return JSONResponse(status_code=404, content={"code": "note_not_found", "message": f"笔记 {note_id} 不存在。"})
+
+            return DocumentNoteResponse(
+                note_id=note_obj.note_id,
+                document_id=note_obj.document_id,
+                title=note_obj.title,
+                version=note_obj.version,
+                parent_note_id=note_obj.parent_note_id,
+                applied_patch_id=note_obj.applied_patch_id,
+                executive_summary=note_obj.executive_summary,
+                sections=tuple(
+                    DocumentNoteSectionResponse(
+                        section_id=s.section_id,
+                        title=s.title,
+                        level=s.level,
+                        content=s.content,
+                        source_segments=s.source_segments,
+                        citations=s.citations,
+                        asset_refs=s.asset_refs,
+                    )
+                    for s in note_obj.sections
+                ),
+                key_concepts=note_obj.key_concepts,
+                visual_assets=note_obj.visual_assets,
+                metadata=note_obj.metadata,
+                markdown_content=note_obj.markdown_content,
+                html_content=note_obj.html_content,
+                created_at=note_obj.created_at,
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/notes/{note_id}/patch", response_model=DocumentNoteResponse)
+    async def patch_note_endpoint(note_id: str, request: NotePatchRequest):
+        store = getattr(repository, "artifact_store", None)
+        doc_agent = _get_document_agent()
+        if store is None or doc_agent is None:
+            return JSONResponse(status_code=503, content={"code": "service_unavailable", "message": "笔记修订服务未就绪。"})
+        try:
+            try:
+                note_obj = load_note_artifact(note_id, store)
+            except (KeyError, ValueError):
+                note_obj = None
+            if note_obj is None:
+                return JSONResponse(status_code=404, content={"code": "note_not_found", "message": f"目标笔记 {note_id} 不存在。"})
+
+            if request.target_version != note_obj.version:
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "code": "version_conflict",
+                        "message": f"目标版本 {request.target_version} 与当前笔记版本 {note_obj.version} 不一致。",
+                    },
+                )
+
+            doc_context = None
+            try:
+                overview = await library_overview()
+                doc_item = next((row for row in overview.get("items", []) if row.get("document_id") == note_obj.document_id or row.get("paper_id") == note_obj.document_id), None)
+                if doc_item and doc_item.get("segments_artifact_id"):
+                    art_id = str(doc_item["segments_artifact_id"])
+                    if art_id.startswith("artifact-sha256-"):
+                        sp = repository.artifact_store.path_for_digest(art_id.removeprefix("artifact-sha256-"))
+                        if sp.is_file():
+                            seg_data = json.loads(sp.read_text(encoding="utf-8"))
+                            segs = seg_data.get("segments", [])
+                            if segs:
+                                doc_context = "\n\n".join(s.get("text", "")[:800] for s in segs[:8])
+            except Exception:
+                doc_context = None
+
+            patch_ops = [PatchOperation.from_dict(op) for op in request.operations] if request.operations else None
+            patch, new_note = await asyncio.to_thread(
+                doc_agent.revise_note,
+                note_obj,
+                request.instruction,
+                patch_ops=patch_ops,
+                document_context=doc_context,
+            )
+            save_note_entry(new_note)
+            return DocumentNoteResponse(
+                note_id=new_note.note_id,
+                document_id=new_note.document_id,
+                title=new_note.title,
+                version=new_note.version,
+                parent_note_id=new_note.parent_note_id,
+                applied_patch_id=new_note.applied_patch_id,
+                executive_summary=new_note.executive_summary,
+                sections=tuple(
+                    DocumentNoteSectionResponse(
+                        section_id=s.section_id,
+                        title=s.title,
+                        level=s.level,
+                        content=s.content,
+                        source_segments=s.source_segments,
+                        citations=s.citations,
+                        asset_refs=s.asset_refs,
+                    )
+                    for s in new_note.sections
+                ),
+                key_concepts=new_note.key_concepts,
+                visual_assets=new_note.visual_assets,
+                metadata=new_note.metadata,
+                markdown_content=new_note.markdown_content,
+                html_content=new_note.html_content,
+                created_at=new_note.created_at,
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.get("/api/v1/notes/{note_id}/revisions", response_model=NoteRevisionsResponse)
+    async def get_note_revisions_endpoint(note_id: str):
+        notes = load_notes_registry()
+        target = next((n for n in notes if n.get("note_id") == note_id), None)
+        doc_id = target.get("document_id") if target else None
+        matching = [n for n in notes if (doc_id and n.get("document_id") == doc_id) or n.get("note_id") == note_id or n.get("parent_note_id") == note_id]
+        matching.sort(key=lambda x: int(x.get("version", 1)))
+
+        items = [
+            NoteRevisionItem(
+                note_id=str(m.get("note_id")),
+                version=int(m.get("version", 1)),
+                parent_note_id=m.get("parent_note_id"),
+                applied_patch_id=m.get("applied_patch_id"),
+                instruction=str(m.get("instruction", "")),
+                created_at=str(m.get("created_at", "")),
+            )
+            for m in matching
+        ]
+        curr_ver = target.get("version", len(items)) if target else (items[-1].version if items else 1)
+        return NoteRevisionsResponse(
+            note_id=note_id,
+            current_version=int(curr_ver),
+            revisions=tuple(items),
+        )
 
     @app.get("/api/v1/health/ready")
     async def ready_health():

@@ -1,5 +1,6 @@
 import { api, showToast } from "./shared.js";
 import { registerView } from "./router.js";
+import { openAnalyzeDialog } from "./notes.js";
 import {
   createDonutChart,
   createHistogram,
@@ -272,6 +273,16 @@ function documentCard(item) {
     });
     metrics.append(indexButton);
   }
+  const noteButton = document.createElement("button");
+  noteButton.className = "quiet-button library-note-button";
+  noteButton.type = "button";
+  noteButton.innerHTML = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg><span>研读笔记</span>`;
+  noteButton.title = "使用 DocumentAgent 研读文档并生成权威笔记";
+  noteButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    openAnalyzeDialog(item);
+  });
+  metrics.append(noteButton);
   article.append(main, metrics);
   article.addEventListener("click", () => openDetail(item));
   article.addEventListener("keydown", (event) => {
@@ -403,7 +414,15 @@ async function openDetail(item) {
       showToast(error.message);
     }
   });
-  meta.append(researchButton);
+  const noteDetailBtn = document.createElement("button");
+  noteDetailBtn.className = "quiet-button library-detail-note-btn";
+  noteDetailBtn.type = "button";
+  noteDetailBtn.textContent = "AI 研读 / 生成权威笔记";
+  noteDetailBtn.addEventListener("click", () => {
+    dialog.close();
+    openAnalyzeDialog(item);
+  });
+  meta.append(noteDetailBtn, researchButton);
   dialog.showModal();
   try {
     const detail = await api(`/api/v1/library/documents/${encodeURIComponent(item.record_id || item.document_id)}`);

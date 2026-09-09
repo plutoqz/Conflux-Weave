@@ -7,6 +7,7 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from html.parser import HTMLParser
 from pathlib import Path
 
 from pypdf import PdfReader
@@ -74,29 +75,42 @@ class LocalDocumentImporter:
         *,
         producer_step_id: str = "step-document-import",
         extract_assets: bool | None = None,
+        suffix: str | None = None,
     ) -> ImportedDocument:
         if not path.is_file():
             raise FileNotFoundError(f"document not found: {path}")
-        suffix = path.suffix.lower()
-        if suffix not in {".md", ".markdown", ".pdf"}:
+        resolved_suffix = (suffix or path.suffix).lower()
+        supported = {".md", ".markdown", ".pdf", ".html", ".htm", ".docx"}
+        if resolved_suffix not in supported:
             raise UnsupportedDocumentError(
-                f"unsupported document type: {suffix or '<none>'}; expected .md, .markdown, or .pdf"
+                f"unsupported document type: {resolved_suffix or '<none>'}; expected .md, .markdown, or .pdf"
             )
         raw = path.read_bytes()
         content_hash = hashlib.sha256(raw).hexdigest()
         document_id = f"document-sha256-{content_hash}"
-        media_type = "application/pdf" if suffix == ".pdf" else "text/markdown"
+        media_type = (
+            "application/pdf"
+            if resolved_suffix == ".pdf"
+            else "text/html"
+            if resolved_suffix in {".html", ".htm"}
+            else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            if resolved_suffix == ".docx"
+            else "text/markdown"
+        )
         source_artifact = self.artifact_store.put_bytes(
             raw,
             media_type=media_type,
             producer_step_id=producer_step_id,
             schema_version="conflux-weave.source-document.v1",
         )
-        text_segments = (
-            _parse_pdf(raw, document_id)
-            if suffix == ".pdf"
-            else _parse_markdown(raw.decode("utf-8"), document_id)
-        )
+        if resolved_suffix == ".pdf":
+            text_segments = _parse_pdf(raw, document_id)
+        elif resolved_suffix in {".html", ".htm"}:
+            text_segments = _parse_html(raw.decode("utf-8", errors="replace"), document_id)
+        elif resolved_suffix == ".docx":
+            text_segments = _parse_docx(raw, document_id)
+        else:
+            text_segments = _parse_markdown(raw.decode("utf-8", errors="replace"), document_id)
         segments = tuple(text_segments)
         segments_payload = {
             "schema_version": "conflux-weave.document-segments.v1",
@@ -129,7 +143,7 @@ class LocalDocumentImporter:
         assets_artifact = None
         assets: tuple[Any, ...] = ()
         should_extract = self.extract_assets if extract_assets is None else extract_assets
-        if suffix == ".pdf" and should_extract:
+        if resolved_suffix == ".pdf" and should_extract:
             from conflux_weave.document_assets import PDFAssetExtractor
 
             extractor = PDFAssetExtractor(self.artifact_store)
@@ -322,15 +336,161 @@ def _parse_pdf(raw: bytes, document_id: str) -> list[DocumentSegment]:
     return segments
 
 
+class _HTMLStructureParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.sections: list[dict[str, Any]] = []
+        self._current_heading = "文档开头"
+        self._current_level = 0
+        self._current_text: list[str] = []
+        self._tag_stack: list[str] = []
+        self._ignore = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag_lower = tag.lower()
+        self._tag_stack.append(tag_lower)
+        if tag_lower in {"script", "style", "noscript", "head"}:
+            self._ignore = True
+
+    def handle_endtag(self, tag: str) -> None:
+        tag_lower = tag.lower()
+        if self._tag_stack and self._tag_stack[-1] == tag_lower:
+            self._tag_stack.pop()
+        if tag_lower in {"script", "style", "noscript", "head"}:
+            self._ignore = False
+        if tag_lower in {"p", "div", "article", "section", "li", "blockquote", "pre", "h1", "h2", "h3", "h4", "h5", "h6"}:
+            self._current_text.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if self._ignore:
+            return
+        cleaned = data.strip()
+        if not cleaned:
+            return
+        parent_heading = next((t for t in reversed(self._tag_stack) if re.match(r"^h[1-6]$", t)), None)
+        if parent_heading:
+            body = " ".join(" ".join(self._current_text).split()).strip()
+            if body:
+                self.sections.append({
+                    "heading": self._current_heading,
+                    "level": self._current_level,
+                    "text": body,
+                })
+            self._current_text = []
+            self._current_heading = cleaned
+            self._current_level = int(parent_heading[1])
+        else:
+            self._current_text.append(cleaned)
+
+    def close(self) -> None:
+        super().close()
+        body = " ".join(" ".join(self._current_text).split()).strip()
+        if body:
+            self.sections.append({
+                "heading": self._current_heading,
+                "level": self._current_level,
+                "text": body,
+            })
+
+
+def _parse_html(html_text: str, document_id: str) -> list[DocumentSegment]:
+    parser = _HTMLStructureParser()
+    parser.feed(html_text)
+    parser.close()
+    segments: list[DocumentSegment] = []
+    for item in parser.sections:
+        ordinal = len(segments) + 1
+        segments.append(
+            DocumentSegment(
+                segment_id=f"{document_id}:segment-{ordinal:04d}",
+                document_id=document_id,
+                ordinal=ordinal,
+                text=item["text"],
+                locator={
+                    "type": "html_section",
+                    "heading": item["heading"],
+                    "heading_level": item["level"],
+                    "ordinal": ordinal,
+                },
+            )
+        )
+    return segments
+
+
+def _parse_docx(raw: bytes, document_id: str) -> list[DocumentSegment]:
+    import io
+    import xml.etree.ElementTree as ET
+    import zipfile
+
+    segments: list[DocumentSegment] = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+            if "word/document.xml" not in zf.namelist():
+                return segments
+            xml_content = zf.read("word/document.xml")
+    except Exception:
+        return segments
+
+    root = ET.fromstring(xml_content)
+    ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+
+    current_heading = "文档开头"
+    current_level = 0
+    current_paras: list[str] = []
+
+    def flush() -> None:
+        nonlocal current_paras
+        body = "\n".join(p for p in current_paras if p).strip()
+        if body:
+            ordinal = len(segments) + 1
+            segments.append(
+                DocumentSegment(
+                    segment_id=f"{document_id}:segment-{ordinal:04d}",
+                    document_id=document_id,
+                    ordinal=ordinal,
+                    text=body,
+                    locator={
+                        "type": "docx_paragraph",
+                        "heading": current_heading,
+                        "heading_level": current_level,
+                        "paragraph_index": ordinal,
+                    },
+                )
+            )
+        current_paras = []
+
+    for p in root.iter(f"{{{ns['w']}}}p"):
+        p_text = "".join(t.text or "" for t in p.iter(f"{{{ns['w']}}}t")).strip()
+        if not p_text:
+            continue
+        style_el = p.find(f".//{{{ns['w']}}}pStyle")
+        style_val = style_el.attrib.get(f"{{{ns['w']}}}val", "") if style_el is not None else ""
+        heading_match = re.search(r"heading\s*(\d)", style_val, re.IGNORECASE) or re.search(r"标题\s*(\d)", style_val)
+        if heading_match:
+            flush()
+            current_heading = p_text
+            current_level = int(heading_match.group(1))
+        else:
+            current_paras.append(p_text)
+
+    flush()
+    return segments
+
+
 def _clean_extracted_text(text: str) -> str:
     """Normalize malformed surrogate code points emitted by some PDF fonts."""
     return text.encode("utf-8", errors="replace").decode("utf-8").strip()
 
 
 def _format_locator(locator: dict[str, int | str]) -> str:
-    if locator["type"] == "pdf_page":
-        return f"PDF page {locator['page']}"
-    return f"Markdown lines {locator['start_line']}-{locator['end_line']}"
+    loc_type = locator.get("type")
+    if loc_type == "pdf_page":
+        return f"PDF page {locator.get('page')}"
+    if loc_type == "html_section":
+        return f"HTML section <{locator.get('heading')}>"
+    if loc_type == "docx_paragraph":
+        return f"DOCX paragraph {locator.get('paragraph_index', '')} ({locator.get('heading', '')})"
+    return f"Markdown lines {locator.get('start_line')}-{locator.get('end_line')}"
 
 
 def _utc_now() -> str:

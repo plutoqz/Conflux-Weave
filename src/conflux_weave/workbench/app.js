@@ -14,6 +14,7 @@ import "./modules/overview.js";
 import "./modules/chat.js";
 import "./modules/library.js?v=v0.3-library-ux-3";
 import "./modules/settings.js";
+import "./modules/notes.js";
 import { createSparkbar } from "./modules/charts.js";
 
 const state = {
@@ -86,19 +87,49 @@ function makeRunItem(run) {
   return button;
 }
 
+function renderRunRailMini(runs) {
+  const miniRail = $("#run-rail-mini");
+  if (!miniRail) return;
+  miniRail.replaceChildren(...runs.map((run, idx) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `run-mini-dot${state.selected?.run_id === run.run_id ? " active" : ""}`;
+    btn.dataset.runId = run.run_id;
+    const label = stateLabels[run.state] || run.state || "研究";
+    const title = run.query || "未命名研究";
+    btn.title = `${idx + 1}. [${label}] ${title}`;
+    btn.setAttribute("aria-label", `${idx + 1}. [${label}] ${title}`);
+
+    const pip = document.createElement("span");
+    pip.className = `mini-pip status-${run.state}`;
+    btn.append(pip);
+
+    btn.addEventListener("click", () => selectRun(run.run_id));
+    return btn;
+  }));
+}
+
 function renderRuns() {
   const list = $("#run-list");
   const filtered = filterRuns(state.runs);
   list.replaceChildren(...filtered.map(makeRunItem));
+  renderRunRailMini(filtered);
   $("#load-more").hidden = !state.nextCursor || Boolean(runSearchQuery) || runFilter !== "all";
 }
 
 function updateSelectedRun(runId) {
   const list = $("#run-list");
-  if (!list) return;
-  list.querySelectorAll(".run-item").forEach((btn) => {
-    btn.classList.toggle("selected", btn.dataset.runId === runId);
-  });
+  if (list) {
+    list.querySelectorAll(".run-item").forEach((btn) => {
+      btn.classList.toggle("selected", btn.dataset.runId === runId);
+    });
+  }
+  const miniRail = $("#run-rail-mini");
+  if (miniRail) {
+    miniRail.querySelectorAll(".run-mini-dot").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.runId === runId);
+    });
+  }
 }
 
 const artifactCache = new Map();
@@ -339,6 +370,7 @@ async function loadDelivery(run) {
     }
     renderAnswer(answer, content, report.artifact.media_type);
     answer.hidden = false;
+    updateEvidenceTabBadge(state.evidenceList?.length || 0);
     bindDocumentToolbar(run, content, evidenceIds);
   } catch (error) {
     answer.hidden = true;
@@ -352,6 +384,21 @@ async function loadDelivery(run) {
   }
 }
 
+function updateEvidenceTabBadge(count) {
+  const evTab = $("#tab-evidence-from-toc");
+  if (!evTab) return;
+  let badge = evTab.querySelector(".evidence-badge");
+  if (!badge && count > 0) {
+    badge = document.createElement("span");
+    badge.className = "evidence-badge";
+    evTab.append(badge);
+  }
+  if (badge) {
+    badge.textContent = String(count);
+    badge.hidden = count <= 0;
+  }
+}
+
 async function loadEvidence(runId, evidenceIds) {
   const list = $("#evidence-list");
   // 集合未变（典型：SSE 历史重放触发的重复 loadDelivery）：
@@ -362,12 +409,14 @@ async function loadEvidence(runId, evidenceIds) {
   if (unchanged) {
     $("#evidence-count").textContent = state.evidenceList.length ? `${state.evidenceList.length} 条` : "";
     $("#evidence-section").hidden = !state.evidenceList.length;
+    updateEvidenceTabBadge(state.evidenceList.length);
     return;
   }
   state.evidence.clear();
   state.evidenceList = [];
   state.inspectorIndex = -1;
   closeInspector(false);
+  updateEvidenceTabBadge(0);
   if (!evidenceIds.length) {
     $("#evidence-section").hidden = true;
     list.replaceChildren();
@@ -401,6 +450,7 @@ async function loadEvidence(runId, evidenceIds) {
   }));
   $("#evidence-count").textContent = `${available.length} 条`;
   $("#evidence-section").hidden = !available.length;
+  updateEvidenceTabBadge(available.length);
 }
 
 async function renderEvidenceData(prefix, item, index) {
@@ -669,6 +719,12 @@ function openInspector(index, trigger = state.inspectorTrigger) {
   $("#insp-next").disabled = index >= state.evidenceList.length - 1;
   $("#evidence-inspector").hidden = false;
   $(".app-shell").dataset.inspector = "open";
+
+  const tabToc = $("#tab-toc-from-insp");
+  if (tabToc) {
+    tabToc.hidden = true;
+  }
+
   $("#close-inspector").focus();
 }
 
@@ -994,14 +1050,21 @@ $("[data-close-evidence]").addEventListener("click", () => $("#evidence-dialog")
 $("#toggle-sidebar").addEventListener("click", toggleSidebar);
 $("#hud-toggle").addEventListener("click", toggleHud);
 $("#close-inspector").addEventListener("click", closeInspector);
+$("#tab-toc-from-insp")?.addEventListener("click", () => closeInspector(false));
 $("#insp-prev").addEventListener("click", () => stepInspector(-1));
 $("#insp-next").addEventListener("click", () => stepInspector(1));
 inspectorMedia.addEventListener("change", (event) => {
   if (!event.matches) closeInspector(false);
 });
+window.addEventListener("conflux:open-inspector", () => {
+  if (state.evidenceList && state.evidenceList.length > 0) {
+    const idx = state.inspectorIndex >= 0 ? state.inspectorIndex : 0;
+    openInspector(idx);
+  }
+});
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !$("#evidence-inspector").hidden) closeInspector();
-  if (event.key === "[" && !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName)) {
+  if (event.key === "[" && !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName) && !document.activeElement?.isContentEditable) {
     toggleSidebar();
   }
 });
