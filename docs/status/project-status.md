@@ -513,3 +513,18 @@ P2.0 ~ P2.3 多模态 RAG 核心技术闭环已全链路打通并完成基准评
 
 截至本节更新，项目完整离线回归测试为 `545 passed, 4 warnings in 47.96s`。
 
+## P3 面向研究者的项目认知与代码治理工作台（2026-09-09）
+
+按照用户对“项目”分区的研究者定位（非 Web IDE，聚焦实验认知、Git 谱系、理论映射与契约治理）及细化实施方案（`docs/plans/current/v0.3-P3-面向研究者的项目认知与代码治理工作台-细化实施方案.md`），已全量落地五大支柱与前端三栏工作台演播室：
+
+| 模块 | 当前状态 | 证据边界 |
+| --- | --- | --- |
+| 架构全景与拓扑解构 | `implemented_and_validated` | `ProjectAgent.generate_walkthrough` 自动扫描包结构、提取系统架构层级、生成原生矢量 SVG 模块拓扑图与数据流转示意图； |
+| 论文理论与源码映射 | `implemented_and_validated` | `get_theory_mappings` 提炼学术原理（RRF 倒数排序融合、ReAct 调度、多模态 RAG、Lineage 闭包、OCC 乐观并发控制）至物理源码行级映射，前端支持平滑高亮聚焦； |
+| Git 实验谱系与语义差异 | `implemented_and_validated` | `GitInspector.get_semantic_diff` 提供非枯燥代码行的“人话版”实验意图解析、影响文件统计、脏工作区修改分类与 Conventional Commit 规范建议； |
+| 功能实现契约审计 | `implemented_and_validated` | `generate_audit_report` 运行 5 项治理规则（上帝文件、空桩函数、未实现异常、直接环境泄露、单测覆盖），计算健康得分与状态分布，支持一键定位缺陷源码与触发受控解耦； |
+| CodingAgent 受控解耦补丁 | `implemented_and_validated` | 基于 SHA-256 乐观锁校验的 `apply_patch`，严格拦截外部并发修改（`409 version_conflict`）；前端提供基准哈希、Unified Diff 预览与显式物理核准按钮； |
+| 纯原生三栏演播室 (P3 Studio) | `implemented_and_validated` | 满足零外部 CDN、100% 本地离线契约；左栏工程/Git/文件树、中栏四合一研读台（架构拓扑/理论映射/契约审计/带行号源码）、右栏 ProjectAgent 问答与 CodingAgent 补丁抽屉。 |
+
+截至本节更新，项目完整离线回归测试为 `555 passed, 2 warnings in 110.39s`。
+

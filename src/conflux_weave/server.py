@@ -47,6 +47,23 @@ from conflux_weave.api_contracts import (
     NoteRevisionsResponse,
     MultimodalFusionHitResponse,
     MultimodalRetrievalResultResponse,
+    ProjectSummaryResponse,
+    ProjectDetailResponse,
+    ProjectRegisterRequest,
+    ProjectTreeResponse,
+    ProjectFileContentResponse,
+    ProjectAskRequest,
+    ProjectAskResponse,
+    CodingProposalRequest,
+    CodingProposalResponse,
+    CodingApplyRequest,
+    CodingApplyResponse,
+    SemanticBranchDiffResponse,
+    TheoryMappingItem,
+    ArchitectureComponentItem,
+    ArchitectureWalkthroughResponse,
+    AuditFindingItem,
+    ProjectAuditReportResponse,
     FixtureResearchTaskRequest,
     FollowUpResearchTaskRequest,
     ProviderConfigResponse,
@@ -64,6 +81,8 @@ from conflux_weave.api_contracts import (
     WorkbenchQueryService,
     map_exception,
 )
+from conflux_weave.projects import GitInspector, Project, ProjectScanner, ProjectStore
+from conflux_weave.project_agents import CodeProposal, CodingAgent, ProjectAgent, ProjectAnswer
 from conflux_weave.document_agent import DocumentAgent
 from conflux_weave.document_notes import (
     NOTE_SCHEMA_VERSION,
@@ -2045,6 +2064,294 @@ def create_app(
             note_id=note_id,
             current_version=int(curr_ver),
             revisions=tuple(items),
+        )
+
+    def _get_project_store() -> ProjectStore:
+        db_path = getattr(repository, "database_path", None)
+        base_dir = Path(db_path).parent if db_path is not None else Path("var") / "data"
+        reg_path = base_dir / "projects-registry.json"
+        ws_root = None
+        if config_paths and config_paths.get("workspace_root"):
+            ws_root = Path(config_paths["workspace_root"])
+        return ProjectStore(reg_path, default_workspace=ws_root)
+
+    def _get_project_agent() -> ProjectAgent:
+        chat_adapter = getattr(chat_service, "_chat", None) if chat_service is not None else None
+        return ProjectAgent(provider=chat_adapter)
+
+    def _get_coding_agent() -> CodingAgent:
+        chat_adapter = getattr(chat_service, "_chat", None) if chat_service is not None else None
+        return CodingAgent(provider=chat_adapter)
+
+    _active_proposals: dict[str, CodeProposal] = {}
+
+    @app.get("/api/v1/projects", response_model=list[ProjectSummaryResponse])
+    async def list_projects_endpoint():
+        store = _get_project_store()
+        projects = store.list_projects()
+        return [
+            ProjectSummaryResponse(
+                project_id=p.project_id,
+                name=p.name,
+                root_path=p.root_path,
+                description=p.description,
+                created_at=p.created_at,
+                updated_at=p.updated_at,
+            )
+            for p in projects
+        ]
+
+    @app.post("/api/v1/projects", response_model=ProjectDetailResponse)
+    async def register_project_endpoint(request: ProjectRegisterRequest):
+        store = _get_project_store()
+        try:
+            proj = store.register(request.name, request.root_path, request.description)
+            git_status = GitInspector.get_status(Path(proj.root_path))
+            return ProjectDetailResponse(
+                project_id=proj.project_id,
+                name=proj.name,
+                root_path=proj.root_path,
+                description=proj.description,
+                git_status=git_status.to_dict(),
+                created_at=proj.created_at,
+                updated_at=proj.updated_at,
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.get("/api/v1/projects/{project_id}", response_model=ProjectDetailResponse)
+    async def get_project_endpoint(project_id: str):
+        store = _get_project_store()
+        proj = store.get_project(project_id)
+        if proj is None:
+            return JSONResponse(status_code=404, content={"code": "project_not_found", "message": f"项目 {project_id} 不存在。"})
+        git_status = GitInspector.get_status(Path(proj.root_path))
+        return ProjectDetailResponse(
+            project_id=proj.project_id,
+            name=proj.name,
+            root_path=proj.root_path,
+            description=proj.description,
+            git_status=git_status.to_dict(),
+            created_at=proj.created_at,
+            updated_at=proj.updated_at,
+        )
+
+    @app.get("/api/v1/projects/{project_id}/tree", response_model=ProjectTreeResponse)
+    async def get_project_tree_endpoint(project_id: str):
+        store = _get_project_store()
+        proj = store.get_project(project_id)
+        if proj is None:
+            return JSONResponse(status_code=404, content={"code": "project_not_found", "message": f"项目 {project_id} 不存在。"})
+        nodes = ProjectScanner.scan_tree(Path(proj.root_path))
+        return ProjectTreeResponse(
+            project_id=project_id,
+            items=tuple(n.to_dict() for n in nodes),
+        )
+
+    @app.get("/api/v1/projects/{project_id}/file", response_model=ProjectFileContentResponse)
+    async def get_project_file_endpoint(project_id: str, path: str = Query(..., min_length=1)):
+        store = _get_project_store()
+        proj = store.get_project(project_id)
+        if proj is None:
+            return JSONResponse(status_code=404, content={"code": "project_not_found", "message": f"项目 {project_id} 不存在。"})
+        try:
+            content, file_sha, sz = ProjectScanner.read_file_safe(Path(proj.root_path), path)
+            return ProjectFileContentResponse(
+                project_id=project_id,
+                path=path,
+                content=content,
+                sha256=file_sha,
+                size_bytes=sz,
+            )
+        except PermissionError as pe:
+            return JSONResponse(status_code=403, content={"code": "path_escape_rejected", "message": str(pe)})
+        except FileNotFoundError as fe:
+            return JSONResponse(status_code=404, content={"code": "file_not_found", "message": str(fe)})
+        except ValueError as ve:
+            return JSONResponse(status_code=400, content={"code": "file_too_large", "message": str(ve)})
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/projects/{project_id}/ask", response_model=ProjectAskResponse)
+    async def ask_project_endpoint(project_id: str, request: ProjectAskRequest):
+        store = _get_project_store()
+        proj = store.get_project(project_id)
+        if proj is None:
+            return JSONResponse(status_code=404, content={"code": "project_not_found", "message": f"项目 {project_id} 不存在。"})
+        agent = _get_project_agent()
+        ans = await asyncio.to_thread(agent.ask, proj, request.question)
+        return ProjectAskResponse(
+            project_id=project_id,
+            answer_markdown=ans.answer_markdown,
+            cited_files=tuple(ans.cited_files),
+            git_evidence=ans.git_evidence,
+            risks_and_recommendations=tuple(ans.risks_and_recommendations),
+        )
+
+    @app.post("/api/v1/projects/{project_id}/coding/propose", response_model=CodingProposalResponse)
+    async def propose_coding_patch_endpoint(project_id: str, request: CodingProposalRequest):
+        store = _get_project_store()
+        proj = store.get_project(project_id)
+        if proj is None:
+            return JSONResponse(status_code=404, content={"code": "project_not_found", "message": f"项目 {project_id} 不存在。"})
+        coding_agent = _get_coding_agent()
+        try:
+            proposal = await asyncio.to_thread(
+                coding_agent.propose_patch,
+                proj,
+                request.instruction,
+                request.target_file,
+                custom_replacement=request.custom_replacement,
+            )
+            _active_proposals[proposal.proposal_id] = proposal
+            return CodingProposalResponse(
+                proposal_id=proposal.proposal_id,
+                project_id=proposal.project_id,
+                title=proposal.title,
+                rationale=proposal.rationale,
+                risk_level=proposal.risk_level,
+                target_file=proposal.target_file,
+                original_hash=proposal.original_hash,
+                diff=proposal.diff,
+                proposed_content=proposal.proposed_content,
+                verification_commands=tuple(proposal.verification_commands),
+                status=proposal.status,
+                created_at=proposal.created_at,
+            )
+        except PermissionError as pe:
+            return JSONResponse(status_code=403, content={"code": "path_escape_rejected", "message": str(pe)})
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/projects/{project_id}/coding/apply", response_model=CodingApplyResponse)
+    async def apply_coding_patch_endpoint(project_id: str, request: CodingApplyRequest):
+        store = _get_project_store()
+        proj = store.get_project(project_id)
+        if proj is None:
+            return JSONResponse(status_code=404, content={"code": "project_not_found", "message": f"项目 {project_id} 不存在。"})
+        coding_agent = _get_coding_agent()
+        proposal = _active_proposals.get(request.proposal_id)
+        if proposal is None:
+            proposal = CodeProposal(
+                proposal_id=request.proposal_id,
+                project_id=project_id,
+                title="User Approved Patch",
+                rationale="Reconstructed proposal from client request",
+                risk_level="medium",
+                target_file=request.target_file,
+                original_hash=request.expected_hash,
+                diff="",
+                proposed_content=request.proposed_content,
+            )
+        else:
+            if request.expected_hash:
+                proposal.original_hash = request.expected_hash
+            if request.proposed_content:
+                proposal.proposed_content = request.proposed_content
+
+        success, msg = await asyncio.to_thread(coding_agent.apply_patch, proj, proposal)
+        if not success:
+            if "revision_conflict" in msg:
+                return JSONResponse(
+                    status_code=409,
+                    content={"code": "version_conflict", "message": msg},
+                )
+            return JSONResponse(status_code=400, content={"code": "patch_failed", "message": msg})
+
+        return CodingApplyResponse(
+            success=True,
+            message=msg,
+            proposal_id=proposal.proposal_id,
+        )
+
+    @app.get("/api/v1/projects/{project_id}/walkthrough", response_model=ArchitectureWalkthroughResponse)
+    async def get_project_walkthrough_endpoint(project_id: str):
+        store = _get_project_store()
+        proj = store.get_project(project_id)
+        if proj is None:
+            return JSONResponse(status_code=404, content={"code": "project_not_found", "message": f"项目 {project_id} 不存在。"})
+        agent = _get_project_agent()
+        walkthrough = await asyncio.to_thread(agent.generate_walkthrough, proj)
+        return ArchitectureWalkthroughResponse(
+            project_id=walkthrough.project_id,
+            overview=walkthrough.overview,
+            components=tuple(
+                ArchitectureComponentItem(
+                    name=c.name,
+                    layer=c.layer,
+                    files=tuple(c.files),
+                    responsibilities=c.responsibilities,
+                    dependencies=tuple(c.dependencies),
+                )
+                for c in walkthrough.components
+            ),
+            mermaid_topology=walkthrough.mermaid_topology,
+            data_flow_description=walkthrough.data_flow_description,
+            theory_mappings=tuple(
+                TheoryMappingItem(
+                    concept=m.concept,
+                    paper_reference=m.paper_reference,
+                    code_symbol=m.code_symbol,
+                    file_path=m.file_path,
+                    line_number=m.line_number,
+                    description=m.description,
+                    design_rationale=m.design_rationale,
+                )
+                for m in walkthrough.theory_mappings
+            ),
+            dependencies_analysis=walkthrough.dependencies_analysis,
+        )
+
+    @app.get("/api/v1/projects/{project_id}/audit", response_model=ProjectAuditReportResponse)
+    async def get_project_audit_endpoint(project_id: str):
+        store = _get_project_store()
+        proj = store.get_project(project_id)
+        if proj is None:
+            return JSONResponse(status_code=404, content={"code": "project_not_found", "message": f"项目 {project_id} 不存在。"})
+        agent = _get_project_agent()
+        report = await asyncio.to_thread(agent.generate_audit_report, proj)
+        return ProjectAuditReportResponse(
+            report_id=report.report_id,
+            project_id=report.project_id,
+            summary=report.summary,
+            implementation_score=report.implementation_score,
+            health_score=report.health_score,
+            status_counts=report.status_counts,
+            findings=tuple(
+                AuditFindingItem(
+                    finding_id=f.finding_id,
+                    category=f.category,
+                    severity=f.severity,
+                    title=f.title,
+                    description=f.description,
+                    target_file=f.target_file,
+                    line_number=f.line_number,
+                    snippet=f.snippet,
+                    recommendation=f.recommendation,
+                    implementation_status=f.implementation_status,
+                )
+                for f in report.findings
+            ),
+            checked_rules=tuple(report.checked_rules),
+            created_at=report.created_at,
+        )
+
+    @app.get("/api/v1/projects/{project_id}/git/semantic-diff", response_model=SemanticBranchDiffResponse)
+    async def get_project_semantic_diff_endpoint(project_id: str, compare_branch: str = "main"):
+        store = _get_project_store()
+        proj = store.get_project(project_id)
+        if proj is None:
+            return JSONResponse(status_code=404, content={"code": "project_not_found", "message": f"项目 {project_id} 不存在。"})
+        diff = await asyncio.to_thread(GitInspector.get_semantic_diff, Path(proj.root_path), compare_branch)
+        return SemanticBranchDiffResponse(
+            current_branch=diff.current_branch,
+            compare_branch=diff.compare_branch,
+            experiment_intent=diff.experiment_intent,
+            changed_areas=tuple(diff.changed_areas),
+            impact_level=diff.impact_level,
+            file_diff_summaries=tuple(diff.file_diff_summaries),
+            total_additions=diff.total_additions,
+            total_deletions=diff.total_deletions,
         )
 
     @app.get("/api/v1/health/ready")

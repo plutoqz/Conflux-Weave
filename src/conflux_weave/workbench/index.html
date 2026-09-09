@@ -23,6 +23,7 @@
         <a class="section-link" data-section-link="chat" href="#/chat">对话</a>
         <a class="section-link" data-section-link="research" href="#/research">研究</a>
         <a class="section-link" data-section-link="library" href="#/library">资料库</a>
+        <a class="section-link" data-section-link="projects" href="#/projects">项目</a>
         <a class="section-link" data-section-link="settings" href="#/settings">设置</a>
       </nav>
       <div class="topbar-actions">
@@ -426,8 +427,313 @@
                 <h2>关于</h2>
               </div>
             </div>
-            <p class="settings-note">Conflux-Weave 本地研究工作台 · v0.3。修改模型配置后需重启 <code>conflux-weave serve</code> 生效；文档、项目、知识分区将随后续里程碑上线。</p>
+            <p class="settings-note">Conflux-Weave 本地研究工作台 · v0.3。修改模型配置后需重启 <code>conflux-weave serve</code> 生效；知识库与记忆分区将随后续里程碑上线。</p>
           </section>
+        </section>
+
+        <section id="projects-view" class="projects-view" hidden>
+          <div class="projects-layout">
+            <!-- Left Rail: Projects Explorer & Git Lineage -->
+            <aside class="projects-sidebar" aria-label="项目导航与实验谱系">
+              <div class="projects-selector-header">
+                <div class="projects-select-wrap">
+                  <span class="eyebrow">Project</span>
+                  <select id="project-select" class="project-dropdown" aria-label="选择项目"></select>
+                </div>
+                <button id="project-register-btn" class="quiet-button project-add-btn" type="button" title="注册新项目">+</button>
+              </div>
+
+              <!-- Git & Branch Lineage Card -->
+              <div id="project-git-card" class="project-git-card">
+                <div class="project-git-header">
+                  <span class="git-branch-badge">
+                    <svg class="icon git-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+                    <span id="proj-git-branch">main</span>
+                  </span>
+                  <span id="proj-git-status-dot" class="status-dot"></span>
+                </div>
+                <div id="proj-git-commit-info" class="project-git-commit-info"></div>
+                <div class="git-card-actions">
+                  <button id="proj-btn-semantic-diff" class="quiet-button small-btn" type="button">分支语义释义</button>
+                </div>
+              </div>
+
+              <!-- File Tree -->
+              <div class="projects-tree-container">
+                <div class="tree-header">
+                  <span class="eyebrow">Files</span>
+                  <span id="proj-file-count" class="count-label"></span>
+                </div>
+                <div id="project-file-tree" class="project-file-tree" role="tree"></div>
+              </div>
+            </aside>
+
+            <!-- Center Stage: Multi-Tab Cognition & Governance Hub -->
+            <main class="projects-stage" aria-label="研究认知与治理中台">
+              <!-- Center Stage Navigation Tabs -->
+              <nav class="projects-center-tabs" role="tablist">
+                <button id="tab-center-arch" class="center-tab active" role="tab" aria-selected="true" type="button">
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+                  <span>架构全景与拓扑</span>
+                </button>
+                <button id="tab-center-theory" class="center-tab" role="tab" aria-selected="false" type="button">
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+                  <span>论文理论映射</span>
+                </button>
+                <button id="tab-center-audit" class="center-tab" role="tab" aria-selected="false" type="button">
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                  <span>契约审计与体检</span>
+                </button>
+                <button id="tab-center-code" class="center-tab" role="tab" aria-selected="false" type="button">
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+                  <span>代码研读与变更</span>
+                </button>
+              </nav>
+
+              <!-- Center Tab 1: Architecture & Topology -->
+              <section id="panel-center-arch" class="center-panel active" role="tabpanel">
+                <div class="panel-card walkthrough-overview-card">
+                  <span class="eyebrow">Project Walkthrough</span>
+                  <h2 id="walkthrough-proj-title">架构全景导读</h2>
+                  <p id="walkthrough-proj-overview" class="walkthrough-text"></p>
+                </div>
+                <div class="panel-card topology-card">
+                  <div class="card-header">
+                    <span class="eyebrow">Topology</span>
+                    <h3>核心模块与数据流拓扑图</h3>
+                  </div>
+                  <div id="walkthrough-topology-container" class="topology-container"></div>
+                  <div id="walkthrough-dataflow-box" class="dataflow-box">
+                    <h4>关键数据流向链路</h4>
+                    <div id="walkthrough-dataflow-text" class="markdown-body"></div>
+                  </div>
+                </div>
+                <div class="panel-card components-grid-card">
+                  <div class="card-header">
+                    <span class="eyebrow">Layers</span>
+                    <h3>系统分层与组件职责</h3>
+                  </div>
+                  <div id="walkthrough-components-grid" class="components-grid"></div>
+                </div>
+              </section>
+
+              <!-- Center Tab 2: Theory Mapping -->
+              <section id="panel-center-theory" class="center-panel" role="tabpanel" hidden>
+                <div class="panel-card theory-intro-card">
+                  <span class="eyebrow">Theory-to-Code Mapping</span>
+                  <h2>论文理论与核心算法实现映射矩阵</h2>
+                  <p class="walkthrough-text">建立学术论文中的核心公式、理论推导、排序机制与工程源码之间的双向溯源索引。</p>
+                </div>
+                <div id="theory-mappings-list" class="theory-mappings-list"></div>
+              </section>
+
+              <!-- Center Tab 3: Contract Audit -->
+              <section id="panel-center-audit" class="center-panel" role="tabpanel" hidden>
+                <!-- Audit Scoreboard -->
+                <div class="audit-scoreboard">
+                  <div class="score-card">
+                    <span class="score-label">实现完整度 (Implementation)</span>
+                    <div class="score-value-row">
+                      <span id="audit-score-impl" class="score-number">--</span>
+                      <span class="score-unit">/ 100</span>
+                    </div>
+                    <span class="score-desc">基于闭环能力、Mock降级与空桩函数的综合评分</span>
+                  </div>
+                  <div class="score-card">
+                    <span class="score-label">健康治理分 (Health & Safety)</span>
+                    <div class="score-value-row">
+                      <span id="audit-score-health" class="score-number">--</span>
+                      <span class="score-unit">/ 100</span>
+                    </div>
+                    <span class="score-desc">基于上帝类耦合度、全局状态泄漏与测试防护网评分</span>
+                  </div>
+                  <div class="status-summary-card">
+                    <div class="status-badge-item status-full">
+                      <span class="status-count" id="audit-count-full">0</span>
+                      <span class="status-tag">完整闭环</span>
+                    </div>
+                    <div class="status-badge-item status-mock">
+                      <span class="status-count" id="audit-count-mock">0</span>
+                      <span class="status-tag">临时 Mock</span>
+                    </div>
+                    <div class="status-badge-item status-stub">
+                      <span class="status-count" id="audit-count-stub">0</span>
+                      <span class="status-tag">空桩占位</span>
+                    </div>
+                    <div class="status-badge-item status-unimpl">
+                      <span class="status-count" id="audit-count-unimpl">0</span>
+                      <span class="status-tag">未实现</span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Audit Summary Banner -->
+                <div class="panel-card audit-summary-card">
+                  <div class="card-header">
+                    <span class="eyebrow">Audit Summary</span>
+                    <button id="btn-re-audit" class="quiet-button small-btn" type="button">重新体检</button>
+                  </div>
+                  <p id="audit-summary-text" class="audit-summary-text"></p>
+                </div>
+
+                <!-- Audit Findings List -->
+                <div class="panel-card audit-findings-card">
+                  <div class="card-header">
+                    <span class="eyebrow">Findings</span>
+                    <h3>审计发现与治理建议</h3>
+                  </div>
+                  <div id="audit-findings-list" class="audit-findings-list"></div>
+                </div>
+              </section>
+
+              <!-- Center Tab 4: Code & Diff Stage -->
+              <section id="panel-center-code" class="center-panel" role="tabpanel" hidden>
+                <header class="stage-header">
+                  <div class="stage-file-info">
+                    <svg class="icon stage-file-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+                    <span id="proj-current-file-path">请从左侧选择文件</span>
+                  </div>
+                  <div class="stage-actions">
+                    <span id="proj-file-meta" class="count-label"></span>
+                    <button id="proj-file-copy-btn" class="quiet-button" type="button" title="复制内容">复制</button>
+                  </div>
+                </header>
+
+                <div id="proj-code-container" class="project-code-container">
+                  <pre id="proj-code-viewer" class="project-code-viewer"><code></code></pre>
+                </div>
+
+                <div id="proj-diff-container" class="project-diff-container" hidden>
+                  <header class="diff-header">
+                    <span class="eyebrow">Diff Inspector</span>
+                    <span id="proj-diff-title" class="diff-title"></span>
+                  </header>
+                  <pre id="proj-diff-viewer" class="project-diff-viewer"></pre>
+                </div>
+              </section>
+            </main>
+
+            <!-- Right: Agent Studio (Q&A & Coding Proposals) -->
+            <aside class="projects-agent-panel" aria-label="智能体研读与治理工作台">
+              <div class="right-pane-tabs" role="tablist">
+                <button type="button" class="right-pane-tab active" id="tab-proj-qa" role="tab" aria-selected="true">
+                  <svg class="icon tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                  <span>项目研读</span>
+                </button>
+                <button type="button" class="right-pane-tab" id="tab-proj-coding" role="tab" aria-selected="false">
+                  <svg class="icon tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                  <span>受控解耦补丁</span>
+                </button>
+              </div>
+
+              <!-- Quick Action Chips -->
+              <div class="proj-quick-chips">
+                <button class="quick-chip-btn" data-query="请梳理当前项目的全景架构设计意图与主要工程模块" type="button">架构全景导读</button>
+                <button class="quick-chip-btn" data-query="当前分支与基准分支相比，主要做了哪些实验改动？" type="button">分支变更释义</button>
+                <button class="quick-chip-btn" data-query="请审计当前项目的高耦合模块与代码坏味道" type="button">代码质量体检</button>
+              </div>
+
+              <!-- Tab Panel: ProjectAgent Q&A -->
+              <div id="proj-panel-qa" class="proj-tab-panel">
+                <div class="proj-qa-input-box">
+                  <textarea id="proj-qa-input" class="proj-textarea" rows="3" placeholder="向 ProjectAgent 提问项目架构、某模块逻辑或 Git 变更..."></textarea>
+                  <button id="proj-qa-submit" class="primary-button proj-btn-submit" type="button">提问</button>
+                </div>
+                <div id="proj-qa-result" class="proj-qa-result">
+                  <div class="panel-empty" id="proj-qa-empty">
+                    <strong>ProjectAgent 研读台已就绪</strong>
+                    <span>支持透视 Vibecoding 原型与开源仓库技术细节、代码调用流与实验谱系。</span>
+                  </div>
+                  <div id="proj-qa-answer" class="proj-qa-answer markdown-body" hidden></div>
+                  <div id="proj-qa-evidence" class="proj-qa-evidence" hidden></div>
+                </div>
+              </div>
+
+              <!-- Tab Panel: CodingAgent Proposals -->
+              <div id="proj-panel-coding" class="proj-tab-panel" hidden>
+                <div class="proj-coding-input-box">
+                  <label class="field-label" for="proj-coding-target">目标文件</label>
+                  <input id="proj-coding-target" class="field-input" type="text" placeholder="例如 src/conflux_weave/server.py">
+                  <label class="field-label" for="proj-coding-instruction">修改/解耦要求</label>
+                  <textarea id="proj-coding-instruction" class="proj-textarea" rows="2" placeholder="描述需要实现的函数、重构策略或消除的全局状态..."></textarea>
+                  <button id="proj-coding-propose-btn" class="primary-button proj-btn-submit" type="button">生成解耦补丁提案</button>
+                </div>
+                <div id="proj-coding-proposal-box" class="proj-proposal-box" hidden>
+                  <div class="proposal-card">
+                    <div class="proposal-header">
+                      <span id="proj-prop-title" class="proposal-title"></span>
+                      <span id="proj-prop-risk" class="proposal-risk-badge"></span>
+                    </div>
+                    <p id="proj-prop-rationale" class="proposal-rationale"></p>
+                    <div class="proposal-actions">
+                      <button id="proj-prop-apply-btn" class="primary-button proj-apply-btn" type="button">核准并原子应用</button>
+                      <button id="proj-prop-reject-btn" class="quiet-button" type="button">放弃提案</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </aside>
+          </div>
+
+          <!-- Dialog: Semantic Branch Diff -->
+          <dialog id="project-semantic-diff-dialog" class="evidence-dialog semantic-diff-dialog">
+            <article>
+              <header class="dialog-header">
+                <div>
+                  <span class="eyebrow">Semantic Branch Diff</span>
+                  <h2>分支语义变更与实验意图</h2>
+                </div>
+                <button id="semantic-diff-close" class="icon-button" type="button" aria-label="关闭">×</button>
+              </header>
+              <div class="semantic-diff-body">
+                <div class="semantic-diff-meta-row">
+                  <div class="diff-branch-badge-group">
+                    <span id="diff-cur-branch" class="branch-pill cur-branch"></span>
+                    <span class="branch-compare-arrow">➔ 对比</span>
+                    <span id="diff-cmp-branch" class="branch-pill cmp-branch"></span>
+                  </div>
+                  <span id="diff-impact-level" class="impact-level-pill"></span>
+                </div>
+                <div class="semantic-diff-intent-card">
+                  <h4>实验意图解读</h4>
+                  <p id="diff-intent-text" class="diff-intent-text"></p>
+                </div>
+                <div class="semantic-diff-files-section">
+                  <div class="diff-files-header">
+                    <h4>涉及变动项 (<span id="diff-file-count">0</span>)</h4>
+                    <span id="diff-lines-stat" class="diff-lines-stat"></span>
+                  </div>
+                  <div id="diff-files-list" class="diff-files-list"></div>
+                </div>
+              </div>
+            </article>
+          </dialog>
+
+          <!-- Dialog: Register New Project -->
+          <dialog id="project-register-dialog" class="evidence-dialog">
+            <article>
+              <header class="dialog-header">
+                <div>
+                  <span class="eyebrow">Register</span>
+                  <h2>注册新项目</h2>
+                </div>
+                <button id="project-register-close" class="icon-button" type="button" aria-label="关闭">×</button>
+              </header>
+              <form id="project-register-form" class="settings-form">
+                <label class="field-label" for="reg-proj-name">项目名称</label>
+                <input id="reg-proj-name" type="text" placeholder="例如 My Next Project" required>
+                <label class="field-label" for="reg-proj-path">本地绝对路径</label>
+                <input id="reg-proj-path" type="text" placeholder="例如 D:/code/my-project" required>
+                <label class="field-label" for="reg-proj-desc">项目描述</label>
+                <input id="reg-proj-desc" type="text" placeholder="可选描述">
+                <p id="reg-proj-error" class="form-error" role="alert" hidden></p>
+                <div class="dialog-actions">
+                  <button id="reg-proj-cancel" class="quiet-button" type="button">取消</button>
+                  <button id="reg-proj-submit" class="primary-button" type="submit">确认注册</button>
+                </div>
+              </form>
+            </article>
+          </dialog>
         </section>
 
         <section id="empty-view" class="empty-view">

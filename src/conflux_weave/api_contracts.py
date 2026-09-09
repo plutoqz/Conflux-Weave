@@ -296,6 +296,154 @@ class NoteRevisionsResponse(_ApiModel):
     revisions: tuple[NoteRevisionItem, ...] = ()
 
 
+class ProjectSummaryResponse(_ApiModel):
+    project_id: str
+    name: str
+    root_path: str
+    description: str = ""
+    created_at: str
+    updated_at: str
+
+
+class ProjectDetailResponse(_ApiModel):
+    project_id: str
+    name: str
+    root_path: str
+    description: str = ""
+    git_status: dict[str, Any]
+    created_at: str
+    updated_at: str
+
+
+class ProjectRegisterRequest(_ApiModel):
+    name: str = Field(min_length=1, max_length=100)
+    root_path: str = Field(min_length=1)
+    description: str = ""
+
+
+class ProjectTreeResponse(_ApiModel):
+    project_id: str
+    items: tuple[dict[str, Any], ...] = ()
+
+
+class ProjectFileContentResponse(_ApiModel):
+    project_id: str
+    path: str
+    content: str
+    sha256: str
+    size_bytes: int
+
+
+class ProjectAskRequest(_ApiModel):
+    question: str = Field(min_length=1, max_length=2_000)
+
+
+class ProjectAskResponse(_ApiModel):
+    project_id: str
+    answer_markdown: str
+    cited_files: tuple[str, ...] = ()
+    git_evidence: dict[str, Any] = Field(default_factory=dict)
+    risks_and_recommendations: tuple[str, ...] = ()
+
+
+class CodingProposalRequest(_ApiModel):
+    instruction: str = Field(min_length=1, max_length=2_000)
+    target_file: str = Field(min_length=1)
+    custom_replacement: str | None = None
+
+
+class CodingProposalResponse(_ApiModel):
+    proposal_id: str
+    project_id: str
+    title: str
+    rationale: str
+    risk_level: str
+    target_file: str
+    original_hash: str
+    diff: str
+    proposed_content: str
+    verification_commands: tuple[str, ...] = ()
+    status: str
+    created_at: str
+
+
+class CodingApplyRequest(_ApiModel):
+    proposal_id: str
+    target_file: str
+    expected_hash: str
+    proposed_content: str
+
+
+class CodingApplyResponse(_ApiModel):
+    success: bool
+    message: str
+    proposal_id: str
+
+
+class SemanticBranchDiffResponse(_ApiModel):
+    current_branch: str
+    compare_branch: str
+    experiment_intent: str
+    changed_areas: tuple[str, ...] = ()
+    impact_level: str
+    file_diff_summaries: tuple[dict[str, Any], ...] = ()
+    total_additions: int = 0
+    total_deletions: int = 0
+
+
+class TheoryMappingItem(_ApiModel):
+    concept: str
+    paper_reference: str
+    code_symbol: str
+    file_path: str
+    line_number: int
+    description: str
+    design_rationale: str
+
+
+class ArchitectureComponentItem(_ApiModel):
+    name: str
+    layer: str
+    files: tuple[str, ...] = ()
+    responsibilities: str
+    dependencies: tuple[str, ...] = ()
+
+
+class ArchitectureWalkthroughResponse(_ApiModel):
+    project_id: str
+    overview: str
+    components: tuple[ArchitectureComponentItem, ...] = ()
+    mermaid_topology: str
+    data_flow_description: str
+    theory_mappings: tuple[TheoryMappingItem, ...] = ()
+    dependencies_analysis: dict[str, Any] = Field(default_factory=dict)
+
+
+class AuditFindingItem(_ApiModel):
+    finding_id: str
+    category: str
+    severity: str
+    title: str
+    description: str
+    target_file: str
+    line_number: int | None = None
+    snippet: str = ""
+    recommendation: str = ""
+    implementation_status: str = "fully_implemented"
+
+
+class ProjectAuditReportResponse(_ApiModel):
+    report_id: str
+    project_id: str
+    summary: str
+    implementation_score: int
+    health_score: int
+    status_counts: dict[str, int] = Field(default_factory=dict)
+    findings: tuple[AuditFindingItem, ...] = ()
+    checked_rules: tuple[str, ...] = ()
+    created_at: str
+
+
 class RunPageResponse(_ApiModel):
     items: tuple[RunSummaryResponse, ...]
     next_cursor: str | None
@@ -1020,6 +1168,23 @@ __all__ = [
     "MultimodalIndexManifestResponse",
     "MultimodalRetrievalHitResponse",
     "MultimodalRetrievalResultResponse",
+    "ProjectSummaryResponse",
+    "ProjectDetailResponse",
+    "ProjectRegisterRequest",
+    "ProjectTreeResponse",
+    "ProjectFileContentResponse",
+    "ProjectAskRequest",
+    "ProjectAskResponse",
+    "CodingProposalRequest",
+    "CodingProposalResponse",
+    "CodingApplyRequest",
+    "CodingApplyResponse",
+    "SemanticBranchDiffResponse",
+    "TheoryMappingItem",
+    "ArchitectureComponentItem",
+    "ArchitectureWalkthroughResponse",
+    "AuditFindingItem",
+    "ProjectAuditReportResponse",
     "decode_run_cursor",
     "encode_run_cursor",
     "map_exception",

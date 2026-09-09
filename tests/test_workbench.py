@@ -408,3 +408,50 @@ def test_workbench_p2_document_note_studio_contracts() -> None:
         assert "http://" not in js_src
         assert "https://" not in js_src
 
+
+def test_workbench_p3_projects_and_code_studio_contracts() -> None:
+    from pathlib import Path
+
+    root = Path(__file__).parents[1] / "src" / "conflux_weave" / "workbench"
+    index = (root / "index.html").read_text(encoding="utf-8")
+    styles = (root / "styles.css").read_text(encoding="utf-8")
+    app_js = (root / "app.js").read_text(encoding="utf-8")
+    router_js = (root / "modules" / "router.js").read_text(encoding="utf-8")
+    projects_js = (root / "modules" / "projects.js").read_text(encoding="utf-8")
+
+    # Verify DOM anchors in index.html
+    assert 'data-section-link="projects"' in index
+    assert 'id="projects-view"' in index
+    assert 'id="project-select"' in index
+    assert 'id="project-git-card"' in index
+    assert 'id="proj-git-branch"' in index
+    assert 'id="project-file-tree"' in index
+    assert 'id="proj-code-viewer"' in index
+    assert 'id="proj-diff-viewer"' in index
+    assert 'id="proj-qa-input"' in index
+    assert 'id="proj-qa-submit"' in index
+    assert 'id="proj-coding-propose-btn"' in index
+    assert 'id="proj-prop-apply-btn"' in index
+
+    # Verify CSS rules
+    assert ".projects-view" in styles
+    assert ".projects-layout" in styles
+    assert ".projects-sidebar" in styles
+    assert ".projects-stage" in styles
+    assert ".projects-agent-panel" in styles
+    assert ".project-code-viewer" in styles
+    assert ".project-diff-viewer" in styles
+
+    # Verify router & module wiring
+    assert 'projects: "projects-view"' in router_js
+    assert 'import "./modules/projects.js"' in app_js
+    assert "/api/v1/projects" in projects_js
+    assert "/coding/propose" in projects_js
+    assert "/coding/apply" in projects_js
+
+    # Verify zero external CDN
+    for js_src in (index, styles, app_js, router_js, projects_js):
+        assert "http://" not in js_src
+        assert "https://" not in js_src
+
+
