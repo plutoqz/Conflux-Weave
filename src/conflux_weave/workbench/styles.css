@@ -3649,10 +3649,11 @@ textarea:hover, input:hover { border-color: var(--muted); }
   display: flex;
   flex-direction: column;
   padding: 16px;
-  background: color-mix(in srgb, var(--paper-warm) 40%, var(--surface));
+  background: var(--panel-bg);
   border-right: 1px solid var(--rule);
   gap: 14px;
   overflow-y: auto;
+  overflow-x: hidden;
   max-height: calc(100vh - 64px);
 }
 
@@ -3667,6 +3668,7 @@ textarea:hover, input:hover { border-color: var(--muted); }
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
 }
 
 .project-dropdown {
@@ -3675,8 +3677,8 @@ textarea:hover, input:hover { border-color: var(--muted); }
   font-size: 13px;
   font-weight: 500;
   border-radius: var(--radius-sm, 6px);
-  border: 1px solid var(--border-subtle, #e2e8f0);
-  background: var(--surface-card, #ffffff);
+  border: 1px solid var(--rule);
+  background: var(--chalk);
   color: var(--ink);
   cursor: pointer;
 }
@@ -3689,14 +3691,16 @@ textarea:hover, input:hover { border-color: var(--muted); }
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 
 .project-git-card {
   padding: 10px 12px;
   border-radius: var(--radius-sm, 6px);
-  background: color-mix(in srgb, var(--chalk) 65%, transparent);
+  background: var(--chalk);
   border: 1px solid var(--rule);
   font-size: 12px;
+  min-width: 0;
 }
 
 .project-git-header {
@@ -3771,6 +3775,15 @@ textarea:hover, input:hover { border-color: var(--muted); }
   user-select: none;
   transition: background 120ms ease;
   color: var(--ink);
+  min-width: 0;
+}
+
+.tree-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
 }
 
 .tree-node-row:hover {
@@ -3798,7 +3811,7 @@ textarea:hover, input:hover { border-color: var(--muted); }
 .projects-stage {
   display: flex;
   flex-direction: column;
-  background: var(--surface);
+  background: var(--paper);
   border-right: 1px solid var(--rule);
   overflow-y: auto;
   max-height: calc(100vh - 64px);
@@ -3810,7 +3823,7 @@ textarea:hover, input:hover { border-color: var(--muted); }
   justify-content: space-between;
   padding: 12px 18px;
   border-bottom: 1px solid var(--rule);
-  background: color-mix(in srgb, var(--paper-warm) 20%, var(--surface));
+  background: var(--chalk);
 }
 
 .stage-file-info {
@@ -3838,7 +3851,7 @@ textarea:hover, input:hover { border-color: var(--muted); }
   flex: 1;
   overflow: auto;
   padding: 16px;
-  background: var(--surface);
+  background: var(--chalk);
 }
 
 .project-code-viewer {
@@ -3874,7 +3887,7 @@ textarea:hover, input:hover { border-color: var(--muted); }
 
 .project-diff-container {
   border-top: 2px solid var(--moss);
-  background: color-mix(in srgb, var(--paper-warm) 30%, var(--surface));
+  background: var(--wash);
   padding: 14px 18px;
 }
 
@@ -3902,8 +3915,9 @@ textarea:hover, input:hover { border-color: var(--muted); }
   display: flex;
   flex-direction: column;
   padding: 16px;
-  background: color-mix(in srgb, var(--paper-warm) 40%, var(--surface));
+  background: var(--panel-bg);
   overflow-y: auto;
+  overflow-x: hidden;
   max-height: calc(100vh - 64px);
   gap: 12px;
 }
@@ -3926,7 +3940,7 @@ textarea:hover, input:hover { border-color: var(--muted); }
   padding: 10px;
   border-radius: var(--radius-sm, 6px);
   border: 1px solid var(--rule);
-  background: var(--surface-card, #ffffff);
+  background: var(--chalk);
   color: var(--ink);
   font-size: 13px;
   font-family: inherit;
@@ -3949,7 +3963,7 @@ textarea:hover, input:hover { border-color: var(--muted); }
 .proj-qa-answer {
   padding: 12px;
   border-radius: var(--radius-sm, 6px);
-  background: var(--surface-card, #ffffff);
+  background: var(--chalk);
   border: 1px solid var(--rule);
   font-size: 13px;
   line-height: 1.6;
@@ -3969,7 +3983,7 @@ textarea:hover, input:hover { border-color: var(--muted); }
 .proposal-card {
   padding: 14px;
   border-radius: var(--radius-sm, 6px);
-  background: var(--surface-card, #ffffff);
+  background: var(--chalk);
   border: 1px solid var(--rule);
   display: flex;
   flex-direction: column;
@@ -4036,8 +4050,16 @@ textarea:hover, input:hover { border-color: var(--muted); }
   .projects-layout {
     grid-template-columns: 1fr;
   }
-  .projects-sidebar,
-  .projects-stage,
+  .projects-sidebar {
+    max-height: 280px;
+    border-right: none;
+    border-bottom: 1px solid var(--rule);
+  }
+  .projects-stage {
+    max-height: none;
+    border-right: none;
+    border-bottom: 1px solid var(--rule);
+  }
   .projects-agent-panel {
     max-height: none;
     border-right: none;
@@ -4052,13 +4074,21 @@ textarea:hover, input:hover { border-color: var(--muted); }
 /* --- Center Navigation Tabs --- */
 .projects-center-tabs {
   display: flex;
-  background: color-mix(in srgb, var(--paper-warm) 30%, var(--surface));
+  background: var(--chalk);
   border-bottom: 1px solid var(--rule);
   padding: 0 16px;
   gap: 8px;
   position: sticky;
   top: 0;
   z-index: 10;
+  overflow-x: auto;
+  scrollbar-width: none;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.projects-center-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .center-tab {
@@ -4074,6 +4104,8 @@ textarea:hover, input:hover { border-color: var(--muted); }
   cursor: pointer;
   border-bottom: 2px solid transparent;
   transition: all 150ms ease;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .center-tab:hover {
@@ -4100,7 +4132,7 @@ textarea:hover, input:hover { border-color: var(--muted); }
 }
 
 .panel-card {
-  background: var(--surface-card, #ffffff);
+  background: var(--chalk);
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm, 8px);
   padding: 16px;
@@ -4121,7 +4153,7 @@ textarea:hover, input:hover { border-color: var(--muted); }
   display: flex;
   justify-content: center;
   align-items: center;
-  background: color-mix(in srgb, var(--chalk) 60%, transparent);
+  background: var(--wash);
   border: 1px solid var(--rule);
   border-radius: 6px;
   padding: 14px;
@@ -4146,9 +4178,9 @@ textarea:hover, input:hover { border-color: var(--muted); }
 .dataflow-box {
   margin-top: 10px;
   padding: 12px 14px;
-  background: color-mix(in srgb, var(--paper-warm) 25%, var(--surface));
+  background: var(--wash);
   border-radius: 6px;
-  border: 1px solid var(--rule);
+  border: 1px solid var(--rule-soft);
   font-size: 12px;
 }
 
@@ -4224,7 +4256,7 @@ textarea:hover, input:hover { border-color: var(--muted); }
 }
 
 .theory-mapping-card {
-  background: var(--surface-card, #ffffff);
+  background: var(--chalk);
   border: 1px solid var(--rule);
   border-left: 3px solid var(--moss);
   border-radius: var(--radius-sm, 6px);
@@ -4287,22 +4319,23 @@ textarea:hover, input:hover { border-color: var(--muted); }
 
 .theory-rationale-box {
   font-size: 12px;
-  background: color-mix(in srgb, var(--paper-warm) 40%, var(--surface));
+  background: var(--wash);
   padding: 8px 10px;
   border-radius: 4px;
   color: var(--ink);
   line-height: 1.4;
+  border: 1px solid var(--rule-soft);
 }
 
 /* --- Audit Scoreboard & Findings --- */
 .audit-scoreboard {
   display: grid;
-  grid-template-columns: 1fr 1fr 1.4fr;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 12px;
 }
 
 .score-card {
-  background: var(--surface-card, #ffffff);
+  background: var(--chalk);
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm, 8px);
   padding: 14px;
@@ -4342,7 +4375,7 @@ textarea:hover, input:hover { border-color: var(--muted); }
 }
 
 .status-summary-card {
-  background: var(--surface-card, #ffffff);
+  background: var(--chalk);
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm, 8px);
   padding: 14px;
@@ -4390,9 +4423,9 @@ textarea:hover, input:hover { border-color: var(--muted); }
 }
 
 .audit-finding-item {
-  background: var(--surface-card, #ffffff);
+  background: var(--chalk);
   border: 1px solid var(--rule);
-  border-left: 3px solid var(--border-subtle, #94a3b8);
+  border-left: 3px solid var(--rule);
   border-radius: var(--radius-sm, 6px);
   padding: 12px 14px;
   display: flex;
@@ -4471,10 +4504,11 @@ textarea:hover, input:hover { border-color: var(--muted); }
 
 .finding-recommendation {
   font-size: 12px;
-  background: color-mix(in srgb, var(--paper-warm) 35%, var(--surface));
+  background: var(--wash);
   padding: 6px 10px;
   border-radius: 4px;
   color: var(--ink);
+  border: 1px solid var(--rule-soft);
 }
 
 .finding-actions {
@@ -4540,10 +4574,10 @@ textarea:hover, input:hover { border-color: var(--muted); }
 }
 
 .semantic-diff-intent-card {
-  background: color-mix(in srgb, var(--paper-warm) 40%, var(--surface));
+  background: var(--wash);
   padding: 12px 14px;
   border-radius: 6px;
-  border: 1px solid var(--rule);
+  border: 1px solid var(--rule-soft);
 }
 
 .semantic-diff-intent-card h4 {
@@ -4632,7 +4666,7 @@ textarea:hover, input:hover { border-color: var(--muted); }
   padding: 4px 8px;
   border-radius: 12px;
   border: 1px solid var(--rule);
-  background: var(--surface-card, #ffffff);
+  background: var(--chalk);
   color: var(--muted);
   cursor: pointer;
   transition: all 120ms ease;

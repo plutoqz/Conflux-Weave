@@ -145,12 +145,14 @@ class GitInspector:
     """Safe read-only inspector for project Git state."""
 
     @staticmethod
-    def is_git_repository(root_path: Path) -> bool:
+    def is_git_repository(root_path: Path | str) -> bool:
+        root_path = Path(root_path)
         git_dir = root_path / ".git"
         return git_dir.exists()
 
     @classmethod
-    def get_status(cls, root_path: Path) -> GitStatusSnapshot:
+    def get_status(cls, root_path: Path | str) -> GitStatusSnapshot:
+        root_path = Path(root_path)
         if not cls.is_git_repository(root_path):
             return GitStatusSnapshot(
                 is_git=False,
@@ -175,6 +177,8 @@ class GitInspector:
                 cwd=root_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=5,
                 check=False,
             )
@@ -183,10 +187,12 @@ class GitInspector:
 
             # 2. Latest Commit & Message
             res_head = subprocess.run(
-                ["git", "log", "-1", "--pretty=format:%H%x09%s"],
+                ["git", "-c", "core.quotepath=false", "log", "-1", "--pretty=format:%H%x09%s"],
                 cwd=root_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=5,
                 check=False,
             )
@@ -197,10 +203,12 @@ class GitInspector:
 
             # 3. Status porcelain
             res_status = subprocess.run(
-                ["git", "status", "--porcelain=v1"],
+                ["git", "-c", "core.quotepath=false", "status", "--porcelain=v1"],
                 cwd=root_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=5,
                 check=False,
             )
@@ -210,7 +218,7 @@ class GitInspector:
                         continue
                     index_status = line[0]
                     work_status = line[1]
-                    file_name = line[3:].strip()
+                    file_name = line[3:].strip().strip('"')
                     if index_status in {"M", "A", "D", "R"}:
                         staged_files.append(file_name)
                     if work_status == "M":
@@ -220,10 +228,12 @@ class GitInspector:
 
             # 4. Recent commits
             res_log = subprocess.run(
-                ["git", "log", "-n", "5", "--pretty=format:%H%x09%an%x09%cI%x09%s"],
+                ["git", "-c", "core.quotepath=false", "log", "-n", "5", "--pretty=format:%H%x09%an%x09%cI%x09%s"],
                 cwd=root_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=5,
                 check=False,
             )
@@ -257,10 +267,11 @@ class GitInspector:
         )
 
     @classmethod
-    def get_diff(cls, root_path: Path, file_path: str | None = None) -> str:
+    def get_diff(cls, root_path: Path | str, file_path: str | None = None) -> str:
+        root_path = Path(root_path)
         if not cls.is_git_repository(root_path):
             return ""
-        cmd = ["git", "diff", "HEAD"]
+        cmd = ["git", "-c", "core.quotepath=false", "diff", "HEAD"]
         if file_path:
             cmd.extend(["--", file_path])
         try:
@@ -269,6 +280,8 @@ class GitInspector:
                 cwd=root_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
                 check=False,
             )
@@ -276,10 +289,12 @@ class GitInspector:
                 return res.stdout
             # If HEAD diff fails (e.g. initial commit), try git diff
             res2 = subprocess.run(
-                ["git", "diff"] + (["--", file_path] if file_path else []),
+                ["git", "-c", "core.quotepath=false", "diff"] + (["--", file_path] if file_path else []),
                 cwd=root_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
                 check=False,
             )
@@ -288,7 +303,8 @@ class GitInspector:
             return ""
 
     @classmethod
-    def get_semantic_diff(cls, root_path: Path, compare_branch: str = "main") -> SemanticBranchDiff:
+    def get_semantic_diff(cls, root_path: Path | str, compare_branch: str = "main") -> SemanticBranchDiff:
+        root_path = Path(root_path)
         if not cls.is_git_repository(root_path):
             return SemanticBranchDiff(
                 current_branch="",
@@ -316,6 +332,8 @@ class GitInspector:
                 cwd=root_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=5,
                 check=False,
             )
@@ -323,20 +341,24 @@ class GitInspector:
                 commit_msgs = [line.strip() for line in res_log.stdout.splitlines() if line.strip()]
 
             res_num = subprocess.run(
-                ["git", "diff", "--numstat", diff_spec],
+                ["git", "-c", "core.quotepath=false", "diff", "--numstat", diff_spec],
                 cwd=root_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
                 check=False,
             )
             num_output = res_num.stdout if res_num.returncode == 0 else ""
             if not num_output.strip():
                 res_head = subprocess.run(
-                    ["git", "diff", "--numstat", "HEAD~1"],
+                    ["git", "-c", "core.quotepath=false", "diff", "--numstat", "HEAD~1"],
                     cwd=root_path,
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=5,
                     check=False,
                 )
@@ -348,7 +370,7 @@ class GitInspector:
                 if len(parts) >= 3:
                     adds = int(parts[0]) if parts[0].isdigit() else 0
                     dels = int(parts[1]) if parts[1].isdigit() else 0
-                    fname = parts[2].strip()
+                    fname = parts[2].strip().strip('"')
                     total_add += adds
                     total_del += dels
                     file_diffs.append({

@@ -117,6 +117,9 @@ function switchCenterTab(tabKey) {
     item.panel.classList.toggle("active", isActive);
     item.panel.hidden = !isActive;
   }
+
+  const stage = document.querySelector(".projects-stage");
+  if (stage) stage.scrollTop = 0;
 }
 
 function setupCenterTabs() {
@@ -460,9 +463,13 @@ async function handleSemanticDiff() {
   const statEl = $("diff-lines-stat");
   const listEl = $("diff-files-list");
 
-  if (!dialog) return;
-
   if (intentEl) intentEl.textContent = "正在计算分支间语义差异与实验意图...";
+  if (impactEl) {
+    impactEl.textContent = "计算中";
+    impactEl.className = "impact-level-pill";
+  }
+  if (countEl) countEl.textContent = "0";
+  if (statEl) statEl.textContent = "--";
   if (listEl) listEl.innerHTML = "";
   dialog.showModal();
 
@@ -547,7 +554,7 @@ function createTreeNodeElement(node) {
   row.className = "tree-node-row";
 
   if (node.is_dir) {
-    row.innerHTML = `<span class="tree-icon">📁</span> <span class="tree-label">${escapeHTML(node.name)}</span>`;
+    row.innerHTML = `<span class="tree-icon">📁</span> <span class="tree-label" title="${escapeHTML(node.name)}">${escapeHTML(node.name)}</span>`;
     const childUl = document.createElement("ul");
     childUl.className = "tree-node-children";
     if (node.children && node.children.length > 0) {
@@ -561,7 +568,7 @@ function createTreeNodeElement(node) {
     li.appendChild(row);
     li.appendChild(childUl);
   } else {
-    row.innerHTML = `<span class="tree-icon">📄</span> <span class="tree-label">${escapeHTML(node.name)}</span>`;
+    row.innerHTML = `<span class="tree-icon">📄</span> <span class="tree-label" title="${escapeHTML(node.name)}">${escapeHTML(node.name)}</span>`;
     row.addEventListener("click", () => {
       document.querySelectorAll(".tree-node-row.selected").forEach((el) => el.classList.remove("selected"));
       row.classList.add("selected");
