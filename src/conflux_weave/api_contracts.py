@@ -612,6 +612,69 @@ class MCPToolCallApiResponse(_ApiModel):
     raw_text: str = ""
 
 
+class DAGTaskNodeApiRequest(_ApiModel):
+    node_id: str
+    agent_type: str = "research"
+    objective: str
+    depends_on: tuple[str, ...] = ()
+    skill_id: str | None = None
+    input_payload: dict[str, Any] = Field(default_factory=dict)
+    budget: dict[str, Any] = Field(default_factory=dict)
+
+
+class DAGTaskNodeApiResponse(DAGTaskNodeApiRequest):
+    status: Literal["pending", "ready", "running", "completed", "failed", "skipped", "cancelled"] = "pending"
+    result: dict[str, Any] | None = None
+    error: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+
+
+class DAGPlanApiRequest(_ApiModel):
+    plan_id: str
+    run_id: str
+    objective: str
+    nodes: tuple[DAGTaskNodeApiRequest, ...] = ()
+    max_concurrency: int = Field(default=3, ge=1, le=10)
+
+
+class DAGPlanValidationResponse(_ApiModel):
+    valid: bool
+    plan_id: str
+    node_count: int
+    topological_order: tuple[str, ...] = ()
+    error: str | None = None
+
+
+class DAGExecutionResultApiResponse(_ApiModel):
+    plan_id: str
+    run_id: str
+    status: Literal["completed", "failed", "cancelled", "partial"]
+    completed_nodes: tuple[str, ...] = ()
+    failed_nodes: tuple[str, ...] = ()
+    cancelled_nodes: tuple[str, ...] = ()
+    skipped_nodes: tuple[str, ...] = ()
+    node_results: dict[str, Any] = Field(default_factory=dict)
+    events_count: int = 0
+    duration_seconds: float = 0.0
+    error: str | None = None
+
+
+class AgentEventApiResponse(_ApiModel):
+    event_id: str
+    run_id: str
+    agent_id: str
+    event_type: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    causation_event_id: str | None = None
+    created_at: str = ""
+
+
+class AgentEventListResponse(_ApiModel):
+    items: tuple[AgentEventApiResponse, ...] = ()
+    total: int = 0
+
+
 class RunPageResponse(_ApiModel):
     items: tuple[RunSummaryResponse, ...]
     next_cursor: str | None
@@ -1373,6 +1436,13 @@ __all__ = [
     "CreateMCPServerRequest",
     "MCPToolCallApiRequest",
     "MCPToolCallApiResponse",
+    "DAGTaskNodeApiRequest",
+    "DAGTaskNodeApiResponse",
+    "DAGPlanApiRequest",
+    "DAGPlanValidationResponse",
+    "DAGExecutionResultApiResponse",
+    "AgentEventApiResponse",
+    "AgentEventListResponse",
     "decode_run_cursor",
     "encode_run_cursor",
     "map_exception",

@@ -85,6 +85,13 @@ from conflux_weave.api_contracts import (
     CreateMCPServerRequest,
     MCPToolCallApiRequest,
     MCPToolCallApiResponse,
+    DAGTaskNodeApiRequest,
+    DAGTaskNodeApiResponse,
+    DAGPlanApiRequest,
+    DAGPlanValidationResponse,
+    DAGExecutionResultApiResponse,
+    AgentEventApiResponse,
+    AgentEventListResponse,
     FixtureResearchTaskRequest,
     FollowUpResearchTaskRequest,
     ProviderConfigResponse,
@@ -118,6 +125,17 @@ from conflux_weave.mcp import (
     MCPSSEManager,
     MCPToolInfo,
     MCPTransportType,
+)
+from conflux_weave.orchestrator import (
+    AgentEvent,
+    AsyncAgentEventBus,
+    DAGCycleError,
+    DAGDependencyError,
+    DAGExecutionResult,
+    DAGPlan,
+    DAGTaskNode,
+    DAGTaskScheduler,
+    DAGTaskStatus,
 )
 from conflux_weave.projects import GitInspector, Project, ProjectScanner, ProjectStore
 from conflux_weave.project_agents import CodeProposal, CodingAgent, ProjectAgent, ProjectAnswer
@@ -334,6 +352,8 @@ def create_app(
         project_root=project_root,
     )
     mcp_sse_manager = MCPSSEManager(mcp_server_core)
+    event_bus = AsyncAgentEventBus(db_path if db_path and db_path != ":memory:" else None)
+    dag_scheduler = DAGTaskScheduler(event_bus=event_bus)
     if chat_service is not None and not getattr(chat_service, "_memory_agent", None):
         chat_service._memory_agent = memory_agent
     app.state.repository = repository
@@ -347,6 +367,8 @@ def create_app(
     app.state.mcp_manager = mcp_manager
     app.state.mcp_server_core = mcp_server_core
     app.state.mcp_sse_manager = mcp_sse_manager
+    app.state.event_bus = event_bus
+    app.state.dag_scheduler = dag_scheduler
 
     def third_party_setting(name: str) -> str:
         value = os.environ.get(name)
@@ -1133,6 +1155,106 @@ def create_app(
         if res is None:
             return Response(status_code=204)
         return JSONResponse(content=res)
+
+    @app.post("/api/v1/dag/plans/validate", response_model=DAGPlanValidationResponse)
+    async def validate_dag_plan_endpoint(request: DAGPlanApiRequest):
+        try:
+            plan = DAGPlan(
+                plan_id=request.plan_id,
+                run_id=request.run_id,
+                objective=request.objective,
+                nodes=tuple(
+                    DAGTaskNode(
+                        node_id=n.node_id,
+                        agent_type=n.agent_type,
+                        objective=n.objective,
+                        depends_on=n.depends_on,
+                        skill_id=n.skill_id,
+                        input_payload=n.input_payload,
+                        budget=n.budget,
+                    )
+                    for n in request.nodes
+                ),
+            )
+            order = dag_scheduler.validate_plan(plan)
+            return DAGPlanValidationResponse(
+                valid=True,
+                plan_id=plan.plan_id,
+                node_count=len(plan.nodes),
+                topological_order=tuple(order),
+            )
+        except (DAGCycleError, DAGDependencyError) as exc:
+            return DAGPlanValidationResponse(
+                valid=False,
+                plan_id=request.plan_id,
+                node_count=len(request.nodes),
+                topological_order=(),
+                error=str(exc),
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/dag/plans/execute", response_model=DAGExecutionResultApiResponse)
+    async def execute_dag_plan_endpoint(request: DAGPlanApiRequest):
+        try:
+            plan = DAGPlan(
+                plan_id=request.plan_id,
+                run_id=request.run_id,
+                objective=request.objective,
+                nodes=tuple(
+                    DAGTaskNode(
+                        node_id=n.node_id,
+                        agent_type=n.agent_type,
+                        objective=n.objective,
+                        depends_on=n.depends_on,
+                        skill_id=n.skill_id,
+                        input_payload=n.input_payload,
+                        budget=n.budget,
+                    )
+                    for n in request.nodes
+                ),
+            )
+            res = await dag_scheduler.execute_plan(plan, max_concurrency=request.max_concurrency)
+            return DAGExecutionResultApiResponse(
+                plan_id=res.plan_id,
+                run_id=res.run_id,
+                status=res.status,
+                completed_nodes=res.completed_nodes,
+                failed_nodes=res.failed_nodes,
+                cancelled_nodes=res.cancelled_nodes,
+                skipped_nodes=res.skipped_nodes,
+                node_results=res.node_results,
+                events_count=res.events_count,
+                duration_seconds=res.duration_seconds,
+                error=res.error,
+            )
+        except (DAGCycleError, DAGDependencyError) as exc:
+            return JSONResponse(
+                status_code=400,
+                content={"code": "invalid_dag_plan", "message": str(exc), "plan_id": request.plan_id},
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.get("/api/v1/runs/{run_id}/agent-events", response_model=AgentEventListResponse)
+    async def list_agent_events_endpoint(run_id: str, event_type: str | None = None):
+        try:
+            events = event_bus.list_events(run_id=run_id, event_type=event_type)
+            items = tuple(
+                AgentEventApiResponse(
+                    event_id=e.event_id,
+                    run_id=e.run_id,
+                    agent_id=e.agent_id,
+                    event_type=e.event_type,
+                    payload=e.payload,
+                    causation_event_id=e.causation_event_id,
+                    created_at=e.created_at,
+                )
+                for e in events
+            )
+            return AgentEventListResponse(items=items, total=len(items))
+        except Exception as exc:
+            return error_response(exc)
 
     @app.get("/api/v1/runs", response_model=RunPageResponse)
     async def list_runs(cursor: str | None = None, limit: int = Query(default=20, ge=1, le=100)):
