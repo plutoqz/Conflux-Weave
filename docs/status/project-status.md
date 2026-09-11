@@ -552,12 +552,13 @@ P2.0 ~ P2.3 多模态 RAG 核心技术闭环已全链路打通并完成基准评
 | --- | --- | --- |
 | P5.0 细化方案与架构契约 | `implemented_and_frozen` | 冻结 Skill 架构、双向 MCP 网关、DAG 并发编排与 SQLite Migration v8 规约； |
 | P5.1 声明式 Skill 执行引擎 | `implemented_and_validated_offline` | SQLite Migration v8（`skills`, `mcp_servers`, `agent_events`）、`SkillRegistry`、`SkillRunner`，预置文献对比综述、代码架构审计、LaTeX 论文润色三大权威 Skill，`/api/v1/skills` REST API 与单测全量通过； |
-| P5.2 MCP Client 外部工具网关 | `pending_implementation` | 计划实现 stdio/sse MCP Client 与 Harness ToolSpec 桥接映射； |
-| P5.3 MCP Server 学术能力暴露 | `pending_implementation` | 计划开放 `/api/v1/mcp/sse`，暴露论文检索与项目认知核心能力； |
+| P5.2 MCP Client 外部工具网关 | `implemented_and_validated_offline` | 实现基于 JSON-RPC 2.0 的 stdio 子进程传输客户端（`MCPClient`）、Harness `ToolSpec` 桥接适配器（`mcp_tool_to_harness_spec`）、`MCPServerManager` 持久化与动态工具发现，以及 `/api/v1/mcp/servers` 完整 REST 端点； |
+| P5.3 MCP Server 学术能力暴露 | `pending_implementation` | 计划开放 `/api/v1/mcp/sse` 与 stdio Server，暴露论文检索与项目认知核心能力； |
 | P5.4 多 Agent 异步事件与并发调度 | `pending_implementation` | 计划实现 DAG 拓扑解析、异步事件总线与优雅终止机制； |
 | P5.5 双端工作台协同演播室 | `pending_implementation` | 计划落地技能工坊面板、MCP 配置中心与甘特泳道图。 |
 
-截至本节更新，项目完整离线回归测试为 `582 passed, 2 warnings in 128.38s`。下一唯一验收点为 P5.2 MCP Client 外部工具接入网关。
+截至本节更新，项目完整离线回归测试为 `586 passed, 2 warnings in 194.58s`。下一唯一验收点为 P5.3 MCP Server 学术能力对外暴露网关。
+
 
 
 

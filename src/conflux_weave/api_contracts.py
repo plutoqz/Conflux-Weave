@@ -563,6 +563,55 @@ class SkillExecuteApiResponse(_ApiModel):
     error: str | None = None
 
 
+class MCPToolInfoResponse(_ApiModel):
+    name: str
+    description: str
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+
+
+class MCPServerResponse(_ApiModel):
+    server_id: str
+    name: str
+    transport_type: Literal["stdio", "sse"]
+    command: str | None = None
+    args: tuple[str, ...] = ()
+    url: str | None = None
+    enabled: bool = True
+    timeout_seconds: float = 30.0
+    tools_cache: tuple[MCPToolInfoResponse, ...] = ()
+    last_connected_at: str | None = None
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class MCPServerListResponse(_ApiModel):
+    items: tuple[MCPServerResponse, ...] = ()
+    total: int = 0
+
+
+class CreateMCPServerRequest(_ApiModel):
+    server_id: str = Field(min_length=1, max_length=100)
+    name: str = Field(min_length=1, max_length=200)
+    transport_type: Literal["stdio", "sse"] = "stdio"
+    command: str | None = None
+    args: tuple[str, ...] = ()
+    url: str | None = None
+    env_vars: dict[str, str] = Field(default_factory=dict)
+    enabled: bool = True
+    timeout_seconds: float = Field(default=30.0, ge=1.0, le=300.0)
+
+
+class MCPToolCallApiRequest(_ApiModel):
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class MCPToolCallApiResponse(_ApiModel):
+    tool_name: str
+    is_error: bool
+    content: tuple[dict[str, Any], ...] = ()
+    raw_text: str = ""
+
+
 class RunPageResponse(_ApiModel):
     items: tuple[RunSummaryResponse, ...]
     next_cursor: str | None
@@ -1312,6 +1361,18 @@ __all__ = [
     "MemoryCandidateActionRequest",
     "RouterRequest",
     "RouterResultResponse",
+    "SkillBudgetResponse",
+    "SkillSummaryResponse",
+    "SkillDetailResponse",
+    "SkillListResponse",
+    "SkillExecuteApiRequest",
+    "SkillExecuteApiResponse",
+    "MCPToolInfoResponse",
+    "MCPServerResponse",
+    "MCPServerListResponse",
+    "CreateMCPServerRequest",
+    "MCPToolCallApiRequest",
+    "MCPToolCallApiResponse",
     "decode_run_cursor",
     "encode_run_cursor",
     "map_exception",

@@ -79,6 +79,12 @@ from conflux_weave.api_contracts import (
     SkillListResponse,
     SkillExecuteApiRequest,
     SkillExecuteApiResponse,
+    MCPToolInfoResponse,
+    MCPServerResponse,
+    MCPServerListResponse,
+    CreateMCPServerRequest,
+    MCPToolCallApiRequest,
+    MCPToolCallApiResponse,
     FixtureResearchTaskRequest,
     FollowUpResearchTaskRequest,
     ProviderConfigResponse,
@@ -105,6 +111,7 @@ from conflux_weave.runtime.memory_store import (
 )
 from conflux_weave.memory_agent import MemoryAgent
 from conflux_weave.skills import SkillRegistry, SkillRunner, SkillExecutionRequest
+from conflux_weave.mcp import MCPServerManager, MCPServerConfig, MCPTransportType, MCPToolInfo
 from conflux_weave.projects import GitInspector, Project, ProjectScanner, ProjectStore
 from conflux_weave.project_agents import CodeProposal, CodingAgent, ProjectAgent, ProjectAnswer
 from conflux_weave.document_agent import DocumentAgent
@@ -312,6 +319,7 @@ def create_app(
     conversation_router = ConversationRouter(chat_adapter=chat_adapter)
     skill_registry = SkillRegistry(db_path if db_path and db_path != ":memory:" else None)
     skill_runner = SkillRunner(skill_registry, provider=chat_adapter)
+    mcp_manager = MCPServerManager(db_path if db_path and db_path != ":memory:" else None)
     if chat_service is not None and not getattr(chat_service, "_memory_agent", None):
         chat_service._memory_agent = memory_agent
     app.state.repository = repository
@@ -322,6 +330,7 @@ def create_app(
     app.state.conversation_router = conversation_router
     app.state.skill_registry = skill_registry
     app.state.skill_runner = skill_runner
+    app.state.mcp_manager = mcp_manager
 
     def third_party_setting(name: str) -> str:
         value = os.environ.get(name)
@@ -941,6 +950,112 @@ def create_app(
                 elapsed_seconds=result.elapsed_seconds,
                 tokens_consumed=result.tokens_consumed,
                 error=result.error,
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    def _server_config_to_response(s: MCPServerConfig) -> MCPServerResponse:
+        return MCPServerResponse(
+            server_id=s.server_id,
+            name=s.name,
+            transport_type=s.transport_type.value,
+            command=s.command,
+            args=s.args,
+            url=s.url,
+            enabled=s.enabled,
+            timeout_seconds=s.timeout_seconds,
+            tools_cache=tuple(
+                MCPToolInfoResponse(
+                    name=t.name,
+                    description=t.description,
+                    input_schema=t.input_schema,
+                )
+                for t in s.tools_cache
+            ),
+            last_connected_at=s.last_connected_at,
+            created_at=s.created_at,
+            updated_at=s.updated_at,
+        )
+
+    @app.get("/api/v1/mcp/servers", response_model=MCPServerListResponse)
+    async def list_mcp_servers_endpoint(enabled_only: bool = False):
+        try:
+            servers = mcp_manager.list_servers(enabled_only=enabled_only)
+            items = tuple(_server_config_to_response(s) for s in servers)
+            return MCPServerListResponse(items=items, total=len(items))
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/mcp/servers", response_model=MCPServerResponse)
+    async def register_mcp_server_endpoint(request: CreateMCPServerRequest):
+        try:
+            config = MCPServerConfig(
+                server_id=request.server_id,
+                name=request.name,
+                transport_type=MCPTransportType(request.transport_type),
+                command=request.command,
+                args=request.args,
+                url=request.url,
+                env_vars=request.env_vars,
+                enabled=request.enabled,
+                timeout_seconds=request.timeout_seconds,
+            )
+            saved = mcp_manager.register_server(config)
+            return _server_config_to_response(saved)
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.get("/api/v1/mcp/servers/{server_id}", response_model=MCPServerResponse)
+    async def get_mcp_server_endpoint(server_id: str):
+        server = mcp_manager.get_server(server_id)
+        if server is None:
+            return JSONResponse(
+                status_code=404,
+                content={"code": "mcp_server_not_found", "message": f"未找到指定的 MCP Server: {server_id}"},
+            )
+        return _server_config_to_response(server)
+
+    @app.delete("/api/v1/mcp/servers/{server_id}")
+    async def delete_mcp_server_endpoint(server_id: str):
+        deleted = mcp_manager.delete_server(server_id)
+        if not deleted:
+            return JSONResponse(
+                status_code=404,
+                content={"code": "mcp_server_not_found", "message": f"未找到指定的 MCP Server: {server_id}"},
+            )
+        return {"ok": True, "server_id": server_id}
+
+    @app.post("/api/v1/mcp/servers/{server_id}/sync", response_model=MCPServerResponse)
+    async def sync_mcp_server_endpoint(server_id: str):
+        server = mcp_manager.get_server(server_id)
+        if server is None:
+            return JSONResponse(
+                status_code=404,
+                content={"code": "mcp_server_not_found", "message": f"未找到指定的 MCP Server: {server_id}"},
+            )
+        mcp_manager.sync_server_tools(server_id)
+        updated = mcp_manager.get_server(server_id)
+        return _server_config_to_response(updated or server)
+
+    @app.post("/api/v1/mcp/servers/{server_id}/tools/{tool_name}/call", response_model=MCPToolCallApiResponse)
+    async def call_mcp_tool_endpoint(server_id: str, tool_name: str, request: MCPToolCallApiRequest):
+        try:
+            result = mcp_manager.call_tool(server_id, tool_name, request.arguments)
+            if result.is_error:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "code": "mcp_tool_call_failed",
+                        "message": result.raw_text,
+                        "tool_name": tool_name,
+                        "server_id": server_id,
+                    },
+                )
+            return MCPToolCallApiResponse(
+                tool_name=result.tool_name,
+                is_error=result.is_error,
+                content=result.content,
+                raw_text=result.raw_text,
             )
         except Exception as exc:
             return error_response(exc)
