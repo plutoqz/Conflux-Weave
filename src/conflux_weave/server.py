@@ -17,7 +17,7 @@ import subprocess
 from datetime import UTC, datetime
 
 from dotenv import dotenv_values
-from fastapi import FastAPI, Query, Request
+from fastapi import Body, FastAPI, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
@@ -111,7 +111,14 @@ from conflux_weave.runtime.memory_store import (
 )
 from conflux_weave.memory_agent import MemoryAgent
 from conflux_weave.skills import SkillRegistry, SkillRunner, SkillExecutionRequest
-from conflux_weave.mcp import MCPServerManager, MCPServerConfig, MCPTransportType, MCPToolInfo
+from conflux_weave.mcp import (
+    MCPServerConfig,
+    MCPServerCore,
+    MCPServerManager,
+    MCPSSEManager,
+    MCPToolInfo,
+    MCPTransportType,
+)
 from conflux_weave.projects import GitInspector, Project, ProjectScanner, ProjectStore
 from conflux_weave.project_agents import CodeProposal, CodingAgent, ProjectAgent, ProjectAnswer
 from conflux_weave.document_agent import DocumentAgent
@@ -320,6 +327,13 @@ def create_app(
     skill_registry = SkillRegistry(db_path if db_path and db_path != ":memory:" else None)
     skill_runner = SkillRunner(skill_registry, provider=chat_adapter)
     mcp_manager = MCPServerManager(db_path if db_path and db_path != ":memory:" else None)
+    project_root = Path(db_path).parent if db_path and db_path != ":memory:" else None
+    mcp_server_core = MCPServerCore(
+        repository=repository,
+        memory_store=memory_store,
+        project_root=project_root,
+    )
+    mcp_sse_manager = MCPSSEManager(mcp_server_core)
     if chat_service is not None and not getattr(chat_service, "_memory_agent", None):
         chat_service._memory_agent = memory_agent
     app.state.repository = repository
@@ -331,6 +345,8 @@ def create_app(
     app.state.skill_registry = skill_registry
     app.state.skill_runner = skill_runner
     app.state.mcp_manager = mcp_manager
+    app.state.mcp_server_core = mcp_server_core
+    app.state.mcp_sse_manager = mcp_sse_manager
 
     def third_party_setting(name: str) -> str:
         value = os.environ.get(name)
@@ -1059,6 +1075,64 @@ def create_app(
             )
         except Exception as exc:
             return error_response(exc)
+
+    @app.get("/api/v1/mcp/sse")
+    async def mcp_sse_endpoint(max_events: int = 0):
+        session_id, queue = mcp_sse_manager.create_session()
+
+        async def event_generator():
+            post_url = f"/api/v1/mcp/messages?session_id={session_id}"
+            yield f"event: endpoint\ndata: {post_url}\n\n"
+            events_sent = 1
+            if max_events > 0 and events_sent >= max_events:
+                mcp_sse_manager.remove_session(session_id)
+                return
+
+            try:
+                while True:
+                    try:
+                        msg = await asyncio.wait_for(queue.get(), timeout=15.0)
+                        data_str = json.dumps(msg, ensure_ascii=False)
+                        yield f"event: message\ndata: {data_str}\n\n"
+                        events_sent += 1
+                        if max_events > 0 and events_sent >= max_events:
+                            break
+                    except asyncio.TimeoutError:
+                        yield ": ping\n\n"
+            except asyncio.CancelledError:
+                pass
+            finally:
+                mcp_sse_manager.remove_session(session_id)
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @app.post("/api/v1/mcp/messages")
+    async def mcp_post_message_endpoint(
+        session_id: str = Query(...),
+        request_data: dict[str, Any] = Body(...),
+    ):
+        if session_id not in mcp_sse_manager._sessions:
+            return JSONResponse(
+                status_code=404,
+                content={"code": "session_not_found", "message": f"未找到活动的 SSE 会话: {session_id}"},
+            )
+        res = await mcp_sse_manager.handle_post_message(session_id, request_data)
+        return JSONResponse(status_code=202, content={"status": "accepted", "response": res})
+
+    @app.post("/api/v1/mcp/rpc")
+    async def mcp_rpc_endpoint(request_data: dict[str, Any] = Body(...)):
+        res = mcp_server_core.handle_jsonrpc(request_data)
+        if res is None:
+            return Response(status_code=204)
+        return JSONResponse(content=res)
 
     @app.get("/api/v1/runs", response_model=RunPageResponse)
     async def list_runs(cursor: str | None = None, limit: int = Query(default=20, ge=1, le=100)):
