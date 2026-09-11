@@ -73,6 +73,12 @@ from conflux_weave.api_contracts import (
     MemoryCandidateListResponse,
     CreateMemoryRequest,
     MemoryCandidateActionRequest,
+    SkillBudgetResponse,
+    SkillSummaryResponse,
+    SkillDetailResponse,
+    SkillListResponse,
+    SkillExecuteApiRequest,
+    SkillExecuteApiResponse,
     FixtureResearchTaskRequest,
     FollowUpResearchTaskRequest,
     ProviderConfigResponse,
@@ -98,6 +104,7 @@ from conflux_weave.runtime.memory_store import (
     CandidateStatus,
 )
 from conflux_weave.memory_agent import MemoryAgent
+from conflux_weave.skills import SkillRegistry, SkillRunner, SkillExecutionRequest
 from conflux_weave.projects import GitInspector, Project, ProjectScanner, ProjectStore
 from conflux_weave.project_agents import CodeProposal, CodingAgent, ProjectAgent, ProjectAnswer
 from conflux_weave.document_agent import DocumentAgent
@@ -303,6 +310,8 @@ def create_app(
     chat_adapter = getattr(chat_service, "_chat", None) if chat_service else None
     memory_agent = MemoryAgent(memory_store, chat_adapter=chat_adapter)
     conversation_router = ConversationRouter(chat_adapter=chat_adapter)
+    skill_registry = SkillRegistry(db_path if db_path and db_path != ":memory:" else None)
+    skill_runner = SkillRunner(skill_registry, provider=chat_adapter)
     if chat_service is not None and not getattr(chat_service, "_memory_agent", None):
         chat_service._memory_agent = memory_agent
     app.state.repository = repository
@@ -311,6 +320,8 @@ def create_app(
     app.state.memory_store = memory_store
     app.state.memory_agent = memory_agent
     app.state.conversation_router = conversation_router
+    app.state.skill_registry = skill_registry
+    app.state.skill_runner = skill_runner
 
     def third_party_setting(name: str) -> str:
         value = os.environ.get(name)
@@ -845,6 +856,92 @@ def create_app(
                 return JSONResponse(status_code=400, content={"code": "invalid_action", "message": f"不支持的操作: {request.action}"})
         except KeyError:
             return JSONResponse(status_code=404, content={"code": "candidate_not_found", "message": "未找到指定记忆候选。"})
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.get("/api/v1/skills", response_model=SkillListResponse)
+    async def list_skills_endpoint(category: str | None = None, status: str = "active"):
+        try:
+            skills = skill_registry.list_skills(category=category, status=status)
+            items = tuple(
+                SkillSummaryResponse(
+                    skill_id=s.skill_id,
+                    version=s.version,
+                    name=s.name,
+                    description=s.description,
+                    category=s.category.value,
+                    author=s.author,
+                    required_tools=s.required_tools,
+                    default_budget=SkillBudgetResponse(
+                        max_tokens=s.default_budget.max_tokens,
+                        max_steps=s.default_budget.max_steps,
+                        estimated_time_seconds=s.default_budget.estimated_time_seconds,
+                    ),
+                    is_builtin=s.is_builtin,
+                    status=s.status.value,
+                )
+                for s in skills
+            )
+            return SkillListResponse(items=items, total=len(items))
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.get("/api/v1/skills/{skill_id}", response_model=SkillDetailResponse)
+    async def get_skill_endpoint(skill_id: str):
+        skill = skill_registry.get_skill(skill_id)
+        if skill is None:
+            return JSONResponse(status_code=404, content={"code": "skill_not_found", "message": f"未找到指定的 Skill: {skill_id}"})
+        return SkillDetailResponse(
+            skill_id=skill.skill_id,
+            version=skill.version,
+            name=skill.name,
+            description=skill.description,
+            category=skill.category.value,
+            author=skill.author,
+            required_tools=skill.required_tools,
+            default_budget=SkillBudgetResponse(
+                max_tokens=skill.default_budget.max_tokens,
+                max_steps=skill.default_budget.max_steps,
+                estimated_time_seconds=skill.default_budget.estimated_time_seconds,
+            ),
+            is_builtin=skill.is_builtin,
+            status=skill.status.value,
+            input_schema=skill.input_schema,
+            prompt_template=skill.prompt_template,
+            rules=skill.rules,
+            created_at=skill.created_at,
+            updated_at=skill.updated_at,
+        )
+
+    @app.post("/api/v1/skills/{skill_id}/execute", response_model=SkillExecuteApiResponse)
+    async def execute_skill_endpoint(skill_id: str, request: SkillExecuteApiRequest):
+        try:
+            req = SkillExecutionRequest(
+                skill_id=skill_id,
+                inputs=request.inputs,
+                conversation_id=request.conversation_id,
+                project_id=request.project_id,
+            )
+            result = skill_runner.execute_skill(req)
+            if result.status == "failed":
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "code": "skill_execution_failed",
+                        "message": result.error or result.summary,
+                        "skill_id": skill_id,
+                    },
+                )
+            return SkillExecuteApiResponse(
+                skill_id=result.skill_id,
+                status=result.status,
+                summary=result.summary,
+                content=result.content,
+                structured_data=result.structured_data,
+                elapsed_seconds=result.elapsed_seconds,
+                tokens_consumed=result.tokens_consumed,
+                error=result.error,
+            )
         except Exception as exc:
             return error_response(exc)
 

@@ -514,6 +514,55 @@ class MemoryCandidateActionRequest(_ApiModel):
     action: Literal["approve", "reject"]
 
 
+class SkillBudgetResponse(_ApiModel):
+    max_tokens: int = 8000
+    max_steps: int = 12
+    estimated_time_seconds: float = 60.0
+
+
+class SkillSummaryResponse(_ApiModel):
+    skill_id: str
+    version: str
+    name: str
+    description: str
+    category: Literal["research", "governance", "writing", "utility"]
+    author: str
+    required_tools: tuple[str, ...] = ()
+    default_budget: SkillBudgetResponse
+    is_builtin: bool = True
+    status: Literal["active", "disabled"] = "active"
+
+
+class SkillDetailResponse(SkillSummaryResponse):
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+    prompt_template: str
+    rules: tuple[str, ...] = ()
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class SkillListResponse(_ApiModel):
+    items: tuple[SkillSummaryResponse, ...] = ()
+    total: int = 0
+
+
+class SkillExecuteApiRequest(_ApiModel):
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    conversation_id: str | None = None
+    project_id: str | None = None
+
+
+class SkillExecuteApiResponse(_ApiModel):
+    skill_id: str
+    status: Literal["completed", "failed", "needs_input"]
+    summary: str
+    content: str
+    structured_data: dict[str, Any] = Field(default_factory=dict)
+    elapsed_seconds: float = 0.0
+    tokens_consumed: int = 0
+    error: str | None = None
+
+
 class RunPageResponse(_ApiModel):
     items: tuple[RunSummaryResponse, ...]
     next_cursor: str | None

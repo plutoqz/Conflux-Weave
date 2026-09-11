@@ -158,6 +158,9 @@ def test_existing_version_five_database_upgrades_without_checksum_changes(tmp_pa
     repo, store = repository(tmp_path)
     original = repo.migration_records()[:5]
     with sqlite3.connect(repo.database_path) as connection:
+        connection.execute("DROP TABLE agent_events")
+        connection.execute("DROP TABLE mcp_servers")
+        connection.execute("DROP TABLE skills")
         connection.execute("DROP TABLE memory_candidates")
         connection.execute("DROP TABLE memories")
         connection.execute("DROP TABLE agent_messages")
@@ -168,4 +171,5 @@ def test_existing_version_five_database_upgrades_without_checksum_changes(tmp_pa
 
     assert upgraded.migration_records()[:5] == original
     assert upgraded.migration_records()[5].name == "v03_agent_messages"
-    assert upgraded.migration_records()[-1].name == "v03_hierarchical_memories"
+    assert upgraded.migration_records()[6].name == "v03_hierarchical_memories"
+    assert upgraded.migration_records()[-1].name == "v03_skills_and_mcp_gateway"

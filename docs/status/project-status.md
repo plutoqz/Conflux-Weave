@@ -10,7 +10,8 @@ Updated: 2026-08-26
 | Existing live capability | `bounded_retrieval_evidence` | Historical qwen3.7flash arXiv/GitHub runs; not full RAG or multi-Agent proof |
 | v0.3 S0/P0 plan | `implemented_and_validated_offline` | S0.0-S0.5 are committed; current work continues on `codex/v0.3-s0-harness` and is pushed to `origin/main` at phase checkpoints |
 | v0.3 S1 | `implemented_partial_live_acceptance_failed` | S1.0-S1.5-B mechanisms exist; the frozen S1.5-C first live matrix was executed but rejected after manual support, coverage and abstention review |
-| v0.3 P4 统一对话路由与分层记忆中心 | `implemented_and_validated_offline` | P4.0-P4.4 全面落地并通过离线全量回归（571 passed）：SQLite Migration v7、HierarchicalMemoryStore、两阶段 ConversationRouter、MemoryAgent、Omnibox 智能补全与 HITL 记忆候选气泡、Settings Memory Studio |
+| v0.3 P4 统一对话路由与分层记忆中心 | `implemented_and_validated_offline` | P4.0-P4.4 全面落地并通过离线全量回归（577 passed）：SQLite Migration v7、HierarchicalMemoryStore、两阶段 ConversationRouter、MemoryAgent、Omnibox 智能补全与 HITL 记忆候选气泡、Settings Memory Studio |
+| v0.3 P5 Skill 与 MCP 增强及多 Agent 协同 | `in_progress` | P5.0-P5.1 已落地并通过离线全量回归（582 passed）：SQLite Migration v8、SkillRegistry、SkillRunner、3 大内置权威学术工作流、`/api/v1/skills` REST API |
 
 The v0.2 W0-W5 plans are no longer active gates. Their implementation and
 validation evidence remains available at `docs/plans/deprecated/v0.2/`; the
@@ -541,7 +542,22 @@ P2.0 ~ P2.3 多模态 RAG 核心技术闭环已全链路打通并完成基准评
 | P4.3 Agent 记忆注入闭环 | `implemented_and_validated_offline` | 实现角色感知注入、L0/L1 紧凑预算硬上限（≤400 token）、偏好一致性对齐与真实多轮对话端到端验证； |
 | P4.4 Workbench 前端演播室与现代 React UI | `implemented_and_validated_browser_and_regression` | 全能 Omnibox 输入窗、路由意图状态徽标、记忆候选气泡、Settings 记忆中心，以及打包零外部 CDN 的现代化 React 前端（`web/` -> `dist/`）。 |
 
-截至本节更新，项目完整离线回归测试为 `577 passed, 3 warnings`。P4.0-P4.4 全链路闭环，下一唯一验收点为 P5 Skill 与 MCP 增强方案编制。
+截至本节更新，项目完整离线回归测试为 `577 passed, 3 warnings`。P4.0-P4.4 全链路闭环。
+
+## P5 Skill 与 MCP 增强及多 Agent 协同（2026-09-11）
+
+按照《Conflux-Weave 设计文档 v0.3》第 13 节交付路线及细化实施方案（`docs/plans/current/v0.3-P5-Skill与MCP增强及多Agent协同-细化实施方案.md`），已落地声明式 Skill 架构、首批权威学术工作流与 SQLite Migration v8：
+
+| 模块 | 当前状态 | 证据边界 |
+| --- | --- | --- |
+| P5.0 细化方案与架构契约 | `implemented_and_frozen` | 冻结 Skill 架构、双向 MCP 网关、DAG 并发编排与 SQLite Migration v8 规约； |
+| P5.1 声明式 Skill 执行引擎 | `implemented_and_validated_offline` | SQLite Migration v8（`skills`, `mcp_servers`, `agent_events`）、`SkillRegistry`、`SkillRunner`，预置文献对比综述、代码架构审计、LaTeX 论文润色三大权威 Skill，`/api/v1/skills` REST API 与单测全量通过； |
+| P5.2 MCP Client 外部工具网关 | `pending_implementation` | 计划实现 stdio/sse MCP Client 与 Harness ToolSpec 桥接映射； |
+| P5.3 MCP Server 学术能力暴露 | `pending_implementation` | 计划开放 `/api/v1/mcp/sse`，暴露论文检索与项目认知核心能力； |
+| P5.4 多 Agent 异步事件与并发调度 | `pending_implementation` | 计划实现 DAG 拓扑解析、异步事件总线与优雅终止机制； |
+| P5.5 双端工作台协同演播室 | `pending_implementation` | 计划落地技能工坊面板、MCP 配置中心与甘特泳道图。 |
+
+截至本节更新，项目完整离线回归测试为 `582 passed, 2 warnings in 128.38s`。下一唯一验收点为 P5.2 MCP Client 外部工具接入网关。
 
 
 

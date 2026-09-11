@@ -417,4 +417,69 @@ _MIGRATIONS = (
             """,
         ),
     ),
+    _Migration(
+        version=8,
+        name="v03_skills_and_mcp_gateway",
+        statements=(
+            """
+            CREATE TABLE skills (
+                skill_id TEXT PRIMARY KEY,
+                version TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL,
+                category TEXT NOT NULL,
+                author TEXT NOT NULL,
+                input_schema TEXT NOT NULL,
+                required_tools TEXT NOT NULL,
+                prompt_template TEXT NOT NULL,
+                rules TEXT NOT NULL,
+                default_budget TEXT NOT NULL,
+                is_builtin INTEGER NOT NULL DEFAULT 1,
+                status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE INDEX idx_skills_lookup
+            ON skills(category, status)
+            """,
+            """
+            CREATE TABLE mcp_servers (
+                server_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                transport_type TEXT NOT NULL CHECK (transport_type IN ('stdio', 'sse')),
+                command TEXT,
+                args TEXT,
+                url TEXT,
+                env_vars TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                tools_cache TEXT,
+                last_connected_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE INDEX idx_mcp_servers_enabled
+            ON mcp_servers(enabled)
+            """,
+            """
+            CREATE TABLE agent_events (
+                event_id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+                agent_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                causation_event_id TEXT,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE INDEX idx_agent_events_run
+            ON agent_events(run_id, created_at)
+            """,
+        ),
+    ),
 )
+
