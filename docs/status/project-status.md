@@ -11,7 +11,7 @@ Updated: 2026-08-26
 | v0.3 S0/P0 plan | `implemented_and_validated_offline` | S0.0-S0.5 are committed; current work continues on `codex/v0.3-s0-harness` and is pushed to `origin/main` at phase checkpoints |
 | v0.3 S1 | `implemented_partial_live_acceptance_failed` | S1.0-S1.5-B mechanisms exist; the frozen S1.5-C first live matrix was executed but rejected after manual support, coverage and abstention review |
 | v0.3 P4 统一对话路由与分层记忆中心 | `implemented_and_validated_offline` | P4.0-P4.4 全面落地并通过离线全量回归（577 passed）：SQLite Migration v7、HierarchicalMemoryStore、两阶段 ConversationRouter、MemoryAgent、Omnibox 智能补全与 HITL 记忆候选气泡、Settings Memory Studio |
-| v0.3 P5 Skill 与 MCP 增强及多 Agent 协同 | `in_progress` | P5.0-P5.1 已落地并通过离线全量回归（582 passed）：SQLite Migration v8、SkillRegistry、SkillRunner、3 大内置权威学术工作流、`/api/v1/skills` REST API |
+| v0.3 P5 Skill 与 MCP 增强及多 Agent 协同 | `implemented_and_validated_offline` | P5.1-P5.5 全面落地并通过离线全量回归（597 passed）：声明式 Skill 架构与执行引擎、MCP Client 外部工具接入网关、MCP Server 本地学术能力暴露（SSE & stdio）、异步 EventBus 与并发 DAG 调度引擎、双端工作台协同演播室 (Skill Studio & MCP Gateway Dashboard) |
 
 The v0.2 W0-W5 plans are no longer active gates. Their implementation and
 validation evidence remains available at `docs/plans/deprecated/v0.2/`; the
