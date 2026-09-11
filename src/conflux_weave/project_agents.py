@@ -186,8 +186,13 @@ class ProjectAgent:
         ),
     )
 
-    def __init__(self, provider: OpenAICompatibleChatAdapter | None = None) -> None:
+    def __init__(
+        self,
+        provider: OpenAICompatibleChatAdapter | None = None,
+        memory_agent: Any | None = None,
+    ) -> None:
         self.provider = provider
+        self.memory_agent = memory_agent
 
     def ask(self, project: Project, question: str) -> ProjectAnswer:
         root = Path(project.root_path).resolve()
@@ -217,24 +222,30 @@ class ProjectAgent:
                 context_snippets.append(f"### [pyproject.toml]\n```toml\n{c[:1500]}\n```")
             except Exception:
                 pass
+        # Find files matching question keywords
+        q_words = [w.lower() for w in re.split(r"[\s,._\-\\/]+", question) if len(w) > 2]
+        all_files: list[str] = []
+        for d in [root] + [Path(root, "src"), Path(root, "docs")]:
+            if d.is_dir():
+                for p in d.glob("*"):
+                    if p.is_file() and not p.name.startswith("."):
+                        try:
+                            rel = str(p.relative_to(root)).replace("\\", "/")
+                            all_files.append(rel)
+                        except ValueError:
+                            pass
 
-        # Search for keyword matches in files
-        q_lower = question.lower()
-        src_dir = root / "src"
-        if src_dir.is_dir():
-            for p in src_dir.rglob("*.py"):
-                rel = str(p.relative_to(root)).replace("\\", "/")
-                p_name_lower = p.stem.lower()
-                if p_name_lower in q_lower or (len(cited_files) < 4 and p_name_lower in {"server", "chat", "documents", "projects"}):
-                    try:
-                        content, _, _ = ProjectScanner.read_file_safe(root, rel, max_size_bytes=65536)
-                        if rel not in cited_files:
-                            cited_files.append(rel)
-                        context_snippets.append(f"### [{rel}]\n```python\n{content[:1500]}\n```")
-                    except Exception:
-                        pass
+        for rel in all_files:
+            if any(w in rel.lower() for w in q_words):
+                cited_files.append(rel)
+                content, _, _ = ProjectScanner.read_file_safe(root, rel, max_size_bytes=4096)
+                context_snippets.append(f"--- File: {rel} ---\n{content[:1500]}")
                 if len(cited_files) >= 5:
                     break
+
+        # If no specific matches, include directory structure
+        if not context_snippets:
+            context_snippets.append(f"Directory tree:\n" + "\n".join(f"- {n.path} ({n.kind})" for n in tree_nodes[:30]))
 
         git_summary = (
             f"Git 分支: `{git_status.branch}`, 最新提交: `{git_status.commit_hash[:8] if git_status.commit_hash else 'none'}` "
@@ -247,6 +258,12 @@ class ProjectAgent:
 
         # If provider available, query LLM
         if self.provider is not None:
+            mem_ctx = ""
+            if self.memory_agent is not None:
+                mem_ctx = self.memory_agent.format_prompt_context(
+                    user_id="user_default",
+                    project_id=project.project_id,
+                )
             system_prompt = (
                 "你是一个资深架构师与代码项目分析专家 (ProjectAgent)。\n"
                 "你的职责是基于用户提供的项目结构、Git 状态与源代码片段，回答用户的项目架构、功能实现、代码细节与工程状态问题。\n"
@@ -255,6 +272,8 @@ class ProjectAgent:
                 "2. 引用代码或文件时使用反引号注明相对路径；\n"
                 "3. 输出格式清晰、专业、层级分明，使用 GitHub 风格 Markdown。"
             )
+            if mem_ctx:
+                system_prompt = f"{system_prompt}\n\n{mem_ctx}"
             user_msg = (
                 f"项目名称: {project.name}\n"
                 f"项目路径: {project.root_path}\n"

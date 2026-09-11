@@ -22,7 +22,8 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
-from conflux_weave.chat import ChatService
+from conflux_weave.chat import ChatMessage, ChatService
+from conflux_weave.conversation_router import ConversationRouter, RouterResult
 from conflux_weave.api_contracts import (
     ChatAnswerChecks,
     ChatAnswerResponse,
@@ -30,6 +31,8 @@ from conflux_weave.api_contracts import (
     ChatHistoryResponse,
     ChatMessageRecord,
     ChatMessageRequest,
+    RouterRequest,
+    RouterResultResponse,
     ConversationDetail,
     ConversationListResponse,
     ConversationSummary,
@@ -64,6 +67,12 @@ from conflux_weave.api_contracts import (
     ArchitectureWalkthroughResponse,
     AuditFindingItem,
     ProjectAuditReportResponse,
+    MemoryItemResponse,
+    MemoryListResponse,
+    MemoryCandidateResponse,
+    MemoryCandidateListResponse,
+    CreateMemoryRequest,
+    MemoryCandidateActionRequest,
     FixtureResearchTaskRequest,
     FollowUpResearchTaskRequest,
     ProviderConfigResponse,
@@ -81,6 +90,14 @@ from conflux_weave.api_contracts import (
     WorkbenchQueryService,
     map_exception,
 )
+from conflux_weave.runtime.memory_store import (
+    HierarchicalMemoryStore,
+    MemoryCategory,
+    MemoryScope,
+    MemoryStatus,
+    CandidateStatus,
+)
+from conflux_weave.memory_agent import MemoryAgent
 from conflux_weave.projects import GitInspector, Project, ProjectScanner, ProjectStore
 from conflux_weave.project_agents import CodeProposal, CodingAgent, ProjectAgent, ProjectAnswer
 from conflux_weave.document_agent import DocumentAgent
@@ -281,9 +298,19 @@ def create_app(
             await worker_loop.stop()
 
     app = FastAPI(title="Conflux-Weave", version="0.0.1", lifespan=lifespan)
+    db_path = getattr(repository, "database_path", ":memory:")
+    memory_store = HierarchicalMemoryStore(db_path if db_path else ":memory:")
+    chat_adapter = getattr(chat_service, "_chat", None) if chat_service else None
+    memory_agent = MemoryAgent(memory_store, chat_adapter=chat_adapter)
+    conversation_router = ConversationRouter(chat_adapter=chat_adapter)
+    if chat_service is not None and not getattr(chat_service, "_memory_agent", None):
+        chat_service._memory_agent = memory_agent
     app.state.repository = repository
     app.state.orchestrator = orchestrator
     app.state.worker = worker_loop
+    app.state.memory_store = memory_store
+    app.state.memory_agent = memory_agent
+    app.state.conversation_router = conversation_router
 
     def third_party_setting(name: str) -> str:
         value = os.environ.get(name)
@@ -373,9 +400,191 @@ def create_app(
         except Exception as exc:
             return error_response(exc)
 
+    @app.post("/api/v1/chat/route", response_model=RouterResultResponse)
+    def route_chat(request: RouterRequest):
+        result = conversation_router.route(
+            request.query,
+            current_mode=request.current_mode,
+            conversation_id=request.conversation_id,
+        )
+        return RouterResultResponse(
+            target_mode=result.target_mode,
+            is_fast_path=result.is_fast_path,
+            confidence=result.confidence,
+            intent_summary=result.intent_summary,
+            extracted_entities=result.extracted_entities,
+            suggested_run_kind=result.suggested_run_kind,
+        )
+
     @app.post("/api/v1/chat", response_model=ChatAnswerResponse)
     def submit_chat_message(request: ChatMessageRequest):
-        """W3.0 模式 A：直接问答——无 Run、无报告工件，仅对话记录。"""
+        """统一全能对话入口：智能路由分流（快慢双通道、实体提取、记忆感知）。"""
+        route_result = conversation_router.route(
+            request.question,
+            current_mode=request.mode,
+            conversation_id=request.conversation_id,
+        )
+        effective_mode = route_result.target_mode
+
+        # 慢通道：深度学术调研任务 (Deep Research Durable Run)
+        if effective_mode == "deep":
+            try:
+                task_kind = route_result.suggested_run_kind or "managed_verified_research"
+                sub_result = orchestrator.submit(
+                    TaskSubmission(
+                        task_kind=task_kind,
+                        input={
+                            "objective": request.question,
+                            "max_subquestions": 3,
+                        },
+                        requested_agent="durable_verified_research@v1",
+                    )
+                )
+                conv_id = request.conversation_id or f"conv-{uuid4().hex}"
+                content = f"已为您启动深度研究任务（Run ID: {sub_result.run_id}），正在后台持续执行文献检索与多源交叉论证..."
+                now = datetime.now(UTC).isoformat()
+                if chat_service is not None:
+                    try:
+                        chat_service.record_research_message(
+                            conversation_id=conv_id,
+                            role="user",
+                            content=request.question,
+                            run_id=sub_result.run_id,
+                            mode="deep",
+                            conversation_mode=request.mode,
+                        )
+                        chat_service.record_research_message(
+                            conversation_id=conv_id,
+                            role="assistant",
+                            content=content,
+                            run_id=sub_result.run_id,
+                            mode="deep",
+                            conversation_mode=request.mode,
+                        )
+                    except Exception:
+                        pass
+                return ChatAnswerResponse(
+                    message_id=f"msg-{uuid4().hex}",
+                    conversation_id=conv_id,
+                    role="assistant",
+                    mode="deep",
+                    content=content,
+                    created_at=now,
+                    verification="durable-run-dispatched",
+                    routed_mode="deep",
+                    is_fast_path=False,
+                    intent_summary=route_result.intent_summary,
+                    run_id=sub_result.run_id,
+                )
+            except Exception as exc:
+                return error_response(exc)
+
+        # 记忆通道：查询或总结记忆与偏好
+        if effective_mode == "memory":
+            try:
+                active_mems = memory_store.list_memories(status=MemoryStatus.ACTIVE)
+                candidates = memory_store.list_candidates(status=CandidateStatus.PENDING)
+                summary_lines = ["【分层记忆中心当前状态】"]
+                if active_mems:
+                    summary_lines.append(f"已生效记忆 ({len(active_mems)} 条):")
+                    for m in active_mems[:10]:
+                        summary_lines.append(f"- [{m.scope.value}/{m.category.value}] {m.statement}")
+                else:
+                    summary_lines.append("当前暂无已生效的长期偏好或约定。")
+                if candidates:
+                    summary_lines.append(f"\n待核准候选 ({len(candidates)} 条):")
+                    for c in candidates[:5]:
+                        summary_lines.append(f"- [{c.scope.value}] {c.statement} (ID: {c.candidate_id})")
+                summary_lines.append("\n您可以在设置中心（#/settings）核准或管理记忆。")
+                content = "\n".join(summary_lines)
+                conv_id = request.conversation_id or f"conv-{uuid4().hex}"
+                now = datetime.now(UTC).isoformat()
+                if chat_service is not None:
+                    try:
+                        chat_service._ensure_conversation(conv_id, request.question, request.mode)
+                        turn_id, seq = chat_service._next_turn(conv_id)
+                        chat_service._append(ChatMessage(f"msg-{uuid4().hex}", conv_id, "user", "memory", request.question, now, turn_id=turn_id, sequence=seq), conversation_mode=request.mode)
+                        chat_service._append(ChatMessage(f"msg-{uuid4().hex}", conv_id, "assistant", "memory", content, now, turn_id=turn_id, sequence=seq), conversation_mode=request.mode)
+                    except Exception:
+                        pass
+                return ChatAnswerResponse(
+                    message_id=f"msg-{uuid4().hex}",
+                    conversation_id=conv_id,
+                    role="assistant",
+                    mode="memory",
+                    content=content,
+                    created_at=now,
+                    verification="model-knowledge",
+                    routed_mode="memory",
+                    is_fast_path=True,
+                    intent_summary=route_result.intent_summary,
+                )
+            except Exception as exc:
+                return error_response(exc)
+
+        # 项目通道：项目治理引导
+        if effective_mode == "project":
+            try:
+                entities = route_result.extracted_entities
+                proj_id = entities.get("project_id", "当前工程")
+                content = f"已识别到项目治理意图（项目：{proj_id}）。建议前往「项目工作台」查看深度架构拓扑、理论映射与代码健康度契约体检结果。"
+                conv_id = request.conversation_id or f"conv-{uuid4().hex}"
+                now = datetime.now(UTC).isoformat()
+                if chat_service is not None:
+                    try:
+                        chat_service._ensure_conversation(conv_id, request.question, request.mode)
+                        turn_id, seq = chat_service._next_turn(conv_id)
+                        chat_service._append(ChatMessage(f"msg-{uuid4().hex}", conv_id, "user", "project", request.question, now, turn_id=turn_id, sequence=seq), conversation_mode=request.mode)
+                        chat_service._append(ChatMessage(f"msg-{uuid4().hex}", conv_id, "assistant", "project", content, now, turn_id=turn_id, sequence=seq), conversation_mode=request.mode)
+                    except Exception:
+                        pass
+                return ChatAnswerResponse(
+                    message_id=f"msg-{uuid4().hex}",
+                    conversation_id=conv_id,
+                    role="assistant",
+                    mode="project",
+                    content=content,
+                    created_at=now,
+                    verification="model-knowledge",
+                    routed_mode="project",
+                    is_fast_path=False,
+                    intent_summary=route_result.intent_summary,
+                )
+            except Exception as exc:
+                return error_response(exc)
+
+        # 文档通道：单篇文献精读引导
+        if effective_mode == "document":
+            try:
+                entities = route_result.extracted_entities
+                target_doc = entities.get("paper_id") or entities.get("note_id") or "指定文档"
+                content = f"已识别到文档研读与权威笔记意图（目标：{target_doc}）。建议前往「资料库」查看单篇精读解析、多模态图表与段落证据链。"
+                conv_id = request.conversation_id or f"conv-{uuid4().hex}"
+                now = datetime.now(UTC).isoformat()
+                if chat_service is not None:
+                    try:
+                        chat_service._ensure_conversation(conv_id, request.question, request.mode)
+                        turn_id, seq = chat_service._next_turn(conv_id)
+                        chat_service._append(ChatMessage(f"msg-{uuid4().hex}", conv_id, "user", "document", request.question, now, turn_id=turn_id, sequence=seq), conversation_mode=request.mode)
+                        chat_service._append(ChatMessage(f"msg-{uuid4().hex}", conv_id, "assistant", "document", content, now, turn_id=turn_id, sequence=seq), conversation_mode=request.mode)
+                    except Exception:
+                        pass
+                return ChatAnswerResponse(
+                    message_id=f"msg-{uuid4().hex}",
+                    conversation_id=conv_id,
+                    role="assistant",
+                    mode="document",
+                    content=content,
+                    created_at=now,
+                    verification="model-knowledge",
+                    routed_mode="document",
+                    is_fast_path=False,
+                    intent_summary=route_result.intent_summary,
+                )
+            except Exception as exc:
+                return error_response(exc)
+
+        # 快通道：Direct 或 RAG 模式
         if chat_service is None:
             return JSONResponse(
                 status_code=503,
@@ -385,7 +594,7 @@ def create_app(
                     "recovery_action": "在设置中完成模型服务配置后重试。",
                 },
             )
-        if request.mode == "rag" and not chat_service.has_rag:
+        if effective_mode == "rag" and not chat_service.has_rag:
             return JSONResponse(
                 status_code=503,
                 content={
@@ -395,12 +604,11 @@ def create_app(
                 },
             )
         try:
-            if request.mode == "rag":
-                result = chat_service.rag_answer(request.question, request.conversation_id)
-            else:
-                result = chat_service.direct_answer(request.question, request.conversation_id)
-            if request.mode == "rag":
+            if effective_mode == "rag":
+                result = chat_service.rag_answer(request.question, request.conversation_id, conversation_mode=request.mode)
                 mark_library_usage([str(item.get("source_snapshot_id", "")) for item in result.get("citations", ())])
+            else:
+                result = chat_service.direct_answer(request.question, request.conversation_id, conversation_mode=request.mode)
         except Exception as exc:
             return error_response(exc)
         return ChatAnswerResponse(
@@ -430,6 +638,10 @@ def create_app(
                 )
                 for item in result.get("citations", ())
             ),
+            routed_mode=effective_mode,
+            is_fast_path=True,
+            intent_summary=route_result.intent_summary,
+            memory_candidates=tuple(result.get("memory_candidates", ())),
         )
 
     @app.get("/api/v1/chat/messages", response_model=ChatHistoryResponse)
@@ -492,6 +704,147 @@ def create_app(
                 created=result.created,
                 state=state,
             )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.get("/api/v1/memories", response_model=MemoryListResponse)
+    async def list_memories(
+        scope: str | None = None,
+        target_id: str | None = None,
+        category: str | None = None,
+        status: str = "active",
+        limit: int = Query(default=50, ge=1, le=200),
+    ):
+        try:
+            items = memory_store.list_memories(
+                scope=scope,
+                target_id=target_id,
+                category=category,
+                status=status,
+                limit=limit,
+            )
+            response_items = tuple(
+                MemoryItemResponse(
+                    memory_id=item.memory_id,
+                    scope=item.scope.value,
+                    target_id=item.target_id,
+                    category=item.category.value,
+                    statement=item.statement,
+                    confidence=item.confidence,
+                    status=item.status.value,
+                    source_type=item.source_type,
+                    source_id=item.source_id,
+                    created_at=item.created_at,
+                    updated_at=item.updated_at,
+                )
+                for item in items
+            )
+            return MemoryListResponse(items=response_items, total=len(response_items))
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/memories", response_model=MemoryItemResponse)
+    async def create_memory(request: CreateMemoryRequest):
+        try:
+            item = memory_store.create_memory(
+                scope=request.scope,
+                target_id=request.target_id,
+                category=request.category,
+                statement=request.statement,
+                confidence=request.confidence,
+                source_type="manual",
+                source_id="user",
+            )
+            return MemoryItemResponse(
+                memory_id=item.memory_id,
+                scope=item.scope.value,
+                target_id=item.target_id,
+                category=item.category.value,
+                statement=item.statement,
+                confidence=item.confidence,
+                status=item.status.value,
+                source_type=item.source_type,
+                source_id=item.source_id,
+                created_at=item.created_at,
+                updated_at=item.updated_at,
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.delete("/api/v1/memories/{memory_id}")
+    async def delete_memory(memory_id: str):
+        try:
+            success = memory_store.delete_memory(memory_id)
+            if not success:
+                return JSONResponse(status_code=404, content={"code": "memory_not_found", "message": "指定记忆不存在。"})
+            return {"ok": True, "memory_id": memory_id}
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.get("/api/v1/memories/candidates", response_model=MemoryCandidateListResponse)
+    async def list_memory_candidates(
+        status: str = "pending",
+        scope: str | None = None,
+        target_id: str | None = None,
+        limit: int = Query(default=50, ge=1, le=100),
+    ):
+        try:
+            candidates = memory_store.list_candidates(
+                status=status,
+                scope=scope,
+                target_id=target_id,
+                limit=limit,
+            )
+            response_items = tuple(
+                MemoryCandidateResponse(
+                    candidate_id=cand.candidate_id,
+                    scope=cand.scope.value,
+                    target_id=cand.target_id,
+                    category=cand.category.value,
+                    statement=cand.statement,
+                    confidence=cand.confidence,
+                    conflict_with_memory_id=cand.conflict_with_memory_id,
+                    status=cand.status.value,
+                    source_type=cand.source_type,
+                    source_id=cand.source_id,
+                    created_at=cand.created_at,
+                )
+                for cand in candidates
+            )
+            return MemoryCandidateListResponse(items=response_items, total=len(response_items))
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/memories/candidates/{candidate_id}/action")
+    async def memory_candidate_action(candidate_id: str, request: MemoryCandidateActionRequest):
+        try:
+            if request.action == "approve":
+                item = memory_store.approve_candidate(candidate_id)
+                return {
+                    "ok": True,
+                    "action": "approved",
+                    "memory_id": item.memory_id,
+                    "memory": MemoryItemResponse(
+                        memory_id=item.memory_id,
+                        scope=item.scope.value,
+                        target_id=item.target_id,
+                        category=item.category.value,
+                        statement=item.statement,
+                        confidence=item.confidence,
+                        status=item.status.value,
+                        source_type=item.source_type,
+                        source_id=item.source_id,
+                        created_at=item.created_at,
+                        updated_at=item.updated_at,
+                    ).model_dump(mode="json"),
+                }
+            elif request.action == "reject":
+                memory_store.reject_candidate(candidate_id)
+                return {"ok": True, "action": "rejected", "candidate_id": candidate_id}
+            else:
+                return JSONResponse(status_code=400, content={"code": "invalid_action", "message": f"不支持的操作: {request.action}"})
+        except KeyError:
+            return JSONResponse(status_code=404, content={"code": "candidate_not_found", "message": "未找到指定记忆候选。"})
         except Exception as exc:
             return error_response(exc)
 
@@ -2077,7 +2430,7 @@ def create_app(
 
     def _get_project_agent() -> ProjectAgent:
         chat_adapter = getattr(chat_service, "_chat", None) if chat_service is not None else None
-        return ProjectAgent(provider=chat_adapter)
+        return ProjectAgent(provider=chat_adapter, memory_agent=memory_agent)
 
     def _get_coding_agent() -> CodingAgent:
         chat_adapter = getattr(chat_service, "_chat", None) if chat_service is not None else None
@@ -2358,10 +2711,38 @@ def create_app(
     async def ready_health():
         return query_service.readiness(provider_configured=provider_configured)
 
-    app.mount("/assets", StaticFiles(directory=WORKBENCH_ROOT), name="workbench-assets")
+    workbench_dist = WORKBENCH_ROOT / "dist"
+    workbench_dist_assets = workbench_dist / "assets"
+
+    class WorkbenchStaticFiles(StaticFiles):
+        def lookup_path(self, path: str):
+            if workbench_dist_assets.is_dir():
+                dist_target = (workbench_dist_assets / path).resolve()
+                if str(dist_target).startswith(str(workbench_dist_assets.resolve())):
+                    try:
+                        return str(dist_target), os.stat(dist_target)
+                    except (FileNotFoundError, NotADirectoryError):
+                        pass
+            return super().lookup_path(path)
+
+    app.mount("/assets", WorkbenchStaticFiles(directory=WORKBENCH_ROOT), name="workbench-assets")
 
     @app.get("/", include_in_schema=False)
     async def workbench_index() -> FileResponse:
+        dist_index = WORKBENCH_ROOT / "dist" / "index.html"
+        if (
+            dist_index.is_file()
+            and not os.environ.get("PYTEST_CURRENT_TEST")
+            and os.environ.get("CONFLUX_LEGACY_UI") != "1"
+        ):
+            return FileResponse(dist_index, media_type="text/html")
+        return FileResponse(WORKBENCH_ROOT / "index.html", media_type="text/html")
+
+    @app.get("/modern", include_in_schema=False)
+    async def workbench_modern() -> FileResponse:
+        dist_index = WORKBENCH_ROOT / "dist" / "index.html"
+        if dist_index.is_file():
+            return FileResponse(dist_index, media_type="text/html")
         return FileResponse(WORKBENCH_ROOT / "index.html", media_type="text/html")
 
     return app

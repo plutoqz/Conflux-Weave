@@ -139,11 +139,13 @@ class ChatService:
         *,
         retrieval=None,
         artifact_store: LocalArtifactStore | None = None,
+        memory_agent: Any | None = None,
     ) -> None:
         self._chat = chat_adapter
         self._database = Path(database)
         self._retrieval = retrieval
         self._store = artifact_store
+        self._memory_agent = memory_agent
         self._ensure_table()
 
     @property
@@ -195,7 +197,16 @@ class ChatService:
             return {"conversation_id": conversation_id, "title": messages[0].content[:120] if messages else "新对话", "messages": messages}
         return {**dict(row), "messages": messages}
 
-    def record_research_message(self, conversation_id: str, role: str, content: str, run_id: str, *, mode: str = "deep") -> ChatMessage:
+    def record_research_message(
+        self,
+        conversation_id: str,
+        role: str,
+        content: str,
+        run_id: str,
+        *,
+        mode: str = "deep",
+        conversation_mode: str | None = None,
+    ) -> ChatMessage:
         """Persist a durable research turn message; run_id makes retries idempotent."""
         conn = self._connect()
         try:
@@ -204,7 +215,7 @@ class ChatService:
             conn.close()
         if existing is not None:
             return ChatMessage(existing["message_id"], existing["conversation_id"], existing["role"], existing["mode"], existing["content"], existing["created_at"], existing["context_artifact_id"], existing["turn_id"], existing["sequence"], existing["run_id"])
-        conversation = self._ensure_conversation(conversation_id, content, mode)
+        conversation = self._ensure_conversation(conversation_id, content, conversation_mode or mode)
         conn = self._connect()
         try:
             prior = conn.execute("SELECT turn_id, sequence FROM chat_messages WHERE conversation_id=? AND run_id=? LIMIT 1", (conversation, run_id)).fetchone()
@@ -215,7 +226,7 @@ class ChatService:
         else:
             turn_id, sequence = prior["turn_id"], prior["sequence"]
         message = ChatMessage(f"msg-{uuid4().hex}", conversation, role, mode, content, _utc_now(), turn_id=turn_id, sequence=sequence, run_id=run_id)
-        self._append(message)
+        self._append(message, conversation_mode=conversation_mode)
         return message
 
     def _ensure_table(self) -> None:
@@ -283,13 +294,13 @@ class ChatService:
         finally:
             conn.close()
 
-    def direct_answer(self, question: str, conversation_id: str | None) -> dict:
+    def direct_answer(self, question: str, conversation_id: str | None, *, conversation_mode: str | None = None) -> dict:
         normalized = (question or "").strip()
         if not normalized:
             raise ValueError("question must not be empty")
         if len(normalized) > MAX_QUESTION_CHARS:
             raise ValueError(f"question must be at most {MAX_QUESTION_CHARS} characters")
-        conversation = self._ensure_conversation(conversation_id, normalized, "direct")
+        conversation = self._ensure_conversation(conversation_id, normalized, conversation_mode or "direct")
         turn_id, sequence = self._next_turn(conversation)
         started = time.monotonic()
         history_started = time.monotonic()
@@ -298,15 +309,25 @@ class ChatService:
 
         now = _utc_now()
         self._append(
-            ChatMessage(f"msg-{uuid4().hex}", conversation, "user", "direct", normalized, now, turn_id=turn_id, sequence=sequence)
+            ChatMessage(f"msg-{uuid4().hex}", conversation, "user", "direct", normalized, now, turn_id=turn_id, sequence=sequence),
+            conversation_mode=conversation_mode,
         )
 
         context_blocks = [
             f"{message.role}: {message.content}" for message in history
         ] + [f"user: {normalized}"]
+        system_prompt = DIRECT_SYSTEM_PROMPT
+        if self._memory_agent is not None:
+            mem_ctx = self._memory_agent.format_prompt_context(
+                user_id="user_default",
+                conversation_id=conversation,
+            )
+            if mem_ctx:
+                system_prompt = f"{DIRECT_SYSTEM_PROMPT}\n\n{mem_ctx}"
+
         provider_started = time.monotonic()
         completion = self._chat.complete(
-            system_prompt=DIRECT_SYSTEM_PROMPT,
+            system_prompt=system_prompt,
             user_prompt="\n\n".join(context_blocks),
             max_output_tokens=4096,
             temperature=0.3,
@@ -320,8 +341,19 @@ class ChatService:
             f"msg-{uuid4().hex}", conversation, "assistant", "direct", answer, _utc_now(), turn_id=turn_id, sequence=sequence
         )
         persist_started = time.monotonic()
-        self._append(assistant)
+        self._append(assistant, conversation_mode=conversation_mode)
         persist_ms = int((time.monotonic() - persist_started) * 1000)
+
+        memory_candidates = ()
+        if self._memory_agent is not None:
+            cands = self._memory_agent.extract_candidates(
+                normalized,
+                user_id="user_default",
+                source_type="conversation",
+                source_id=conversation,
+            )
+            memory_candidates = tuple(c.to_dict() for c in cands)
+
         return {
             "message_id": assistant.message_id,
             "conversation_id": conversation,
@@ -337,9 +369,10 @@ class ChatService:
                 "persist": persist_ms,
                 "total": int((time.monotonic() - started) * 1000),
             },
+            "memory_candidates": memory_candidates,
         }
 
-    def rag_answer(self, question: str, conversation_id: str | None) -> dict:
+    def rag_answer(self, question: str, conversation_id: str | None, *, conversation_mode: str | None = None) -> dict:
         """W3.1 模式 B：本地语料检索 → 综合成文 → 确定性后检（未核验聚合）。"""
         if self._retrieval is None:
             raise RuntimeError("knowledge corpus is not available")
@@ -348,7 +381,7 @@ class ChatService:
             raise ValueError("question must not be empty")
         if len(normalized) > MAX_QUESTION_CHARS:
             raise ValueError(f"question must be at most {MAX_QUESTION_CHARS} characters")
-        conversation = self._ensure_conversation(conversation_id, normalized, "rag")
+        conversation = self._ensure_conversation(conversation_id, normalized, conversation_mode or "rag")
         turn_id, sequence = self._next_turn(conversation)
 
         started = time.monotonic()
@@ -376,7 +409,8 @@ class ChatService:
         self._append(
             ChatMessage(
                 f"msg-{uuid4().hex}", conversation, "user", "rag", normalized, _utc_now(), turn_id=turn_id, sequence=sequence
-            )
+            ),
+            conversation_mode=conversation_mode,
         )
         input_persist_ms = int((time.monotonic() - input_persist_started) * 1000)
         history = self.conversation(conversation, limit=HISTORY_MESSAGE_LIMIT)
@@ -395,12 +429,21 @@ class ChatService:
         violations: tuple[str, ...] = ()
         completion = None
         answer = ""
+        system_prompt = RAG_SYSTEM_PROMPT
+        if self._memory_agent is not None:
+            mem_ctx = self._memory_agent.format_prompt_context(
+                user_id="user_default",
+                conversation_id=conversation,
+            )
+            if mem_ctx:
+                system_prompt = f"{RAG_SYSTEM_PROMPT}\n\n{mem_ctx}"
+
         provider_started = time.monotonic()
         provider_attempts = 0
         for attempt in range(RAG_MAX_ATTEMPTS):
             provider_attempts += 1
             completion = self._chat.complete(
-                system_prompt=RAG_SYSTEM_PROMPT,
+                system_prompt=system_prompt,
                 user_prompt=(
                     base_user_prompt if attempt == 0
                     else base_user_prompt + _rag_retry_feedback(violations)
@@ -467,8 +510,19 @@ class ChatService:
             context_artifact_id, turn_id, sequence,
         )
         output_persist_started = time.monotonic()
-        self._append(assistant)
+        self._append(assistant, conversation_mode=conversation_mode)
         output_persist_ms = int((time.monotonic() - output_persist_started) * 1000)
+
+        memory_candidates = ()
+        if self._memory_agent is not None:
+            cands = self._memory_agent.extract_candidates(
+                normalized,
+                user_id="user_default",
+                source_type="conversation",
+                source_id=conversation,
+            )
+            memory_candidates = tuple(c.to_dict() for c in cands)
+
         return {
             "message_id": assistant.message_id,
             "conversation_id": conversation,
@@ -500,6 +554,7 @@ class ChatService:
                 "output_persist": output_persist_ms,
                 "total": int((time.monotonic() - started) * 1000),
             },
+            "memory_candidates": memory_candidates,
         }
 
     def history(self, limit: int = 20) -> list[ChatMessage]:
@@ -541,7 +596,7 @@ class ChatService:
             for row in reversed(rows)
         ]
 
-    def _append(self, message: ChatMessage) -> None:
+    def _append(self, message: ChatMessage, *, conversation_mode: str | None = None) -> None:
         conn = self._connect()
         try:
             conn.execute(
@@ -559,11 +614,12 @@ class ChatService:
                     message.turn_id, message.sequence, message.run_id,
                 ),
             )
+            active_mode = conversation_mode or message.mode
             conn.execute("""INSERT INTO conversations(conversation_id,title,created_at,updated_at,last_message_preview,message_count,active_mode)
                 VALUES(?,?,?,?,?,?,?) ON CONFLICT(conversation_id) DO UPDATE SET updated_at=excluded.updated_at,
                 last_message_preview=excluded.last_message_preview, message_count=conversations.message_count+1,
                 active_mode=excluded.active_mode""", (message.conversation_id, message.content[:120], message.created_at,
-                message.created_at, message.content[:120], 1, message.mode))
+                message.created_at, message.content[:120], 1, active_mode))
             conn.commit()
         finally:
             conn.close()

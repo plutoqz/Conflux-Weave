@@ -9,7 +9,7 @@ const TERMINAL_STATES = new Set(["complete", "partial", "failed", "cancelled", "
 const VERIFIED_FAMILIES = new Set(["verified_paper_research", "managed_verified_research"]);
 const HISTORY_RUN_LIMIT = 20;
 const HISTORY_DETAIL_LIMIT = 12;
-const DEFAULT_PLACEHOLDER = "输入你的研究问题，Enter 发送，Shift+Enter 换行";
+const DEFAULT_PLACEHOLDER = "输入问题或命令（如 /deep、/doc、@project:...），Enter 发送，Shift+Enter 换行";
 
 const thread = document.getElementById("chat-thread");
 const threadEmpty = document.getElementById("chat-thread-empty");
@@ -20,11 +20,12 @@ const turnList = document.getElementById("chat-turn-list");
 const input = document.getElementById("chat-input");
 const errorNode = document.getElementById("chat-error");
 const sendButton = document.getElementById("chat-send");
+const autocomplete = document.getElementById("chat-autocomplete");
 
 const watches = new Map();
 let followParent = null;
 let directConversationId = null;
-let chatMode = "direct";
+let chatMode = "auto";
 const modeSelect = document.getElementById("chat-mode-select");
 const modeButton = document.getElementById("chat-mode-button");
 const modeLabel = document.getElementById("chat-mode-label");
@@ -32,7 +33,15 @@ const modeList = document.getElementById("chat-mode-list");
 const emptyTitle = document.getElementById("chat-empty-title");
 const emptyDescription = document.getElementById("chat-empty-description");
 
+let cachedDocs = [];
+let autocompleteItems = [];
+let autocompleteIndex = -1;
+
 const MODE_INTRO = {
+  auto: {
+    title: "✨ 智能路由",
+    description: "全能自适应：根据输入自动调度快慢通道，识别前缀命令与 @ 实体，智能调用直接问答、知识库、深度研究或项目认知。",
+  },
   direct: {
     title: "直接提问",
     description: "直接获得模型回答，不检索本地资料，也不附带引用。",
@@ -44,6 +53,18 @@ const MODE_INTRO = {
   deep: {
     title: "深度研究",
     description: "问题会创建为一次核验研究：结果带引用证据，运行过程实时可见。",
+  },
+  document: {
+    title: "文档研读",
+    description: "针对特定文献/PDF进行重点精读与权威笔记提炼。",
+  },
+  project: {
+    title: "项目认知",
+    description: "代码架构解构、技术债分析、理论实践映射与健康审计。",
+  },
+  memory: {
+    title: "记忆中心",
+    description: "查询用户习惯偏好、修改项目技术规约与管理记忆库。",
   },
 };
 
@@ -57,7 +78,7 @@ function setChatMode(mode) {
   if (!option) return;
   chatMode = mode;
   modeLabel.textContent = option.querySelector("strong").textContent;
-  const intro = MODE_INTRO[mode] || MODE_INTRO.direct;
+  const intro = MODE_INTRO[mode] || MODE_INTRO.auto;
   emptyTitle.textContent = intro.title;
   emptyDescription.textContent = intro.description;
   for (const item of modeList.querySelectorAll("li")) {
@@ -79,15 +100,165 @@ modeList.addEventListener("click", (event) => {
 
 document.addEventListener("click", (event) => {
   if (!modeSelect.contains(event.target)) closeModeList();
+  if (autocomplete && !autocomplete.contains(event.target) && event.target !== input) {
+    hideAutocomplete();
+  }
 });
 
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !modeList.hidden) closeModeList();
+  if (event.key === "Escape") {
+    if (!modeList.hidden) closeModeList();
+    if (autocomplete && !autocomplete.hidden) hideAutocomplete();
+  }
 });
 
 function autoGrow(node) {
   node.style.height = "auto";
   node.style.height = `${Math.min(node.scrollHeight, 160)}px`;
+}
+
+async function preloadLibraryDocs() {
+  try {
+    const res = await api("/api/v1/library");
+    if (res && res.items) cachedDocs = res.items.slice(0, 30);
+  } catch {
+    cachedDocs = [];
+  }
+}
+
+function renderAutocomplete(items) {
+  if (!autocomplete) return;
+  if (!items || items.length === 0) {
+    hideAutocomplete();
+    return;
+  }
+  autocompleteIndex = 0;
+  autocomplete.replaceChildren(...items.map((item, idx) => {
+    const div = document.createElement("div");
+    div.className = `chat-autocomplete-item${idx === 0 ? " active" : ""}`;
+    div.dataset.index = String(idx);
+
+    const tag = document.createElement("span");
+    tag.className = "chat-autocomplete-tag";
+    tag.textContent = item.tag;
+
+    const labelSpan = document.createElement("strong");
+    labelSpan.textContent = item.label;
+
+    const descSpan = document.createElement("span");
+    descSpan.className = "chat-autocomplete-desc";
+    descSpan.textContent = item.desc;
+
+    div.append(tag, labelSpan, descSpan);
+    div.addEventListener("click", () => selectAutocompleteItem(item));
+    return div;
+  }));
+  autocomplete.hidden = false;
+}
+
+function updateAutocompleteActive() {
+  if (!autocomplete) return;
+  const nodes = autocomplete.querySelectorAll(".chat-autocomplete-item");
+  nodes.forEach((node, idx) => {
+    node.classList.toggle("active", idx === autocompleteIndex);
+    if (idx === autocompleteIndex) {
+      node.scrollIntoView({ block: "nearest" });
+    }
+  });
+}
+
+function hideAutocomplete() {
+  if (!autocomplete) return;
+  autocomplete.hidden = true;
+  autocomplete.replaceChildren();
+  autocompleteItems = [];
+  autocompleteIndex = -1;
+}
+
+function selectAutocompleteItem(item) {
+  const val = input.value;
+  const pos = input.selectionStart || val.length;
+  const beforeCursor = val.slice(0, pos);
+  const afterCursor = val.slice(pos);
+
+  if (item.type === "command") {
+    const match = beforeCursor.match(/^(\/[a-zA-Z]*)$/);
+    if (match) {
+      input.value = item.insertText + " " + afterCursor.trimStart();
+      const newPos = item.insertText.length + 1;
+      input.setSelectionRange(newPos, newPos);
+    } else {
+      input.value = item.insertText + " " + val;
+    }
+  } else {
+    const match = beforeCursor.match(/(@[\w:-]*)$/);
+    if (match) {
+      const startIdx = beforeCursor.length - match[0].length;
+      const newBefore = val.slice(0, startIdx) + item.insertText + " ";
+      input.value = newBefore + afterCursor;
+      const newPos = newBefore.length;
+      input.setSelectionRange(newPos, newPos);
+    }
+  }
+  hideAutocomplete();
+  autoGrow(input);
+  input.focus();
+}
+
+function handleInputAutocomplete() {
+  const val = input.value;
+  const pos = input.selectionStart || val.length;
+  const beforeCursor = val.slice(0, pos);
+
+  // 1. Prefix Commands
+  const cmdMatch = beforeCursor.match(/^\/([a-zA-Z]*)$/);
+  if (cmdMatch) {
+    const query = cmdMatch[1].toLowerCase();
+    const commands = [
+      { type: "command", tag: "命令", label: "/deep", desc: "深度研究 · 慢通道学术研讨与证据核验", insertText: "/deep" },
+      { type: "command", tag: "命令", label: "/rag", desc: "知识库问答 · 本地语料检索与片段引用", insertText: "/rag" },
+      { type: "command", tag: "命令", label: "/doc", desc: "文档研读 · 单篇文献/PDF精读提炼", insertText: "/doc" },
+      { type: "command", tag: "命令", label: "/audit", desc: "项目审计 · 代码健康度与架构契约体检", insertText: "/audit" },
+      { type: "command", tag: "命令", label: "/mem", desc: "记忆中心 · 查看已生效偏好与约定", insertText: "/mem" },
+    ];
+    autocompleteItems = commands.filter((c) => c.label.toLowerCase().includes("/" + query));
+    renderAutocomplete(autocompleteItems);
+    return;
+  }
+
+  // 2. @ Entities
+  const entityMatch = beforeCursor.match(/@([\w:-]*)$/);
+  if (entityMatch) {
+    const query = entityMatch[1].toLowerCase();
+    const entities = [
+      { type: "entity", tag: "项目", label: "@project:current", desc: "当前工程拓扑与架构治理", insertText: "@project:current" },
+    ];
+    for (const doc of cachedDocs) {
+      const docId = doc.document_id || "";
+      const docTitle = doc.title || docId;
+      entities.push({
+        type: "entity",
+        tag: "论文",
+        label: `@paper:${docId.slice(0, 16)}`,
+        desc: docTitle,
+        insertText: `@paper:${docId}`,
+      });
+      entities.push({
+        type: "entity",
+        tag: "笔记",
+        label: `@note:${docId.slice(0, 16)}`,
+        desc: `权威笔记: ${docTitle}`,
+        insertText: `@note:${docId}`,
+      });
+    }
+    autocompleteItems = entities.filter((e) =>
+      e.label.toLowerCase().includes(query) || e.desc.toLowerCase().includes(query)
+    ).slice(0, 8);
+    renderAutocomplete(autocompleteItems);
+    return;
+  }
+
+  hideAutocomplete();
 }
 
 function scrollThread() {
@@ -121,8 +292,12 @@ function appendUserMessage(text, time, label = "你", parent = thread) {
 }
 
 function normalModeLabel(mode) {
+  if (mode === "auto") return "智能路由";
   if (mode === "rag") return "知识库问答";
   if (mode === "deep") return "深度研究";
+  if (mode === "document") return "文档研读";
+  if (mode === "project") return "项目认知";
+  if (mode === "memory") return "记忆中心";
   return "直接问答";
 }
 
@@ -136,7 +311,7 @@ function renderConversationList(items, selectedId) {
     title.textContent = item.title || "新对话";
     title.title = item.last_message_preview || item.title || "新对话";
     const mode = document.createElement("span");
-    mode.className = `chat-conversation-mode ${item.active_mode === "rag" ? "rag" : "direct"}`;
+    mode.className = `chat-conversation-mode ${item.active_mode || "direct"}`;
     mode.textContent = normalModeLabel(item.active_mode);
     const count = document.createElement("span");
     count.className = "chat-conversation-count";
@@ -179,20 +354,111 @@ function refreshTurnNav() {
   turns.forEach((turn) => window.__chatTurnObserver.observe(turn));
 }
 
-function appendAssistantMessage(content, mode = "direct") {
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str || "";
+  return div.innerHTML;
+}
+
+function renderCandidateBubble(cand) {
+  const bubble = document.createElement("div");
+  bubble.className = "memory-candidate-bubble";
+  bubble.dataset.candidateId = cand.candidate_id;
+
+  const textWrap = document.createElement("div");
+  textWrap.className = "memory-candidate-text";
+  const scopeName = cand.scope === "project" ? "项目约定" : "用户偏好";
+  textWrap.innerHTML = `<strong>💡 识别到${scopeName}候选：</strong> "${escapeHtml(cand.statement)}"${cand.conflict_with_memory_id ? ' <span style="color:var(--ochre);font-size:11.5px;margin-left:6px;">(潜在语义冲突)</span>' : ''}`;
+
+  const actions = document.createElement("div");
+  actions.className = "memory-candidate-actions";
+
+  const approveBtn = document.createElement("button");
+  approveBtn.type = "button";
+  approveBtn.className = "memory-btn approve";
+  approveBtn.textContent = "核准记住";
+  approveBtn.addEventListener("click", async () => {
+    try {
+      approveBtn.disabled = true;
+      await api(`/api/v1/memories/candidates/${encodeURIComponent(cand.candidate_id)}/action`, {
+        method: "POST",
+        body: JSON.stringify({ action: "approve" }),
+      });
+      showToast("已核准记住并持久化至记忆库");
+      textWrap.innerHTML = `<strong>✔ 已核准记住${scopeName}：</strong> "${escapeHtml(cand.statement)}"`;
+      actions.remove();
+    } catch (e) {
+      approveBtn.disabled = false;
+      showToast(e.message || "核准失败");
+    }
+  });
+
+  const rejectBtn = document.createElement("button");
+  rejectBtn.type = "button";
+  rejectBtn.className = "memory-btn reject";
+  rejectBtn.textContent = "忽略";
+  rejectBtn.addEventListener("click", async () => {
+    try {
+      rejectBtn.disabled = true;
+      await api(`/api/v1/memories/candidates/${encodeURIComponent(cand.candidate_id)}/action`, {
+        method: "POST",
+        body: JSON.stringify({ action: "reject" }),
+      });
+      showToast("已忽略该候选");
+      bubble.remove();
+    } catch (e) {
+      rejectBtn.disabled = false;
+      showToast(e.message || "操作失败");
+    }
+  });
+
+  actions.append(approveBtn, rejectBtn);
+  bubble.append(textWrap, actions);
+  return bubble;
+}
+
+function appendAssistantMessage(content, mode = "direct", routedMode = null, memoryCandidates = []) {
   const article = document.createElement("article");
-  article.className = `chat-msg agent direct ${mode}`;
+  const effectiveMode = routedMode || mode;
+  article.className = `chat-msg agent direct ${effectiveMode}`;
   const header = document.createElement("header");
   const label = document.createElement("span");
   label.className = "chat-msg-label";
-  label.textContent = mode === "rag" ? "知识库问答 · 未核验聚合" : mode === "deep" ? "深度研究 · 完整报告" : "直接问答 · 模型知识（未核验）";
+  if (effectiveMode === "rag") {
+    label.textContent = "知识库问答 · 本地片段引用";
+  } else if (effectiveMode === "deep") {
+    label.textContent = "深度研究 · 完整综述报告";
+  } else if (effectiveMode === "document") {
+    label.textContent = "文档研读 · 单篇文献精读";
+  } else if (effectiveMode === "project") {
+    label.textContent = "项目认知 · 架构解构";
+  } else if (effectiveMode === "memory") {
+    label.textContent = "记忆中心 · 偏好与约定";
+  } else {
+    label.textContent = "直接问答 · 模型知识（未核验）";
+  }
+  header.append(label);
+  if (routedMode) {
+    const routeBadge = document.createElement("span");
+    routeBadge.className = `chat-route-badge ${routedMode}`;
+    routeBadge.textContent = `✨ 路由 · ${normalModeLabel(routedMode)}`;
+    header.append(routeBadge);
+  }
   const stamp = document.createElement("time");
   stamp.textContent = formatDate(new Date().toISOString(), true);
-  header.append(label, stamp);
+  header.append(stamp);
+
   const body = document.createElement("div");
   body.className = "chat-msg-body";
   renderAnswer(body, content || "", "text/markdown");
   article.append(header, body);
+
+  if (memoryCandidates && memoryCandidates.length > 0) {
+    for (const cand of memoryCandidates) {
+      article.append(renderCandidateBubble(cand));
+    }
+  }
+
   thread.append(article);
   return article;
 }
@@ -455,11 +721,11 @@ async function loadHistory() {
 async function loadConversation(conversationId) {
   const record = await api(`/api/v1/conversations/${encodeURIComponent(conversationId)}`);
   directConversationId = conversationId;
-  if (record.active_mode === "direct" || record.active_mode === "rag") setChatMode(record.active_mode);
+  if (record.active_mode) setChatMode(record.active_mode);
   thread.replaceChildren();
   for (const message of record.messages || []) {
     if (message.role === "user") appendUserMessage(message.content, message.created_at);
-    else appendAssistantMessage(message.content, message.mode);
+    else appendAssistantMessage(message.content, message.mode, message.mode);
   }
   threadEmpty.hidden = Boolean(record.messages?.length);
   refreshTurnNav();
@@ -473,9 +739,11 @@ function startNewThread() {
   thread.replaceChildren();
   threadEmpty.hidden = false;
   clearFollow();
+  setChatMode("auto");
   input.value = "";
   autoGrow(input);
   errorNode.hidden = true;
+  hideAutocomplete();
   window.scrollTo({ top: 0, behavior: "auto" });
   input.focus();
 }
@@ -589,50 +857,85 @@ async function submit() {
   }
   errorNode.hidden = true;
   sendButton.disabled = true;
-  const mode = chatMode;
+  hideAutocomplete();
+
   try {
-    if (mode === "direct" || mode === "rag") {
+    // 1. 追问已有 Run：专属通道
+    if (followParent) {
+      input.value = "";
+      autoGrow(input);
+      appendUserMessage(question, new Date().toISOString(), "追问");
+      threadEmpty.hidden = true;
+      scrollThread();
+
+      const accepted = await api(`/api/v1/runs/${encodeURIComponent(followParent)}/follow-up`, {
+        method: "POST",
+        body: JSON.stringify({ question }),
+      });
+      clearFollow();
+      const agent = createAgentArticle(accepted.run_id);
+      agent.label.textContent = `研究 Run · ${accepted.run_id}`;
+      agent.label.title = accepted.run_id;
+      agent.status.textContent = "追问任务已保存，正在等待处理。";
+      thread.append(agent.article);
+      scrollThread();
+      watchRun(accepted.run_id, agent, makeHandle(agent, null));
+      return;
+    }
+
+    // 2. 深度研究专属创建通道（保持与 /api/v1/tasks/deep-research 兼容）
+    if (chatMode === "deep") {
       input.value = "";
       autoGrow(input);
       appendUserMessage(question, new Date().toISOString());
       threadEmpty.hidden = true;
       scrollThread();
-      const answer = await api("/api/v1/chat", {
-        method: "POST",
-        body: JSON.stringify({ question, conversation_id: directConversationId, mode }),
-      });
-      directConversationId = answer.conversation_id;
-      await refreshConversationList(directConversationId);
-      window.history.replaceState(null, "", `#/chat/${encodeURIComponent(directConversationId)}`);
-      appendAssistantMessage(answer.content, answer.mode);
-      scrollThread();
-      return;
-    }
-    let accepted;
-    if (!directConversationId) directConversationId = `conv-${crypto.randomUUID()}`;
-    if (followParent) {
-      accepted = await api(`/api/v1/runs/${encodeURIComponent(followParent)}/follow-up`, {
-        method: "POST",
-        body: JSON.stringify({ question }),
-      });
-      clearFollow();
-    } else {
-      accepted = await api("/api/v1/tasks/deep-research", {
+
+      if (!directConversationId) directConversationId = `conv-${crypto.randomUUID()}`;
+      const accepted = await api("/api/v1/tasks/deep-research", {
         method: "POST",
         body: JSON.stringify({ objective: question, conversation_id: directConversationId }),
       });
+      const agent = createAgentArticle(accepted.run_id);
+      agent.label.textContent = `研究 Run · ${accepted.run_id}`;
+      agent.label.title = accepted.run_id;
+      agent.status.textContent = "任务已保存，正在等待处理。";
+      thread.append(agent.article);
+      scrollThread();
+      watchRun(accepted.run_id, agent, makeHandle(agent, null));
+      return;
     }
+
+    // 3. 统一全能入口（支持 auto/direct/rag/document/project/memory）
     input.value = "";
     autoGrow(input);
     appendUserMessage(question, new Date().toISOString());
-    const agent = createAgentArticle(accepted.run_id);
-    agent.label.textContent = `研究 Run · ${accepted.run_id}`;
-    agent.label.title = accepted.run_id;
-    agent.status.textContent = "任务已保存，正在等待处理。";
-    thread.append(agent.article);
     threadEmpty.hidden = true;
     scrollThread();
-    watchRun(accepted.run_id, agent, makeHandle(agent, null));
+
+    const answer = await api("/api/v1/chat", {
+      method: "POST",
+      body: JSON.stringify({ question, conversation_id: directConversationId, mode: chatMode }),
+    });
+
+    directConversationId = answer.conversation_id;
+    await refreshConversationList(directConversationId);
+    window.history.replaceState(null, "", `#/chat/${encodeURIComponent(directConversationId)}`);
+
+    if (!answer.is_fast_path && answer.run_id) {
+      // 慢通道：调度深度核验任务并开启实时观测流
+      const agent = createAgentArticle(answer.run_id);
+      agent.label.textContent = `深度研究 · ${answer.run_id}`;
+      agent.label.title = answer.run_id;
+      agent.status.textContent = answer.content || "任务已保存，正在后台执行文献检索与证据核验...";
+      thread.append(agent.article);
+      scrollThread();
+      watchRun(answer.run_id, agent, makeHandle(agent, null));
+    } else {
+      // 快通道 / 引导问答：附带路由徽标与 HITL 记忆候选气泡
+      appendAssistantMessage(answer.content, answer.mode, answer.routed_mode, answer.memory_candidates);
+      scrollThread();
+    }
   } catch (error) {
     showChatError(error.recoveryAction || error.message);
   } finally {
@@ -644,21 +947,51 @@ document.getElementById("chat-form").addEventListener("submit", (event) => {
   event.preventDefault();
   submit();
 });
+
 input.addEventListener("keydown", (event) => {
+  if (autocomplete && !autocomplete.hidden && autocompleteItems.length > 0) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      autocompleteIndex = (autocompleteIndex + 1) % autocompleteItems.length;
+      updateAutocompleteActive();
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      autocompleteIndex = (autocompleteIndex - 1 + autocompleteItems.length) % autocompleteItems.length;
+      updateAutocompleteActive();
+      return;
+    }
+    if ((event.key === "Enter" || event.key === "Tab") && autocompleteIndex >= 0) {
+      event.preventDefault();
+      selectAutocompleteItem(autocompleteItems[autocompleteIndex]);
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      hideAutocomplete();
+      return;
+    }
+  }
+
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
     submit();
   }
 });
+
 input.addEventListener("input", () => {
   errorNode.hidden = true;
   autoGrow(input);
+  handleInputAutocomplete();
 });
+
 document.getElementById("chat-clear-follow").addEventListener("click", clearFollow);
 document.getElementById("chat-new-thread").addEventListener("click", startNewThread);
 
 registerView("chat", {
   mount: async (conversationId) => {
+    preloadLibraryDocs();
     await loadHistory();
     if (conversationId) await loadConversation(conversationId);
   },
@@ -666,6 +999,7 @@ registerView("chat", {
     if (conversationId) await loadConversation(conversationId);
   },
   unmount: async () => {
+    hideAutocomplete();
     for (const { close } of [...watches.values()]) close();
     watches.clear();
   },

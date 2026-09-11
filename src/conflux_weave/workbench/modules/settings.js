@@ -1,6 +1,4 @@
-/* 设置视图：模型服务配置（写入本地 .env，重启生效）、系统检查与数据目录。 */
-
-import { api, renderChecks } from "./shared.js?v=v0.3-report-render-4";
+import { api, formatDate, renderChecks, showToast } from "./shared.js?v=v0.3-report-render-4";
 import { registerView } from "./router.js";
 
 const form = document.getElementById("provider-form");
@@ -99,6 +97,256 @@ async function renderBudgetSection() {
   }
 }
 
+/* ---------- 分层记忆中心 (Memory Studio) ---------- */
+
+const memTabs = {
+  user: document.getElementById("mem-tab-user"),
+  project: document.getElementById("mem-tab-project"),
+  candidates: document.getElementById("mem-tab-candidates"),
+};
+const memPanels = {
+  user: document.getElementById("mem-panel-user"),
+  project: document.getElementById("mem-panel-project"),
+  candidates: document.getElementById("mem-panel-candidates"),
+};
+
+function switchMemoryTab(tabName) {
+  for (const [key, tab] of Object.entries(memTabs)) {
+    if (!tab) continue;
+    const active = key === tabName;
+    tab.classList.toggle("active", active);
+    tab.setAttribute("aria-selected", active ? "true" : "false");
+  }
+  for (const [key, panel] of Object.entries(memPanels)) {
+    if (!panel) continue;
+    panel.hidden = key !== tabName;
+  }
+}
+
+if (memTabs.user) memTabs.user.addEventListener("click", () => switchMemoryTab("user"));
+if (memTabs.project) memTabs.project.addEventListener("click", () => switchMemoryTab("project"));
+if (memTabs.candidates) memTabs.candidates.addEventListener("click", () => switchMemoryTab("candidates"));
+
+async function renderMemoryStudio() {
+  const statsBadge = document.getElementById("memory-stats-badge");
+  const pendingPill = document.getElementById("mem-pending-pill");
+  const userList = document.getElementById("user-memory-list");
+  const projList = document.getElementById("project-memory-list");
+  const candList = document.getElementById("candidate-memory-list");
+
+  try {
+    const [userRes, projRes, candRes] = await Promise.all([
+      api("/api/v1/memories?scope=user&status=active"),
+      api("/api/v1/memories?scope=project&status=active"),
+      api("/api/v1/memories/candidates?status=pending"),
+    ]);
+
+    const userItems = userRes.items || [];
+    const projItems = projRes.items || [];
+    const candidates = candRes.items || candRes.candidates || [];
+
+    const totalActive = userItems.length + projItems.length;
+    if (statsBadge) {
+      statsBadge.textContent = `${totalActive} 条已生效 · ${candidates.length} 待核准`;
+    }
+    if (pendingPill) {
+      pendingPill.textContent = String(candidates.length);
+      pendingPill.hidden = candidates.length === 0;
+    }
+
+    // 1. Render User Memories
+    if (userList) {
+      if (userItems.length === 0) {
+        userList.innerHTML = '<p class="panel-empty">暂无用户偏好记录。可以在上方输入并记录，或在对话中表达偏好。</p>';
+      } else {
+        userList.innerHTML = userItems.map(item => `
+          <div class="memory-card">
+            <div class="memory-card-body">
+              <div class="memory-card-header">
+                <span class="memory-badge ${item.category}">${item.category === 'preference' ? '文风偏好' : item.category === 'constraint' ? '输出限制' : '事实'}</span>
+                <span class="memory-card-meta">${formatDate(item.created_at, true)}</span>
+              </div>
+              <p class="memory-card-stmt">${escapeHtml(item.statement)}</p>
+            </div>
+            <div class="memory-card-actions">
+              <button type="button" class="memory-card-del" data-id="${item.memory_id}" title="删除该记忆">删除</button>
+            </div>
+          </div>
+        `).join("");
+      }
+    }
+
+    // 2. Render Project Memories
+    if (projList) {
+      if (projItems.length === 0) {
+        projList.innerHTML = '<p class="panel-empty">暂无项目约定记录。输入架构决策或约定后，Agent 将自动遵守。</p>';
+      } else {
+        projList.innerHTML = projItems.map(item => `
+          <div class="memory-card">
+            <div class="memory-card-body">
+              <div class="memory-card-header">
+                <span class="memory-badge ${item.category}">${item.category === 'decision' ? '架构决策' : '项目规约'}</span>
+                <span class="memory-card-meta">${item.target_id} · ${formatDate(item.created_at, true)}</span>
+              </div>
+              <p class="memory-card-stmt">${escapeHtml(item.statement)}</p>
+            </div>
+            <div class="memory-card-actions">
+              <button type="button" class="memory-card-del" data-id="${item.memory_id}" title="删除该约定">删除</button>
+            </div>
+          </div>
+        `).join("");
+      }
+    }
+
+    // 3. Render Pending Candidates (HITL)
+    if (candList) {
+      if (candidates.length === 0) {
+        candList.innerHTML = '<p class="panel-empty">当前没有待核准的记忆候选。对话中表达偏好时会自动识别并呈现在此。</p>';
+      } else {
+        candList.innerHTML = candidates.map(c => `
+          <div class="memory-card">
+            <div class="memory-card-body">
+              <div class="memory-card-header">
+                <span class="memory-badge ${c.category}">候选 · ${c.scope === 'user' ? '用户偏好' : '项目约定'}</span>
+                ${c.conflict_with_memory_id ? '<span class="memory-conflict-alert">检测到潜在语义冲突</span>' : ''}
+                <span class="memory-card-meta">置信度 ${(c.confidence * 100).toFixed(0)}% · ${formatDate(c.created_at, true)}</span>
+              </div>
+              <p class="memory-card-stmt">${escapeHtml(c.statement)}</p>
+            </div>
+            <div class="memory-card-actions">
+              <button type="button" class="memory-btn approve" data-cand-id="${c.candidate_id}">核准记住</button>
+              <button type="button" class="memory-btn reject" data-cand-id="${c.candidate_id}">忽略</button>
+            </div>
+          </div>
+        `).join("");
+      }
+    }
+
+  } catch (err) {
+    if (statsBadge) statsBadge.textContent = "记忆服务离线";
+  }
+}
+
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str || "";
+  return div.innerHTML;
+}
+
+// Memory Actions Delegation
+document.addEventListener("click", async (event) => {
+  // Delete memory
+  const delBtn = event.target.closest(".memory-card-del");
+  if (delBtn && delBtn.dataset.id) {
+    try {
+      await api(`/api/v1/memories/${encodeURIComponent(delBtn.dataset.id)}`, { method: "DELETE" });
+      showToast("已成功删除记忆");
+      await renderMemoryStudio();
+    } catch (e) {
+      showToast(e.message || "删除失败");
+    }
+    return;
+  }
+
+  // Approve candidate
+  const approveBtn = event.target.closest(".memory-btn.approve[data-cand-id]");
+  if (approveBtn) {
+    try {
+      await api(`/api/v1/memories/candidates/${encodeURIComponent(approveBtn.dataset.candId)}/action`, {
+        method: "POST",
+        body: JSON.stringify({ action: "approve" }),
+      });
+      showToast("已核准并持久化至记忆中心");
+      await renderMemoryStudio();
+    } catch (e) {
+      showToast(e.message || "核准失败");
+    }
+    return;
+  }
+
+  // Reject candidate
+  const rejectBtn = event.target.closest(".memory-btn.reject[data-cand-id]");
+  if (rejectBtn) {
+    try {
+      await api(`/api/v1/memories/candidates/${encodeURIComponent(rejectBtn.dataset.candId)}/action`, {
+        method: "POST",
+        body: JSON.stringify({ action: "reject" }),
+      });
+      showToast("已忽略该候选");
+      await renderMemoryStudio();
+    } catch (e) {
+      showToast(e.message || "操作失败");
+    }
+    return;
+  }
+});
+
+// Add user preference button
+const addUserPrefBtn = document.getElementById("add-user-pref-btn");
+const userPrefInput = document.getElementById("new-user-pref-input");
+if (addUserPrefBtn && userPrefInput) {
+  const handleAddPref = async () => {
+    const text = userPrefInput.value.trim();
+    if (!text) return;
+    try {
+      await api("/api/v1/memories", {
+        method: "POST",
+        body: JSON.stringify({
+          scope: "user",
+          target_id: "user_default",
+          category: "preference",
+          statement: text,
+        }),
+      });
+      userPrefInput.value = "";
+      showToast("已成功添加用户偏好记忆");
+      await renderMemoryStudio();
+    } catch (e) {
+      showToast(e.message || "添加失败");
+    }
+  };
+  addUserPrefBtn.addEventListener("click", handleAddPref);
+  userPrefInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleAddPref();
+    }
+  });
+}
+
+// Add project convention button
+const addProjConvBtn = document.getElementById("add-proj-convention-btn");
+const projConvInput = document.getElementById("new-proj-convention-input");
+if (addProjConvBtn && projConvInput) {
+  const handleAddConv = async () => {
+    const text = projConvInput.value.trim();
+    if (!text) return;
+    try {
+      await api("/api/v1/memories", {
+        method: "POST",
+        body: JSON.stringify({
+          scope: "project",
+          target_id: "proj_default",
+          category: "decision",
+          statement: text,
+        }),
+      });
+      projConvInput.value = "";
+      showToast("已成功添加项目约定记忆");
+      await renderMemoryStudio();
+    } catch (e) {
+      showToast(e.message || "添加失败");
+    }
+  };
+  addProjConvBtn.addEventListener("click", handleAddConv);
+  projConvInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleAddConv();
+    }
+  });
+}
+
 async function mount() {
   setBanner("", "");
   errorNode.hidden = true;
@@ -114,7 +362,7 @@ async function mount() {
   } catch (error) {
     setBanner("warn", `配置服务不可用：${error.message}`);
   }
-  await Promise.all([renderChecksSection(), renderBudgetSection()]);
+  await Promise.all([renderChecksSection(), renderBudgetSection(), renderMemoryStudio()]);
 }
 
 async function save(event) {

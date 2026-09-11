@@ -1,0 +1,451 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Scheme 1: Academic Press (牛津深绿 + 暖米纸底 + 学术衬线字体) */
+    /* Canvas: Warm Paper Cream #F7F6F2 */
+    --background: 43 14% 96%;
+    /* Ink: Deep Charcoal Black #181816 */
+    --foreground: 60 4% 10%;
+
+    /* Cards: Crisp White with Warm Hairline Border */
+    --card: 0 0% 100%;
+    --card-foreground: 60 4% 10%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 60 4% 10%;
+
+    /* Oxford Forest Green: #1B4931 -> HSL 149, 46%, 20% */
+    --primary: 149 46% 20%;
+    --primary-foreground: 43 14% 98%;
+
+    /* Secondary warm panels */
+    --secondary: 40 10% 92%;
+    --secondary-foreground: 60 4% 12%;
+
+    /* High contrast academic ink muted text #423F38 */
+    --muted: 40 10% 92%;
+    --muted-foreground: 35 12% 26%;
+
+    --accent: 40 10% 90%;
+    --accent-foreground: 60 4% 10%;
+
+    --destructive: 0 72% 45%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Warm hairline border */
+    --border: 40 10% 86%;
+    --input: 40 10% 84%;
+    --ring: 149 46% 20%;
+
+    /* Contemporary palette for markdown report headings */
+    --report-purple: #8b5cf6;
+    --report-blue: #0ea5e9;
+    --report-cyan: #06b6d4;
+    --report-green: #10b981;
+    --report-coral: #f43f5e;
+    --report-orange: #f97316;
+
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    /* Academic Night: Deep Forest Obsidian */
+    --background: 120 4% 7%;
+    --foreground: 45 10% 94%;
+
+    --card: 120 4% 11%;
+    --card-foreground: 45 10% 94%;
+
+    --popover: 120 4% 11%;
+    --popover-foreground: 45 10% 94%;
+
+    /* Oxford Green in Dark Mode: #2D7A52 -> HSL 149, 46%, 33% */
+    --primary: 149 46% 33%;
+    --primary-foreground: 45 10% 98%;
+
+    --secondary: 120 4% 15%;
+    --secondary-foreground: 45 10% 94%;
+
+    --muted: 120 4% 15%;
+    --muted-foreground: 45 10% 75%;
+
+    --accent: 120 4% 18%;
+    --accent-foreground: 45 10% 94%;
+
+    --destructive: 0 62% 45%;
+    --destructive-foreground: 45 10% 98%;
+
+    --border: 120 4% 18%;
+    --input: 120 4% 20%;
+    --ring: 149 46% 40%;
+
+    /* Contemporary palette for markdown report headings (dark mode) */
+    --report-purple: #a78bfa;
+    --report-blue: #38bdf8;
+    --report-cyan: #22d3ee;
+    --report-green: #34d399;
+    --report-coral: #fb7185;
+    --report-orange: #fb923c;
+  }
+}
+
+@layer base {
+  html {
+    scrollbar-gutter: stable;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  /* Academic Serif Class for titles and reading reports */
+  .font-serif-academic {
+    font-family: "江西拙楷", "JiangXiZhuoKai", "LXGW WenKai", "Charter", "Source Serif 4", "Source Han Serif SC", "思源宋体", "Songti SC", "KaiTi", "SimSun", Georgia, serif;
+    letter-spacing: -0.01em;
+  }
+
+  .font-mono-tabular {
+    font-family: "JetBrains Mono", "SF Mono", "Cascadia Code", Consolas, monospace;
+    font-feature-settings: "tnum" 1;
+  }
+}
+
+/* Custom hairline borders and glassmorphism */
+.glass-panel {
+  backdrop-filter: blur(16px) saturate(160%);
+  background-color: hsla(var(--card) / 0.88);
+}
+
+.hairline-border {
+  border: 1px solid hsla(var(--border) / 0.8);
+}
+
+.top-bevel {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+/* =========================================================
+   Academic Report & Publication Typography System
+   ========================================================= */
+.academic-report {
+  font-family: "江西拙楷", "JiangXiZhuoKai", "LXGW WenKai", "Charter", "Source Serif 4", "Source Han Serif SC", "思源宋体", "Songti SC", "KaiTi", "SimSun", Georgia, serif;
+  color: hsl(var(--foreground));
+  line-height: 1.85;
+}
+
+/* H1: Document / Academic Report Title - Oxford Green */
+.academic-report h1,
+.prose h1 {
+  font-size: 1.65rem;
+  font-weight: 700;
+  color: #1b4931;
+  letter-spacing: -0.015em;
+  line-height: 1.35;
+  margin-top: 1.75rem;
+  margin-bottom: 1.25rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 2px solid #1b4931;
+}
+
+.dark .academic-report h1,
+.dark .prose h1 {
+  color: #6ee7b7;
+  border-bottom-color: #2d7a52;
+}
+
+/* H2: Major Section / Chapter - Regal Purple */
+.academic-report h2,
+.prose h2 {
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: #6d28d9;
+  letter-spacing: -0.01em;
+  line-height: 1.4;
+  margin-top: 2.25rem;
+  margin-bottom: 1rem;
+  padding-left: 0.75rem;
+  border-left: 4px solid #8b5cf6;
+}
+
+.dark .academic-report h2,
+.dark .prose h2 {
+  color: #c4b5fd;
+  border-left-color: #a78bfa;
+}
+
+/* H3: Subsection - Ocean / Sky Blue */
+.academic-report h3,
+.prose h3 {
+  font-size: 1.12rem;
+  font-weight: 650;
+  color: #0369a1;
+  letter-spacing: -0.005em;
+  line-height: 1.45;
+  margin-top: 1.75rem;
+  margin-bottom: 0.75rem;
+  padding-left: 0.65rem;
+  border-left: 3.5px solid #0ea5e9;
+}
+
+.dark .academic-report h3,
+.dark .prose h3 {
+  color: #7dd3fc;
+  border-left-color: #38bdf8;
+}
+
+/* H4: Sub-clause - Deep Teal / Cyan */
+.academic-report h4,
+.prose h4 {
+  font-size: 1.02rem;
+  font-weight: 600;
+  color: #0f766e;
+  letter-spacing: -0.005em;
+  line-height: 1.5;
+  margin-top: 1.35rem;
+  margin-bottom: 0.5rem;
+  padding-left: 0.55rem;
+  border-left: 3px solid #06b6d4;
+}
+
+.dark .academic-report h4,
+.dark .prose h4 {
+  color: #5eead4;
+  border-left-color: #22d3ee;
+}
+
+/* H5: Paragraph Topic - Emerald / Forest Green */
+.academic-report h5,
+.prose h5 {
+  font-size: 0.96rem;
+  font-weight: 600;
+  color: #15803d;
+  letter-spacing: -0.005em;
+  line-height: 1.5;
+  margin-top: 1.25rem;
+  margin-bottom: 0.5rem;
+  padding-left: 0.5rem;
+  border-left: 3px solid #10b981;
+}
+
+.dark .academic-report h5,
+.dark .prose h5 {
+  color: #86efac;
+  border-left-color: #34d399;
+}
+
+/* H6: Minor Remark - Coral / Rose */
+.academic-report h6,
+.prose h6 {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: #be123c;
+  letter-spacing: -0.005em;
+  line-height: 1.5;
+  margin-top: 1.15rem;
+  margin-bottom: 0.4rem;
+  padding-left: 0.5rem;
+  border-left: 3px solid #f43f5e;
+}
+
+.dark .academic-report h6,
+.dark .prose h6 {
+  color: #fda4af;
+  border-left-color: #fb7185;
+}
+
+.academic-report p {
+  font-size: 0.975rem;
+  line-height: 1.85;
+  color: hsl(var(--foreground));
+  margin-bottom: 1rem;
+  letter-spacing: -0.005em;
+}
+
+.academic-report strong,
+.academic-report b {
+  font-weight: 700;
+  color: #133825;
+}
+
+.dark .academic-report strong,
+.dark .academic-report b {
+  color: #a7f3d0;
+}
+
+.academic-report blockquote {
+  margin: 1.25rem 0;
+  padding: 0.875rem 1.25rem;
+  background-color: rgba(27, 73, 49, 0.05);
+  border-left: 4px solid #1b4931;
+  border-radius: 0 0.5rem 0.5rem 0;
+  color: hsl(var(--foreground) / 0.9);
+  font-style: normal;
+}
+
+.dark .academic-report blockquote {
+  background-color: rgba(45, 122, 82, 0.15);
+  border-left-color: #2d7a52;
+}
+
+.academic-report blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+/* Academic Tables (Three-line style / 三线学术表) */
+.academic-report table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.75rem 0;
+  font-size: 0.9rem;
+  border-top: 2px solid #1b4931;
+  border-bottom: 2px solid #1b4931;
+}
+
+.dark .academic-report table {
+  border-top-color: #2d7a52;
+  border-bottom-color: #2d7a52;
+}
+
+.academic-report thead th {
+  background-color: rgba(27, 73, 49, 0.08);
+  color: #1b4931;
+  font-weight: 700;
+  text-align: left;
+  padding: 0.75rem 1rem;
+  border-bottom: 1.5px solid hsl(var(--border));
+}
+
+.dark .academic-report thead th {
+  background-color: rgba(45, 122, 82, 0.2);
+  color: #6ee7b7;
+}
+
+.academic-report tbody td {
+  padding: 0.65rem 1rem;
+  border-bottom: 1px solid hsla(var(--border) / 0.6);
+  color: hsl(var(--foreground));
+  line-height: 1.6;
+}
+
+.academic-report tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.academic-report tbody tr:nth-child(even) {
+  background-color: hsla(var(--muted) / 0.35);
+}
+
+.academic-report ul {
+  list-style-type: disc;
+  padding-left: 1.5rem;
+  margin: 1rem 0;
+}
+
+.academic-report ol {
+  list-style-type: decimal;
+  padding-left: 1.5rem;
+  margin: 1rem 0;
+}
+
+.academic-report li {
+  font-size: 0.95rem;
+  line-height: 1.8;
+  margin-bottom: 0.4rem;
+  color: hsl(var(--foreground));
+}
+
+.academic-report hr {
+  border: none;
+  border-top: 1px dashed hsl(var(--border));
+  margin: 2rem 0;
+}
+
+.academic-report code:not(pre code) {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.85em;
+  padding: 0.15rem 0.4rem;
+  background-color: hsla(var(--muted) / 0.8);
+  border-radius: 0.25rem;
+  border: 1px solid hsla(var(--border) / 0.5);
+  color: #1b4931;
+}
+
+.dark .academic-report code:not(pre code) {
+  color: #6ee7b7;
+}
+
+.academic-report pre {
+  background-color: hsla(var(--muted) / 0.7);
+  padding: 1rem 1.25rem;
+  border-radius: 0.5rem;
+  overflow-x: auto;
+  margin: 1.25rem 0;
+  border: 1px solid hsl(var(--border));
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+/* Citation Pill Badges (e.g. [1], [2][3]) */
+.citation-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: "JetBrains Mono", "SF Mono", monospace;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #1b4931;
+  background-color: rgba(27, 73, 49, 0.1);
+  border: 1px solid rgba(27, 73, 49, 0.25);
+  border-radius: 9999px;
+  padding: 0 5px;
+  margin: 0 2px;
+  line-height: 1.35;
+  text-decoration: none !important;
+  vertical-align: baseline;
+  position: relative;
+  top: -0.15em;
+  transition: all 0.15s ease-in-out;
+  cursor: pointer;
+  user-select: none;
+}
+
+.citation-badge:hover {
+  background-color: #1b4931;
+  color: #ffffff !important;
+  border-color: #1b4931;
+  box-shadow: 0 2px 5px rgba(27, 73, 49, 0.25);
+  transform: translateY(-1px);
+}
+
+.dark .citation-badge {
+  color: #6ee7b7;
+  background-color: rgba(45, 122, 82, 0.2);
+  border-color: rgba(110, 231, 183, 0.3);
+}
+
+.dark .citation-badge:hover {
+  background-color: #2d7a52;
+  color: #ffffff !important;
+  box-shadow: 0 2px 5px rgba(45, 122, 82, 0.4);
+}
+
+/* Targeted Reference Anchor Flash */
+.citation-source-target {
+  scroll-margin-top: 5rem;
+  transition: background-color 0.4s ease;
+  border-radius: 0.375rem;
+}
+
+.citation-source-target:target,
+.citation-source-target.highlight-flash {
+  background-color: rgba(27, 73, 49, 0.15);
+}

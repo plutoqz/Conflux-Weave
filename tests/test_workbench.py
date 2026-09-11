@@ -239,6 +239,13 @@ def test_workbench_ux1_sections_are_local_and_wired(tmp_path) -> None:
     assert "EventSource" in chat
     assert "MODE_INTRO" in chat
     assert "emptyDescription.textContent" in chat
+    assert 'data-mode="auto"' in index
+    assert 'id="chat-autocomplete"' in index
+    assert 'id="settings-memory-section"' in index
+    assert "/api/v1/memories" in settings
+    assert "renderMemoryStudio" in settings
+    assert "chat-route-badge" in chat
+    assert "memory-candidate-bubble" in chat
 
     combined = "".join(module_sources.values())
     assert "http://" not in combined
@@ -453,5 +460,26 @@ def test_workbench_p3_projects_and_code_studio_contracts() -> None:
     for js_src in (index, styles, app_js, router_js, projects_js):
         assert "http://" not in js_src
         assert "https://" not in js_src
+
+
+def test_modern_react_shadcn_workbench_is_packaged_and_zero_cdn(tmp_path) -> None:
+    from pathlib import Path
+    app, _, _ = build_completed_app(tmp_path)
+    modern_endpoint = route(app, "/modern")
+    response = asyncio.run(modern_endpoint())
+    assert response.media_type == "text/html"
+
+    dist_index = Path(response.path)
+    assert dist_index.is_file()
+    html_content = dist_index.read_text(encoding="utf-8")
+
+    assert '<div id="root"></div>' in html_content
+    assert 'src="/assets/' in html_content
+    assert 'href="/assets/' in html_content
+
+    # Strict zero external CDN in modern index HTML
+    assert "http://" not in html_content
+    assert "https://" not in html_content
+
 
 

@@ -102,13 +102,17 @@ def test_w5_server_uses_one_lifespan_worker_and_one_packaged_workbench() -> None
     assert "workers=1" in cli
     assert "EventSourceResponse" not in server
     workbench = PACKAGE_ROOT / "workbench"
-    assert sorted(path.name for path in workbench.iterdir()) == [
+    expected = [
         "THIRD_PARTY_NOTICES.md",
         "app.js",
         "index.html",
         "modules",
         "styles.css",
     ]
+    if (workbench / "dist").is_dir():
+        expected.append("dist")
+        expected.sort()
+    assert sorted(path.name for path in workbench.iterdir()) == expected
     assert "StaticFiles" in server
 
 

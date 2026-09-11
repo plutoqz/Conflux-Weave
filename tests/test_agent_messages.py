@@ -158,11 +158,14 @@ def test_existing_version_five_database_upgrades_without_checksum_changes(tmp_pa
     repo, store = repository(tmp_path)
     original = repo.migration_records()[:5]
     with sqlite3.connect(repo.database_path) as connection:
+        connection.execute("DROP TABLE memory_candidates")
+        connection.execute("DROP TABLE memories")
         connection.execute("DROP TABLE agent_messages")
-        connection.execute("DELETE FROM schema_migrations WHERE version = 6")
+        connection.execute("DELETE FROM schema_migrations WHERE version >= 6")
         connection.execute("PRAGMA user_version = 5")
 
     upgraded = SQLiteRuntimeRepository(repo.database_path, store)
 
     assert upgraded.migration_records()[:5] == original
-    assert upgraded.migration_records()[-1].name == "v03_agent_messages"
+    assert upgraded.migration_records()[5].name == "v03_agent_messages"
+    assert upgraded.migration_records()[-1].name == "v03_hierarchical_memories"

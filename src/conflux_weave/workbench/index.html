@@ -214,8 +214,8 @@
           <main class="chat-main">
           <div id="chat-thread-empty" class="chat-empty">
             <p class="eyebrow">Ask · 01</p>
-            <h1 id="chat-empty-title">直接提问</h1>
-            <p id="chat-empty-description">直接获得模型回答，不检索本地资料，也不附带引用。</p>
+            <h1 id="chat-empty-title">✨ 智能路由 (Auto)</h1>
+            <p id="chat-empty-description">全能自适应：智能识别直接问答、知识库检索、深度综述、单篇精读或项目架构治理。</p>
           </div>
           <div id="chat-thread" class="chat-thread" aria-live="polite"></div>
           <form id="chat-form" class="chat-composer" aria-label="发送问题">
@@ -230,12 +230,16 @@
             <div class="chat-composer-row">
               <div id="chat-mode-select" class="mode-select">
                 <button type="button" id="chat-mode-button" class="mode-select-button" aria-haspopup="listbox" aria-expanded="false" title="选择回答模式">
-                  <span id="chat-mode-label">直接问答</span>
+                  <span id="chat-mode-label">✨ 智能路由</span>
                   <!-- Icon: chevron-up (lucide-static v1.34.0, ISC License) -->
                   <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18 15-6-6-6 6"/></svg>
                 </button>
                 <ul id="chat-mode-list" class="mode-select-list" role="listbox" aria-label="回答模式" hidden>
-                  <li role="option" data-mode="direct" aria-selected="true">
+                  <li role="option" data-mode="auto" aria-selected="true">
+                    <strong>✨ 智能路由</strong>
+                    <span>全能自适应 · 快慢双通道与实体识别</span>
+                  </li>
+                  <li role="option" data-mode="direct" aria-selected="false">
                     <strong>直接问答</strong>
                     <span>模型直接回答 · 无引用（模型知识）</span>
                   </li>
@@ -245,11 +249,26 @@
                   </li>
                   <li role="option" data-mode="deep" aria-selected="false">
                     <strong>深度研究</strong>
-                    <span>核验研究 Run · 完整报告</span>
+                    <span>核验研究 Run · 完整综述报告</span>
+                  </li>
+                  <li role="option" data-mode="document" aria-selected="false">
+                    <strong>文档研读</strong>
+                    <span>单篇文献精读 · 权威笔记提炼</span>
+                  </li>
+                  <li role="option" data-mode="project" aria-selected="false">
+                    <strong>项目认知</strong>
+                    <span>代码架构解构 · 理论映射与健康审计</span>
+                  </li>
+                  <li role="option" data-mode="memory" aria-selected="false">
+                    <strong>记忆中心</strong>
+                    <span>偏好查询 · 项目规约与习惯管理</span>
                   </li>
                 </ul>
               </div>
-              <textarea id="chat-input" name="chat_input" rows="1" maxlength="4000" placeholder="输入你的研究问题，Enter 发送，Shift+Enter 换行" aria-label="输入你的研究问题"></textarea>
+              <div class="chat-input-wrap">
+                <textarea id="chat-input" name="chat_input" rows="1" maxlength="4000" placeholder="输入问题或命令（如 /deep、/doc、@project:...），Enter 发送" aria-label="输入你的研究问题"></textarea>
+                <div id="chat-autocomplete" class="chat-autocomplete" hidden></div>
+              </div>
               <button id="chat-send" class="primary-button" type="submit">发送</button>
             </div>
           </form>
@@ -397,6 +416,48 @@
               </div>
             </div>
             <div id="settings-checks" class="check-list"></div>
+          </section>
+
+          <section class="settings-section" id="settings-memory-section">
+            <div class="section-heading">
+              <div>
+                <span class="eyebrow">Memory Studio</span>
+                <h2>分层记忆中心</h2>
+              </div>
+              <span id="memory-stats-badge" class="count-label">正在同步…</span>
+            </div>
+
+            <div class="memory-tabs" role="tablist">
+              <button type="button" class="memory-tab active" id="mem-tab-user" role="tab" aria-selected="true" aria-controls="mem-panel-user">用户全局偏好</button>
+              <button type="button" class="memory-tab" id="mem-tab-project" role="tab" aria-selected="false" aria-controls="mem-panel-project">项目技术约定</button>
+              <button type="button" class="memory-tab" id="mem-tab-candidates" role="tab" aria-selected="false" aria-controls="mem-panel-candidates">待核准候选 <span id="mem-pending-pill" class="pill-badge" hidden>0</span></button>
+            </div>
+
+            <!-- Panel 1: User Memories -->
+            <div id="mem-panel-user" class="memory-panel" role="tabpanel" aria-labelledby="mem-tab-user">
+              <div class="memory-toolbar">
+                <input id="new-user-pref-input" class="memory-add-input" type="text" placeholder="输入文风偏好或全局输出习惯（例如：回答严谨客观，尽量使用中文学术术语）" />
+                <button id="add-user-pref-btn" class="primary-button" type="button">记录偏好</button>
+              </div>
+              <div id="user-memory-list" class="memory-card-list"></div>
+            </div>
+
+            <!-- Panel 2: Project Conventions -->
+            <div id="mem-panel-project" class="memory-panel" role="tabpanel" aria-labelledby="mem-tab-project" hidden>
+              <div class="memory-toolbar">
+                <input id="new-proj-convention-input" class="memory-add-input" type="text" placeholder="输入当前项目的技术约定或架构决策（例如：统一采用 RRF 倒数排序融合机制）" />
+                <button id="add-proj-convention-btn" class="primary-button" type="button">记录约定</button>
+              </div>
+              <div id="project-memory-list" class="memory-card-list"></div>
+            </div>
+
+            <!-- Panel 3: Pending Candidates (HITL) -->
+            <div id="mem-panel-candidates" class="memory-panel" role="tabpanel" aria-labelledby="mem-tab-candidates" hidden>
+              <div class="memory-candidates-header">
+                <p class="field-hint">以下为对话交互过程中自动提炼的原子化偏好候选，需您显式核准方可持久化生效，严防暗中污染知识底座。</p>
+              </div>
+              <div id="candidate-memory-list" class="memory-card-list"></div>
+            </div>
           </section>
 
           <section class="settings-section">

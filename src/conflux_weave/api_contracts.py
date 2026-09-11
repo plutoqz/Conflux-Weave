@@ -82,7 +82,22 @@ class FixtureResearchTaskRequest(_ApiModel):
 class ChatMessageRequest(_ApiModel):
     question: str = Field(min_length=1, max_length=8_000)
     conversation_id: str | None = Field(default=None, max_length=64)
-    mode: Literal["direct", "rag"] = "direct"
+    mode: Literal["auto", "direct", "rag", "deep", "document", "project"] = "direct"
+
+
+class RouterRequest(_ApiModel):
+    query: str = Field(min_length=1, max_length=8_000)
+    current_mode: str = "auto"
+    conversation_id: str | None = Field(default=None, max_length=64)
+
+
+class RouterResultResponse(_ApiModel):
+    target_mode: str
+    is_fast_path: bool
+    confidence: float
+    intent_summary: str
+    extracted_entities: dict[str, str] = Field(default_factory=dict)
+    suggested_run_kind: str | None = None
 
 
 class ConversationSummary(_ApiModel):
@@ -135,13 +150,18 @@ class ChatMessageRecord(_ApiModel):
 
 
 class ChatAnswerResponse(ChatMessageRecord):
-    provider_response_id: str
+    provider_response_id: str = ""
     citations: tuple[ChatCitationRecord, ...] = ()
-    # 证据基准标记：direct = 模型知识（无证据），rag = 检索聚合（未经核验）。
-    verification: Literal["model-knowledge", "unverified-aggregation"]
+    # 证据基准标记：direct = 模型知识（无证据），rag = 检索聚合（未经核验），durable-run-dispatched = 慢通道持久化 Run
+    verification: Literal["model-knowledge", "unverified-aggregation", "durable-run-dispatched"] = "model-knowledge"
     checks: ChatAnswerChecks | None = None
     # 阶段级耗时（毫秒）；保留在 API 响应中供性能诊断使用。
     timings_ms: dict[str, int] = Field(default_factory=dict)
+    routed_mode: str | None = None
+    is_fast_path: bool = True
+    intent_summary: str | None = None
+    run_id: str | None = None
+    memory_candidates: tuple[dict[str, Any], ...] = ()
 
 
 class ChatHistoryResponse(_ApiModel):
@@ -442,6 +462,56 @@ class ProjectAuditReportResponse(_ApiModel):
     findings: tuple[AuditFindingItem, ...] = ()
     checked_rules: tuple[str, ...] = ()
     created_at: str
+
+
+class MemoryItemResponse(_ApiModel):
+    memory_id: str
+    scope: Literal["session", "project", "user"]
+    target_id: str
+    category: Literal["preference", "fact", "constraint", "decision"]
+    statement: str
+    confidence: float
+    status: Literal["active", "archived"]
+    source_type: str
+    source_id: str
+    created_at: str
+    updated_at: str
+
+
+class MemoryListResponse(_ApiModel):
+    items: tuple[MemoryItemResponse, ...] = ()
+    total: int = 0
+
+
+class MemoryCandidateResponse(_ApiModel):
+    candidate_id: str
+    scope: Literal["session", "project", "user"]
+    target_id: str
+    category: Literal["preference", "fact", "constraint", "decision"]
+    statement: str
+    confidence: float
+    conflict_with_memory_id: str | None = None
+    status: Literal["pending", "approved", "rejected"]
+    source_type: str
+    source_id: str
+    created_at: str
+
+
+class MemoryCandidateListResponse(_ApiModel):
+    items: tuple[MemoryCandidateResponse, ...] = ()
+    total: int = 0
+
+
+class CreateMemoryRequest(_ApiModel):
+    scope: Literal["session", "project", "user"] = "user"
+    target_id: str = Field(min_length=1, max_length=120)
+    category: Literal["preference", "fact", "constraint", "decision"] = "preference"
+    statement: str = Field(min_length=1, max_length=1000)
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+
+
+class MemoryCandidateActionRequest(_ApiModel):
+    action: Literal["approve", "reject"]
 
 
 class RunPageResponse(_ApiModel):
@@ -1185,6 +1255,14 @@ __all__ = [
     "ArchitectureWalkthroughResponse",
     "AuditFindingItem",
     "ProjectAuditReportResponse",
+    "MemoryItemResponse",
+    "MemoryListResponse",
+    "MemoryCandidateResponse",
+    "MemoryCandidateListResponse",
+    "CreateMemoryRequest",
+    "MemoryCandidateActionRequest",
+    "RouterRequest",
+    "RouterResultResponse",
     "decode_run_cursor",
     "encode_run_cursor",
     "map_exception",

@@ -373,4 +373,48 @@ _MIGRATIONS = (
             """,
         ),
     ),
+    _Migration(
+        version=7,
+        name="v03_hierarchical_memories",
+        statements=(
+            """
+            CREATE TABLE memories (
+                memory_id TEXT PRIMARY KEY,
+                scope TEXT NOT NULL CHECK (scope IN ('session', 'project', 'user')),
+                target_id TEXT NOT NULL,
+                category TEXT NOT NULL CHECK (category IN ('preference', 'fact', 'constraint', 'decision')),
+                statement TEXT NOT NULL,
+                confidence REAL NOT NULL DEFAULT 1.0,
+                status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
+                source_type TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE INDEX idx_memories_lookup
+            ON memories(scope, target_id, status, category)
+            """,
+            """
+            CREATE TABLE memory_candidates (
+                candidate_id TEXT PRIMARY KEY,
+                scope TEXT NOT NULL CHECK (scope IN ('session', 'project', 'user')),
+                target_id TEXT NOT NULL,
+                category TEXT NOT NULL CHECK (category IN ('preference', 'fact', 'constraint', 'decision')),
+                statement TEXT NOT NULL,
+                confidence REAL NOT NULL DEFAULT 0.8,
+                conflict_with_memory_id TEXT REFERENCES memories(memory_id) ON DELETE SET NULL,
+                status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+                source_type TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE INDEX idx_memory_candidates_status
+            ON memory_candidates(status, scope, target_id)
+            """,
+        ),
+    ),
 )

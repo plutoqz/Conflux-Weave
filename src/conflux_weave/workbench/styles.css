@@ -1402,6 +1402,11 @@ textarea:focus-visible,
 .chat-conversation-mode { justify-self: start; padding: 1px 6px; border: 1px solid var(--rule); border-radius: var(--radius-sm); color: var(--muted); font-size: 10px; line-height: 1.35; white-space: nowrap; }
 .chat-conversation-mode.rag { border-color: color-mix(in srgb, var(--seance) 40%, var(--rule)); color: var(--seance); }
 .chat-conversation-mode.direct { border-color: color-mix(in srgb, var(--moss) 40%, var(--rule)); color: var(--moss-deep); }
+.chat-conversation-mode.auto { border-color: color-mix(in srgb, var(--ember, #ea580c) 40%, var(--rule)); color: var(--ember, #ea580c); }
+.chat-conversation-mode.deep { border-color: color-mix(in srgb, #8b5cf6 40%, var(--rule)); color: #7c3aed; }
+.chat-conversation-mode.memory { border-color: color-mix(in srgb, #06b6d4 40%, var(--rule)); color: #0891b2; }
+.chat-conversation-mode.project { border-color: color-mix(in srgb, #f59e0b 40%, var(--rule)); color: #d97706; }
+.chat-conversation-mode.document { border-color: color-mix(in srgb, #ec4899 40%, var(--rule)); color: #db2777; }
 .chat-conversation-count { align-self: center; color: var(--muted); font-size: 10px; white-space: nowrap; }
 .chat-turn-nav { position: sticky; top: 68px; align-self: start; max-height: calc(100vh - 68px); padding: 38px 18px; overflow-y: auto; }
 .chat-turn-nav nav { display: grid; gap: 4px; margin-top: 12px; border-left: 1px solid var(--rule); }
@@ -1469,6 +1474,126 @@ textarea:focus-visible,
 }
 .chat-follow-chip .icon-button { width: 26px; height: 26px; flex: 0 0 26px; }
 .chat-follow-chip .icon { width: 10px; height: 10px; }
+
+.chat-input-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+}
+.chat-input-wrap textarea {
+  width: 100%;
+}
+.chat-autocomplete {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--chalk);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  z-index: 100;
+  padding: 6px 0;
+}
+.chat-autocomplete-item {
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.15s ease;
+}
+.chat-autocomplete-item:hover, .chat-autocomplete-item.active {
+  background: color-mix(in srgb, var(--moss) 12%, var(--chalk));
+}
+.chat-autocomplete-tag {
+  font-size: 11px;
+  font-family: var(--mono);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--moss) 15%, transparent);
+  color: var(--moss-deep);
+}
+
+/* Route Badge in Chat Messages */
+.chat-route-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  color: var(--ink);
+  margin-bottom: 6px;
+}
+.chat-route-badge.direct { background: rgba(59, 130, 246, 0.12); color: #2563eb; }
+.chat-route-badge.rag { background: rgba(16, 185, 129, 0.12); color: #059669; }
+.chat-route-badge.deep { background: rgba(139, 92, 246, 0.15); color: #7c3aed; }
+.chat-route-badge.document { background: rgba(245, 158, 11, 0.15); color: #d97706; }
+.chat-route-badge.project { background: rgba(6, 182, 212, 0.15); color: #0891b2; }
+.chat-route-badge.memory { background: rgba(236, 72, 153, 0.15); color: #db2777; }
+
+/* HITL Memory Candidate Bubble */
+.memory-candidate-bubble {
+  margin-top: 10px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--moss) 35%, var(--rule));
+  background: color-mix(in srgb, var(--moss) 6%, var(--chalk));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  animation: fadeInBubble 0.2s ease-out;
+}
+@keyframes fadeInBubble {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.memory-candidate-text {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--ink);
+}
+.memory-candidate-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.memory-btn {
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  font-weight: 550;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.15s ease;
+}
+.memory-btn.approve {
+  background: var(--moss);
+  color: #fff;
+  border-color: var(--moss);
+}
+.memory-btn.approve:hover {
+  background: var(--moss-deep);
+}
+.memory-btn.reject {
+  background: transparent;
+  color: var(--muted);
+  border-color: var(--rule);
+}
+.memory-btn.reject:hover {
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+  color: var(--ink);
+}
 
 /* ---------- Settings（UX-1 设置） ---------- */
 
@@ -1541,6 +1666,127 @@ textarea:focus-visible,
   font-size: 11px;
 }
 .settings-note { margin: 14px 0 0; color: var(--muted); font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+
+/* Memory Studio Styles */
+.memory-tabs {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 2px;
+}
+.memory-tab {
+  background: transparent;
+  border: none;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.memory-tab.active {
+  color: var(--moss-deep);
+  border-bottom-color: var(--moss);
+}
+.pill-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  font-size: 10px;
+  border-radius: 999px;
+  background: var(--ochre);
+  color: #fff;
+}
+.memory-panel {
+  margin-top: 18px;
+}
+.memory-toolbar {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.memory-add-input {
+  flex: 1 1 auto;
+}
+.memory-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.memory-card {
+  padding: 12px 16px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  background: var(--chalk);
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  transition: border-color 0.15s ease;
+}
+.memory-card:hover {
+  border-color: color-mix(in srgb, var(--moss) 40%, var(--rule));
+}
+.memory-card-body {
+  flex: 1 1 auto;
+}
+.memory-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.memory-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+}
+.memory-badge.preference { background: rgba(59, 130, 246, 0.12); color: #2563eb; }
+.memory-badge.fact { background: rgba(16, 185, 129, 0.12); color: #059669; }
+.memory-badge.constraint { background: rgba(245, 158, 11, 0.15); color: #d97706; }
+.memory-badge.decision { background: rgba(139, 92, 246, 0.15); color: #7c3aed; }
+.memory-badge.convention { background: rgba(14, 165, 233, 0.12); color: #0284c7; }
+.memory-conflict-alert {
+  font-size: 11px;
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+.memory-card-stmt {
+  font-size: 13.5px;
+  color: var(--ink);
+  line-height: 1.5;
+  margin: 0;
+}
+.memory-card-meta {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.memory-card-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.memory-card-del {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+}
+.memory-card-del:hover {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.08);
+}
 
 /* ---------- Run view ---------- */
 
@@ -4683,5 +4929,25 @@ textarea:hover, input:hover { border-color: var(--muted); }
   padding: 3px 8px;
 }
 
-
-
+/* --- Mobile Responsive Enhancements --- */
+@media (max-width: 640px) {
+  .memory-toolbar {
+    flex-direction: column;
+  }
+  .memory-card {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .memory-card-actions {
+    justify-content: flex-end;
+  }
+  .memory-candidate-bubble {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .memory-candidate-actions {
+    justify-content: flex-end;
+  }
+}

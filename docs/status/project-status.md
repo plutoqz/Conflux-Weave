@@ -10,6 +10,7 @@ Updated: 2026-08-26
 | Existing live capability | `bounded_retrieval_evidence` | Historical qwen3.7flash arXiv/GitHub runs; not full RAG or multi-Agent proof |
 | v0.3 S0/P0 plan | `implemented_and_validated_offline` | S0.0-S0.5 are committed; current work continues on `codex/v0.3-s0-harness` and is pushed to `origin/main` at phase checkpoints |
 | v0.3 S1 | `implemented_partial_live_acceptance_failed` | S1.0-S1.5-B mechanisms exist; the frozen S1.5-C first live matrix was executed but rejected after manual support, coverage and abstention review |
+| v0.3 P4 统一对话路由与分层记忆中心 | `implemented_and_validated_offline` | P4.0-P4.4 全面落地并通过离线全量回归（571 passed）：SQLite Migration v7、HierarchicalMemoryStore、两阶段 ConversationRouter、MemoryAgent、Omnibox 智能补全与 HITL 记忆候选气泡、Settings Memory Studio |
 
 The v0.2 W0-W5 plans are no longer active gates. Their implementation and
 validation evidence remains available at `docs/plans/deprecated/v0.2/`; the
@@ -527,4 +528,20 @@ P2.0 ~ P2.3 多模态 RAG 核心技术闭环已全链路打通并完成基准评
 | 纯原生三栏演播室 (P3 Studio) | `implemented_and_validated` | 满足零外部 CDN、100% 本地离线契约；左栏工程/Git/文件树、中栏四合一研读台（架构拓扑/理论映射/契约审计/带行号源码）、右栏 ProjectAgent 问答与 CodingAgent 补丁抽屉。 |
 
 截至本节更新，项目完整离线回归测试为 `555 passed, 2 warnings in 110.39s`。
+
+## P4 统一对话路由与分层记忆中心（2026-09-10）
+
+按照《Conflux-Weave 设计文档 v0.3》规范与用户指令，已完成 P4 细化实施方案编制（`docs/plans/current/v0.3-P4-统一对话路由与分层记忆中心-细化实施方案.md`），明确快慢双通道解耦与 Session / Project / User 三层记忆拓扑架构，确立 SQLite Migration v7、人在回路（HITL）物理核准与 L0/L1 紧凑上下文控额红线：
+
+| 模块 | 当前状态 | 证据边界 |
+| --- | --- | --- |
+| P4.0 细化方案与架构契约 | `implemented_and_frozen` | 形成四大支柱规约、SQLite Migration v7、REST API 与前端 Omnibox 演播室方案； |
+| P4.1 分层记忆存储与引擎 | `implemented_and_validated_offline` | SQLite Migration v7、`HierarchicalMemoryStore`、`MemoryAgent` 启发式与模型候选提取、冲突判定、HITL 显式核准端点与单元测试全量通过； |
+| P4.2 统一对话路由引擎 | `implemented_and_validated_offline` | 实现 `ConversationRouter`、两阶段意图分类（确定性规则匹配 + 语义分类）、Fast/Slow 双通道分流与降级； |
+| P4.3 Agent 记忆注入闭环 | `implemented_and_validated_offline` | 实现角色感知注入、L0/L1 紧凑预算硬上限（≤400 token）、偏好一致性对齐与真实多轮对话端到端验证； |
+| P4.4 Workbench 前端演播室与现代 React UI | `implemented_and_validated_browser_and_regression` | 全能 Omnibox 输入窗、路由意图状态徽标、记忆候选气泡、Settings 记忆中心，以及打包零外部 CDN 的现代化 React 前端（`web/` -> `dist/`）。 |
+
+截至本节更新，项目完整离线回归测试为 `577 passed, 3 warnings`。P4.0-P4.4 全链路闭环，下一唯一验收点为 P5 Skill 与 MCP 增强方案编制。
+
+
 
