@@ -16,6 +16,7 @@ import "./modules/library.js?v=v0.3-library-ux-3";
 import "./modules/settings.js";
 import "./modules/notes.js";
 import "./modules/projects.js";
+import "./modules/skills.js";
 import { createSparkbar } from "./modules/charts.js";
 
 const state = {

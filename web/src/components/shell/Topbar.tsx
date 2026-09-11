@@ -10,6 +10,7 @@ const navItems: Array<{ id: SectionType; label: string }> = [
   { id: "research", label: "研究" },
   { id: "library", label: "资料库" },
   { id: "projects", label: "项目" },
+  { id: "skills", label: "技能" },
   { id: "settings", label: "设置" },
 ];
 

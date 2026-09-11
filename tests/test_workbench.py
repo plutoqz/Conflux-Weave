@@ -482,4 +482,49 @@ def test_modern_react_shadcn_workbench_is_packaged_and_zero_cdn(tmp_path) -> Non
     assert "https://" not in html_content
 
 
+def test_workbench_p5_skills_studio_and_mcp_gateway_contracts() -> None:
+    from pathlib import Path
+
+    root = Path(__file__).parents[1] / "src" / "conflux_weave" / "workbench"
+    index = (root / "index.html").read_text(encoding="utf-8")
+    styles = (root / "styles.css").read_text(encoding="utf-8")
+    app_js = (root / "app.js").read_text(encoding="utf-8")
+    router_js = (root / "modules" / "router.js").read_text(encoding="utf-8")
+    skills_js = (root / "modules" / "skills.js").read_text(encoding="utf-8")
+    settings_js = (root / "modules" / "settings.js").read_text(encoding="utf-8")
+
+    # Verify DOM elements in index.html
+    assert 'data-section-link="skills"' in index
+    assert 'id="skills-view"' in index
+    assert 'id="skills-card-grid"' in index
+    assert 'id="skill-runner-modal"' in index
+    assert 'id="skill-modal-title"' in index
+    assert 'id="skill-modal-form"' in index
+    assert 'id="skill-modal-submit-btn"' in index
+    assert 'id="settings-mcp-section"' in index
+    assert 'id="mcp-servers-list"' in index
+    assert 'id="mcp-register-dialog"' in index
+    assert 'id="mcp-config-snippet"' in index
+
+    # Verify CSS rules in styles.css
+    assert ".skills-view" in styles
+    assert ".skills-card-grid" in styles
+    assert ".skill-card-item" in styles
+    assert ".skill-runner-dialog" in styles
+    assert ".mcp-server-card" in styles
+    assert ".mcp-export-card" in styles
+
+    # Verify router & module wiring
+    assert 'skills: "skills-view"' in router_js
+    assert 'import "./modules/skills.js"' in app_js
+    assert "/api/v1/skills" in skills_js
+    assert "/api/v1/mcp/servers" in settings_js
+
+    # Verify zero external CDN
+    for js_src in (index, styles, app_js, router_js, skills_js, settings_js):
+        assert "http://" not in js_src
+        assert "https://" not in js_src
+
+
+
 

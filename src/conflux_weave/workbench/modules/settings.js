@@ -347,6 +347,193 @@ if (addProjConvBtn && projConvInput) {
   });
 }
 
+/* ---------- MCP 工具网关 (MCP Gateway) ---------- */
+
+let mcpInitialized = false;
+
+function getMcpSnippets() {
+  const origin = (typeof window !== "undefined" && window.location?.origin) ? window.location.origin : "";
+  return {
+    sse: JSON.stringify({
+      mcpServers: {
+        "conflux-weave": {
+          url: origin ? `${origin}/api/v1/mcp/sse` : "/api/v1/mcp/sse",
+        },
+      },
+    }, null, 2),
+    stdio: JSON.stringify({
+      mcpServers: {
+        "conflux-weave": {
+          command: "conflux-weave",
+          args: ["mcp-serve"],
+        },
+      },
+    }, null, 2),
+  };
+}
+
+async function renderMcpGateway() {
+  const container = document.getElementById("mcp-servers-list");
+  if (!container) return;
+
+  initMcpEvents();
+  renderMcpSnippets("sse");
+
+  try {
+    const res = await api("/api/v1/mcp/servers");
+    const servers = res.items || [];
+    if (servers.length === 0) {
+      container.innerHTML = `<p class="panel-empty">暂未接入外部 MCP Server。点击上方按钮可接入本地 stdio 或远程 sse 工具服务。</p>`;
+      return;
+    }
+
+    container.innerHTML = servers.map((s) => `
+      <div class="mcp-server-card" data-server-id="${s.server_id}">
+        <div class="mcp-server-info">
+          <div class="mcp-server-head">
+            <strong>${s.name}</strong>
+            <span class="mcp-transport-badge">${s.transport}</span>
+            <span class="count-label">${s.status || 'connected'}</span>
+          </div>
+          <div class="mcp-server-meta">
+            ${s.transport === 'stdio' ? `命令: <code>${s.command || ''} ${(s.args || []).join(" ")}</code>` : `端点: <code>${s.url || ''}</code>`}
+          </div>
+          <div class="mcp-server-tools">
+            ${(s.tools || []).map((t) => `<span class="mcp-tool-pill" title="${t.description || ''}">${t.name}</span>`).join("") || '<span class="field-hint">未发现工具</span>'}
+          </div>
+        </div>
+        <div class="mcp-server-actions">
+          <button type="button" class="quiet-button small-btn mcp-sync-btn" data-id="${s.server_id}">同步工具</button>
+          <button type="button" class="danger-button small-btn mcp-del-btn" data-id="${s.server_id}">移除</button>
+        </div>
+      </div>
+    `).join("");
+
+    container.querySelectorAll(".mcp-sync-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = btn.dataset.id;
+        btn.disabled = true;
+        btn.textContent = "同步中...";
+        try {
+          await api(`/api/v1/mcp/servers/${encodeURIComponent(id)}/sync`, { method: "POST" });
+          showToast(`Server ${id} 工具同步成功！`, "success");
+          renderMcpGateway();
+        } catch (err) {
+          showToast(`工具同步失败: ${err.message}`, "error");
+          btn.disabled = false;
+          btn.textContent = "同步工具";
+        }
+      });
+    });
+
+    container.querySelectorAll(".mcp-del-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = btn.dataset.id;
+        if (!confirm(`确定移除 MCP Server ${id} 吗？`)) return;
+        try {
+          await api(`/api/v1/mcp/servers/${encodeURIComponent(id)}`, { method: "DELETE" });
+          showToast(`已移除 MCP Server ${id}`, "success");
+          renderMcpGateway();
+        } catch (err) {
+          showToast(`移除失败: ${err.message}`, "error");
+        }
+      });
+    });
+  } catch (err) {
+    container.innerHTML = `<p class="panel-empty" style="color: var(--terra);">加载 MCP 服务列表失败: ${err.message}</p>`;
+  }
+}
+
+function renderMcpSnippets(tab) {
+  const snippet = document.getElementById("mcp-config-snippet");
+  if (snippet) snippet.textContent = getMcpSnippets()[tab] || "";
+  const tabSse = document.getElementById("mcp-tab-sse");
+  const tabStdio = document.getElementById("mcp-tab-stdio");
+  if (tabSse && tabStdio) {
+    tabSse.classList.toggle("active", tab === "sse");
+    tabStdio.classList.toggle("active", tab === "stdio");
+  }
+}
+
+function initMcpEvents() {
+  if (mcpInitialized) return;
+  mcpInitialized = true;
+
+  const tabSse = document.getElementById("mcp-tab-sse");
+  const tabStdio = document.getElementById("mcp-tab-stdio");
+  tabSse?.addEventListener("click", () => renderMcpSnippets("sse"));
+  tabStdio?.addEventListener("click", () => renderMcpSnippets("stdio"));
+
+  const addBtn = document.getElementById("mcp-add-server-btn");
+  const dialog = document.getElementById("mcp-register-dialog");
+  const closeBtn = document.getElementById("mcp-register-close");
+  const cancelBtn = document.getElementById("reg-mcp-cancel");
+  const form = document.getElementById("mcp-register-form");
+  const transportSelect = document.getElementById("reg-mcp-transport");
+  const stdioFields = document.getElementById("mcp-stdio-fields");
+  const sseFields = document.getElementById("mcp-sse-fields");
+  const errorP = document.getElementById("reg-mcp-error");
+
+  const closeDialog = () => {
+    if (!dialog) return;
+    if (typeof dialog.close === "function") dialog.close();
+    else dialog.hidden = true;
+    form?.reset();
+    if (errorP) errorP.hidden = true;
+  };
+
+  addBtn?.addEventListener("click", () => {
+    if (!dialog) return;
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.hidden = false;
+  });
+
+  closeBtn?.addEventListener("click", closeDialog);
+  cancelBtn?.addEventListener("click", closeDialog);
+
+  transportSelect?.addEventListener("change", (e) => {
+    const val = e.target.value;
+    if (stdioFields) stdioFields.hidden = val !== "stdio";
+    if (sseFields) sseFields.hidden = val !== "sse";
+  });
+
+  form?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (errorP) errorP.hidden = true;
+
+    const server_id = document.getElementById("reg-mcp-id")?.value.trim();
+    const name = document.getElementById("reg-mcp-name")?.value.trim();
+    const transport = transportSelect?.value || "stdio";
+    const command = document.getElementById("reg-mcp-command")?.value.trim();
+    const argsRaw = document.getElementById("reg-mcp-args")?.value.trim();
+    const url = document.getElementById("reg-mcp-url")?.value.trim();
+
+    const payload = {
+      server_id,
+      name,
+      transport,
+      command: transport === "stdio" ? command : undefined,
+      args: transport === "stdio" && argsRaw ? argsRaw.split(/\s+/).filter(Boolean) : undefined,
+      url: transport === "sse" ? url : undefined,
+    };
+
+    try {
+      await api("/api/v1/mcp/servers", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      showToast(`成功接入 MCP Server: ${name}`, "success");
+      closeDialog();
+      renderMcpGateway();
+    } catch (err) {
+      if (errorP) {
+        errorP.textContent = err.message || "注册失败";
+        errorP.hidden = false;
+      }
+    }
+  });
+}
+
 async function mount() {
   setBanner("", "");
   errorNode.hidden = true;
@@ -362,7 +549,7 @@ async function mount() {
   } catch (error) {
     setBanner("warn", `配置服务不可用：${error.message}`);
   }
-  await Promise.all([renderChecksSection(), renderBudgetSection(), renderMemoryStudio()]);
+  await Promise.all([renderChecksSection(), renderBudgetSection(), renderMemoryStudio(), renderMcpGateway()]);
 }
 
 async function save(event) {

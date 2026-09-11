@@ -8,6 +8,12 @@ import type {
   PaperItem,
   ProjectSummary,
   DocumentNote,
+  SkillSummary,
+  SkillDetail,
+  SkillExecuteResult,
+  MCPServer,
+  DAGExecutionPlan,
+  AgentEvent,
 } from "@/types/workbench";
 
 const API_BASE = "";
@@ -118,4 +124,39 @@ export const api = {
     request<any>(`/api/v1/projects/${projectId}/coding/propose`, { method: "POST", body: JSON.stringify({ prompt }) }),
   applyProjectCoding: (projectId: string, proposalId: string) =>
     request<any>(`/api/v1/projects/${projectId}/coding/apply`, { method: "POST", body: JSON.stringify({ proposal_id: proposalId }) }),
+
+  // Skills Studio (P5.1)
+  getSkills: () => request<{ items: SkillSummary[]; count: number }>("/api/v1/skills"),
+  getSkill: (skillId: string) => request<SkillDetail>(`/api/v1/skills/${encodeURIComponent(skillId)}`),
+  executeSkill: (skillId: string, inputs: Record<string, any>) =>
+    request<SkillExecuteResult>(`/api/v1/skills/${encodeURIComponent(skillId)}/execute`, {
+      method: "POST",
+      body: JSON.stringify({ inputs }),
+    }),
+
+  // MCP Gateway (P5.2 / P5.3)
+  getMcpServers: () => request<{ items: MCPServer[]; count: number }>("/api/v1/mcp/servers"),
+  registerMcpServer: (data: Partial<MCPServer>) =>
+    request<MCPServer>("/api/v1/mcp/servers", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  deleteMcpServer: (serverId: string) =>
+    request<any>(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}`, { method: "DELETE" }),
+  syncMcpServer: (serverId: string) =>
+    request<MCPServer>(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}/sync`, { method: "POST" }),
+
+  // DAG & Multi-Agent Orchestration (P5.4)
+  validateDagPlan: (data: { objective: string; tasks: any[] }) =>
+    request<{ valid: boolean; execution_order: string[][]; errors: string[] }>("/api/v1/dag/plans/validate", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  executeDagPlan: (data: { objective: string; tasks: any[]; run_id?: string }) =>
+    request<DAGExecutionPlan>("/api/v1/dag/plans/execute", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  getAgentEvents: (runId: string) =>
+    request<{ items: AgentEvent[]; count: number }>(`/api/v1/runs/${encodeURIComponent(runId)}/agent-events`),
 };

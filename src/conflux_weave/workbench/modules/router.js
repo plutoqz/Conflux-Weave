@@ -9,6 +9,7 @@ const SECTION_IDS = {
   chat: "chat-view",
   library: "library-view",
   projects: "projects-view",
+  skills: "skills-view",
   settings: "settings-view",
 };
 

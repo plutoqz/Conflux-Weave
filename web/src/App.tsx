@@ -9,6 +9,7 @@ import { ChatView } from "@/modules/chat/ChatView";
 import { ResearchView } from "@/modules/research/ResearchView";
 import { LibraryView } from "@/modules/library/LibraryView";
 import { ProjectsView } from "@/modules/projects/ProjectsView";
+import { SkillsView } from "@/modules/skills/SkillsView";
 import { SettingsView } from "@/modules/settings/SettingsView";
 import { useWorkbenchStore } from "@/stores/useWorkbenchStore";
 import { api } from "@/services/api";
@@ -25,7 +26,7 @@ export const App: React.FC = () => {
       const rawHash = window.location.hash.replace(/^#\/?/, "");
       const [sectionPart, queryPart] = rawHash.split("?");
       if (
-        ["overview", "chat", "research", "library", "projects", "settings"].includes(sectionPart)
+        ["overview", "chat", "research", "library", "projects", "skills", "settings"].includes(sectionPart)
       ) {
         setSection(sectionPart as SectionType);
       }
@@ -68,6 +69,7 @@ export const App: React.FC = () => {
           {section === "research" && <ResearchView />}
           {section === "library" && <LibraryView onOpenNote={handleOpenNote} />}
           {section === "projects" && <ProjectsView />}
+          {section === "skills" && <SkillsView />}
           {section === "settings" && <SettingsView />}
         </main>
       </div>

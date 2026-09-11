@@ -4,6 +4,7 @@ export type SectionType =
   | "research"
   | "library"
   | "projects"
+  | "skills"
   | "settings";
 
 export type RunStatus =
@@ -167,3 +168,95 @@ export interface DocumentNote {
   created_at: string;
   revisions?: Array<{ note_id?: string; revision_id?: string; version: number; instruction?: string; created_at: string }>;
 }
+
+export interface SkillSummary {
+  skill_id: string;
+  name: string;
+  category: "academic" | "engineering" | "writing" | "custom";
+  description: string;
+  author: string;
+  version: string;
+  required_tools: string[];
+  default_budget: {
+    max_tokens: number;
+    timeout_seconds: number;
+  };
+  created_at: string;
+}
+
+export interface SkillDetail extends SkillSummary {
+  input_schema: {
+    type: string;
+    properties?: Record<string, any>;
+    required?: string[];
+  };
+  output_schema: {
+    type: string;
+    properties?: Record<string, any>;
+    required?: string[];
+  };
+}
+
+export interface SkillExecuteResult {
+  run_id: string;
+  skill_id: string;
+  status: "success" | "failed";
+  content: string;
+  tokens_consumed: number;
+  elapsed_seconds: number;
+  error_message?: string | null;
+}
+
+export interface MCPTool {
+  name: string;
+  description: string;
+  parameters: Record<string, any>;
+}
+
+export interface MCPServer {
+  server_id: string;
+  name: string;
+  transport: "stdio" | "sse";
+  command?: string | null;
+  args?: string[] | null;
+  url?: string | null;
+  headers?: Record<string, string> | null;
+  status: "connected" | "disconnected" | "error";
+  tools: MCPTool[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DAGTaskNode {
+  task_id: string;
+  agent_role: string;
+  instruction: string;
+  dependencies: string[];
+  required_tools: string[];
+  timeout_seconds: number;
+  status: "pending" | "running" | "completed" | "failed" | "skipped" | "cancelled";
+  result_summary?: string | null;
+  tokens_consumed: number;
+  error_message?: string | null;
+}
+
+export interface DAGExecutionPlan {
+  plan_id: string;
+  objective: string;
+  tasks: DAGTaskNode[];
+  execution_order: string[][];
+  total_tokens_consumed: number;
+  created_at: string;
+  status: "pending" | "running" | "completed" | "failed" | "cancelled";
+}
+
+export interface AgentEvent {
+  event_id: string;
+  run_id: string;
+  event_type: string;
+  sender: string;
+  receiver: string;
+  payload: Record<string, any>;
+  timestamp: string;
+}
+
