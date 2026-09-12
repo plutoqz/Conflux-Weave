@@ -291,6 +291,19 @@ export const ResearchView: React.FC = () => {
                       </>
                     )}
                   </div>
+                  {activeRunDetail?.budget && (
+                    <div className="mt-2 text-xs font-mono text-foreground/70 flex flex-wrap items-center gap-x-3 gap-y-1">
+                      <span className="font-semibold text-foreground/80">预算</span>
+                      <span>token {activeRunDetail.budget.input_tokens_used ?? 0}/{activeRunDetail.budget.input_tokens_limit ?? 0}</span>
+                      <span>工具 {activeRunDetail.budget.tool_calls_used ?? 0}/{activeRunDetail.budget.tool_calls_limit ?? 0}</span>
+                      <span>预留 {activeRunDetail.budget.tool_calls_reserved ?? 0}</span>
+                      <span>剩余 {activeRunDetail.budget.tool_calls_remaining ?? 0}</span>
+                      <span>时钟 {activeRunDetail.budget.wall_clock_seconds_remaining ?? 0}s</span>
+                      {activeRunDetail.budget.state === "stopped" && (
+                        <span className="text-rose-600 dark:text-rose-400 font-semibold">已超限停止</span>
+                      )}
+                    </div>
+                  )}
                   <div className="mt-3 pt-3 border-t border-border/60 flex flex-wrap items-center gap-2">
                     <span className="text-xs text-foreground/70 flex items-center gap-1 font-mono">
                       <Download className="h-3.5 w-3.5" />

@@ -26,12 +26,15 @@ from pydantic import BaseModel, ConfigDict, Field
 from conflux_weave.chat import ChatMessage, ChatService
 from conflux_weave.memory_recall import MemoryRecallService
 from conflux_weave.compute_tools import (
+    COMPUTE_TOOL_RESULT_SCHEMA,
     ComputeToolRequest,
     RestrictedComputeSandbox,
     ToolClass,
     ToolDecision,
     ToolPolicy,
 )
+from conflux_weave.runtime.sqlite_tool_budget import ToolBudgetExceeded
+from conflux_weave.core import RunStatus
 from conflux_weave.export_bundle import (
     ExportService,
     build_export_json,
@@ -1647,7 +1650,42 @@ def create_app(
                 content={"code": "tool_denied", "message": "该工具被当前策略禁止。", "tool_policy": policy.to_dict()},
             )
 
+        # P6-B4 预算硬限制：预留 → 执行 → 记录实际/释放；超限后不得执行亦不得经兜底绕过。
+        reservation_id = None
+        if run_id:
+            try:
+                reservation_id = repository.reserve_tool_budget(
+                    run_id,
+                    tool_calls=1,
+                    wall_clock_seconds=int(min(tool_request.timeout_seconds, policy.max_timeout_seconds)),
+                )
+            except ToolBudgetExceeded as exc:
+                repository.stop_tool_budget(run_id)
+                try:
+                    repository.transition_run(run_id, RunStatus.FAILED)
+                except Exception:
+                    pass
+                return {
+                    "schema_version": COMPUTE_TOOL_RESULT_SCHEMA,
+                    "status": "budget_exceeded",
+                    "stdout_artifact_id": None,
+                    "output_artifact_ids": [],
+                    "duration_ms": 0,
+                    "resource_usage": {},
+                    "error": f"budget_exceeded: {exc}",
+                    "tool_contract": {"run_id": run_id},
+                }
+
         result = compute_sandbox.execute(tool_request, policy=policy, run_id=run_id)
+        if run_id and reservation_id:
+            if result.status in {"timeout", "budget_exceeded"}:
+                repository.release_tool_budget(reservation_id)
+            else:
+                repository.settle_tool_budget(
+                    reservation_id,
+                    actual_tool_calls=1,
+                    actual_seconds=max(1, result.duration_ms // 1000),
+                )
         return result.to_dict()
     _EXPORT_FORMATS = ("markdown", "bibtex", "json", "zip")
 

@@ -500,5 +500,40 @@ _MIGRATIONS = (
             """,
         ),
     ),
+    _Migration(
+        version=10,
+        name="v03_p6_tool_budget",
+        statements=(
+            """
+            CREATE TABLE tool_budget_reservations (
+                reservation_id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE RESTRICT,
+                tool_calls INTEGER NOT NULL CHECK (tool_calls >= 0),
+                wall_clock_seconds INTEGER NOT NULL CHECK (wall_clock_seconds >= 0),
+                status TEXT NOT NULL CHECK (status IN ('active', 'settled', 'released')),
+                created_at TEXT NOT NULL,
+                closed_at TEXT
+            )
+            """,
+            """
+            CREATE INDEX tool_budget_reservations_run_idx
+            ON tool_budget_reservations(run_id, status)
+            """,
+            """
+            CREATE TABLE tool_budget_usage (
+                entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE RESTRICT,
+                tool_calls INTEGER NOT NULL CHECK (tool_calls >= 0),
+                wall_clock_seconds INTEGER NOT NULL CHECK (wall_clock_seconds >= 0),
+                source TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE INDEX tool_budget_usage_run_idx
+            ON tool_budget_usage(run_id, entry_id)
+            """,
+        ),
+    ),
 )
 

@@ -61,6 +61,24 @@ export interface StepRecord {
   completed_at?: string;
 }
 
+export interface RunBudget {
+  state?: string;
+  input_tokens_used?: number;
+  output_tokens_used?: number;
+  tool_calls_used?: number;
+  retrieval_rounds_used?: number;
+  input_tokens_limit?: number;
+  output_tokens_limit?: number;
+  tool_calls_limit?: number;
+  retrieval_rounds_limit?: number;
+  tool_calls_reserved?: number;
+  wall_clock_seconds_reserved?: number;
+  tool_calls_remaining?: number;
+  wall_clock_seconds_remaining?: number;
+  estimated_cost_limit?: string;
+  cost_enforcement?: string;
+}
+
 export interface RunProgress {
   completed_steps?: number;
   total_steps?: number;
@@ -80,6 +98,7 @@ export interface RunDetail {
   created_at: string;
   updated_at?: string;
   progress?: RunProgress;
+  budget?: RunBudget;
   delivery?: DeliveryRecord | null;
   report_content?: string | null;
   evidence?: EvidenceRecord[];

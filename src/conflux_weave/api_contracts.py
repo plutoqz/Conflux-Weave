@@ -245,6 +245,11 @@ class BudgetResponse(_ApiModel):
     retrieval_rounds_limit: int = Field(ge=0)
     estimated_cost_limit: str
     cost_enforcement: str
+    # P6-B4：预留与余量（页面展示 limit / reserved / actual / remaining）
+    tool_calls_reserved: int = Field(ge=0)
+    wall_clock_seconds_reserved: int = Field(ge=0)
+    tool_calls_remaining: int = Field(ge=0)
+    wall_clock_seconds_remaining: int = Field(ge=0)
 
 
 class ResearchRunContextResponse(_ApiModel):
@@ -1153,22 +1158,34 @@ class WorkbenchQueryService:
                 last_event_at=last_event_record.created_at if last_event_record else None,
                 updated_at=run.updated_at,
             ),
-            budget=BudgetResponse(
-                state=budget.state,
-                input_tokens_used=budget.actual.input_tokens,
-                output_tokens_used=budget.actual.output_tokens,
-                tool_calls_used=budget.actual.tool_calls,
-                retrieval_rounds_used=budget.actual.retrieval_rounds,
-                input_tokens_limit=budget.limit.input_tokens,
-                output_tokens_limit=budget.limit.output_tokens,
-                tool_calls_limit=budget.limit.tool_calls,
-                retrieval_rounds_limit=budget.limit.retrieval_rounds,
-                estimated_cost_limit=budget.estimated_cost_limit,
-                cost_enforcement=budget.cost_enforcement,
-            ),
+            budget=self._budget_response(budget),
             delivery=delivery,
             error=error,
             research_context=_research_context(task.kind, task.input),
+        )
+
+    def _budget_response(self, budget) -> BudgetResponse:
+        tool_usage = self.repository.get_tool_budget_usage(budget.run_id)
+        tool_used_total = budget.actual.tool_calls + tool_usage["tool_calls_used"]
+        reserved_total = budget.reserved.tool_calls + tool_usage["tool_calls_reserved"]
+        wall_used = tool_usage["wall_clock_seconds_used"]
+        wall_reserved = tool_usage["wall_clock_seconds_reserved"]
+        return BudgetResponse(
+            state=budget.state,
+            input_tokens_used=budget.actual.input_tokens,
+            output_tokens_used=budget.actual.output_tokens,
+            tool_calls_used=tool_used_total,
+            retrieval_rounds_used=budget.actual.retrieval_rounds,
+            input_tokens_limit=budget.limit.input_tokens,
+            output_tokens_limit=budget.limit.output_tokens,
+            tool_calls_limit=budget.limit.tool_calls,
+            retrieval_rounds_limit=budget.limit.retrieval_rounds,
+            estimated_cost_limit=budget.estimated_cost_limit,
+            cost_enforcement=budget.cost_enforcement,
+            tool_calls_reserved=reserved_total,
+            wall_clock_seconds_reserved=wall_reserved,
+            tool_calls_remaining=max(0, budget.limit.tool_calls - tool_used_total - reserved_total),
+            wall_clock_seconds_remaining=max(0, budget.wall_clock_seconds - wall_used - wall_reserved),
         )
 
     def get_events(
