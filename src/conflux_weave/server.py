@@ -2958,6 +2958,28 @@ def create_app(
 
     _active_proposals: dict[str, CodeProposal] = {}
 
+    @app.post("/api/v1/projects/browse-folder")
+    async def browse_folder_endpoint(initial_dir: str | None = Query(None)):
+        def _open_picker():
+            try:
+                import tkinter as tk
+                from tkinter import filedialog
+                root = tk.Tk()
+                root.withdraw()
+                root.attributes("-topmost", True)
+                picked = filedialog.askdirectory(
+                    title="选择工程项目目录",
+                    initialdir=initial_dir if initial_dir and Path(initial_dir).is_dir() else None,
+                )
+                root.destroy()
+                return str(Path(picked).resolve()) if picked else None
+            except Exception as e:
+                logger.warning(f"Native folder picker failed: {e}")
+                return None
+
+        folder = await asyncio.to_thread(_open_picker)
+        return {"path": folder}
+
     @app.get("/api/v1/projects", response_model=list[ProjectSummaryResponse])
     async def list_projects_endpoint():
         store = _get_project_store()
@@ -2967,6 +2989,7 @@ def create_app(
                 project_id=p.project_id,
                 name=p.name,
                 root_path=p.root_path,
+                root_paths=tuple(p.root_paths) if p.root_paths else (p.root_path,),
                 description=p.description,
                 created_at=p.created_at,
                 updated_at=p.updated_at,
@@ -2978,12 +3001,18 @@ def create_app(
     async def register_project_endpoint(request: ProjectRegisterRequest):
         store = _get_project_store()
         try:
-            proj = store.register(request.name, request.root_path, request.description)
+            proj = store.register(
+                request.name,
+                request.root_path,
+                request.description,
+                root_paths=request.root_paths,
+            )
             git_status = GitInspector.get_status(Path(proj.root_path))
             return ProjectDetailResponse(
                 project_id=proj.project_id,
                 name=proj.name,
                 root_path=proj.root_path,
+                root_paths=tuple(proj.root_paths) if proj.root_paths else (proj.root_path,),
                 description=proj.description,
                 git_status=git_status.to_dict(),
                 created_at=proj.created_at,
@@ -3003,6 +3032,7 @@ def create_app(
             project_id=proj.project_id,
             name=proj.name,
             root_path=proj.root_path,
+            root_paths=tuple(proj.root_paths) if proj.root_paths else (proj.root_path,),
             description=proj.description,
             git_status=git_status.to_dict(),
             created_at=proj.created_at,
@@ -3015,7 +3045,7 @@ def create_app(
         proj = store.get_project(project_id)
         if proj is None:
             return JSONResponse(status_code=404, content={"code": "project_not_found", "message": f"项目 {project_id} 不存在。"})
-        nodes = ProjectScanner.scan_tree(Path(proj.root_path))
+        nodes = ProjectScanner.scan_project_tree(proj)
         return ProjectTreeResponse(
             project_id=project_id,
             items=tuple(n.to_dict() for n in nodes),
@@ -3028,7 +3058,7 @@ def create_app(
         if proj is None:
             return JSONResponse(status_code=404, content={"code": "project_not_found", "message": f"项目 {project_id} 不存在。"})
         try:
-            content, file_sha, sz = ProjectScanner.read_file_safe(Path(proj.root_path), path)
+            content, file_sha, sz = ProjectScanner.read_file_safe(proj, path)
             return ProjectFileContentResponse(
                 project_id=project_id,
                 path=path,

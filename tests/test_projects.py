@@ -218,3 +218,43 @@ def test_project_scanner_ast_summary(tmp_path: Path) -> None:
     assert len(ast_summary["todos"]) == 1
     assert "TODO" in ast_summary["todos"][0]["text"]
 
+
+def test_multi_folder_project_scanning(tmp_path: Path) -> None:
+    backend_dir = tmp_path / "backend"
+    backend_dir.mkdir()
+    (backend_dir / "server.py").write_text("print('hello backend')", encoding="utf-8")
+
+    frontend_dir = tmp_path / "frontend"
+    frontend_dir.mkdir()
+    (frontend_dir / "app.tsx").write_text("console.log('hello frontend');", encoding="utf-8")
+
+    store = ProjectStore(tmp_path / "multi_proj.json", default_workspace=tmp_path)
+    proj = store.register(
+        name="Fullstack App",
+        root_path=str(backend_dir),
+        root_paths=[str(backend_dir), str(frontend_dir)],
+        description="Fullstack multi-folder test",
+    )
+    assert len(proj.root_paths) == 2
+
+    # Scan tree
+    tree = ProjectScanner.scan_project_tree(proj)
+    assert len(tree) == 2
+    root_names = [node.name for node in tree]
+    assert "backend" in root_names
+    assert "frontend" in root_names
+
+    # Read safe file from multi-root
+    backend_file_node = next(n for n in tree if "backend" in n.name)
+    assert len(backend_file_node.children) == 1
+    backend_rel_path = backend_file_node.children[0].path
+    content, sha, sz = ProjectScanner.read_file_safe(proj, backend_rel_path)
+    assert "hello backend" in content
+
+    frontend_file_node = next(n for n in tree if "frontend" in n.name)
+    assert len(frontend_file_node.children) == 1
+    frontend_rel_path = frontend_file_node.children[0].path
+    content2, sha2, sz2 = ProjectScanner.read_file_safe(proj, frontend_rel_path)
+    assert "hello frontend" in content2
+
+

@@ -122,19 +122,33 @@ class Project:
     project_id: str
     name: str
     root_path: str
+    root_paths: list[str] = field(default_factory=list)
     description: str = ""
     created_at: str = field(default_factory=_utc_now)
     updated_at: str = field(default_factory=_utc_now)
+
+    def __post_init__(self) -> None:
+        if not self.root_paths and self.root_path:
+            self.root_paths = [self.root_path]
+        elif self.root_paths and not self.root_path:
+            self.root_path = self.root_paths[0]
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Project:
+        raw_paths = data.get("root_paths")
+        if isinstance(raw_paths, list):
+            paths = [str(p) for p in raw_paths if p]
+        else:
+            paths = [str(data["root_path"])] if "root_path" in data else []
+        primary_path = str(data.get("root_path") or (paths[0] if paths else ""))
         return cls(
             project_id=str(data["project_id"]),
             name=str(data["name"]),
-            root_path=str(data["root_path"]),
+            root_path=primary_path,
+            root_paths=paths,
             description=str(data.get("description", "")),
             created_at=str(data.get("created_at", _utc_now())),
             updated_at=str(data.get("updated_at", _utc_now())),
@@ -492,6 +506,21 @@ class ProjectScanner:
         return target
 
     @classmethod
+    def resolve_project_file(cls, project: Project, rel_path: str) -> Path:
+        """Resolve a rel_path in project, supporting multi-folder projects."""
+        clean_rel = rel_path.replace("\\", "/").strip("/")
+        roots = [p for p in (project.root_paths or [project.root_path]) if p]
+        if len(roots) > 1:
+            m = re.match(r"^(\d+):([^/]+)(?:/(.*))?$", clean_rel)
+            if m:
+                idx = int(m.group(1))
+                sub_path = m.group(3) or ""
+                if 0 <= idx < len(roots):
+                    return cls.resolve_safe_path(Path(roots[idx]), sub_path)
+        primary_root = Path(project.root_path or (roots[0] if roots else "."))
+        return cls.resolve_safe_path(primary_root, clean_rel)
+
+    @classmethod
     def scan_tree(
         cls,
         root_path: Path,
@@ -561,14 +590,77 @@ class ProjectScanner:
         return _traverse(root_path.resolve(), 1)
 
     @classmethod
+    def scan_project_tree(
+        cls,
+        project: Project,
+        max_depth: int = 4,
+        max_files: int = 500,
+        ignore_dirs: set[str] | None = None,
+        ignore_exts: set[str] | None = None,
+    ) -> list[FileNode]:
+        """Scan project files, supporting single or multi-root projects."""
+        roots = [p for p in (project.root_paths or [project.root_path]) if p]
+        if not roots:
+            return []
+
+        if len(roots) == 1:
+            return cls.scan_tree(
+                Path(roots[0]),
+                max_depth=max_depth,
+                max_files=max_files,
+                ignore_dirs=ignore_dirs,
+                ignore_exts=ignore_exts,
+            )
+
+        top_nodes: list[FileNode] = []
+        file_budget = max(80, max_files // len(roots))
+        for idx, r_str in enumerate(roots):
+            r_path = Path(r_str).resolve()
+            if not r_path.is_dir():
+                continue
+            folder_name = r_path.name or f"folder-{idx}"
+            root_prefix = f"{idx}:{folder_name}"
+
+            sub_tree = cls.scan_tree(
+                r_path,
+                max_depth=max_depth,
+                max_files=file_budget,
+                ignore_dirs=ignore_dirs,
+                ignore_exts=ignore_exts,
+            )
+
+            def _prefix_node(node: FileNode) -> FileNode:
+                prefixed_path = f"{root_prefix}/{node.path}" if node.path else root_prefix
+                return FileNode(
+                    name=node.name,
+                    path=prefixed_path,
+                    is_dir=node.is_dir,
+                    size_bytes=node.size_bytes,
+                    children=[_prefix_node(c) for c in node.children],
+                )
+
+            top_nodes.append(
+                FileNode(
+                    name=folder_name,
+                    path=root_prefix,
+                    is_dir=True,
+                    children=[_prefix_node(c) for c in sub_tree],
+                )
+            )
+        return top_nodes
+
+    @classmethod
     def read_file_safe(
         cls,
-        root_path: Path,
+        root_path_or_project: Path | Project,
         rel_path: str,
         max_size_bytes: int = 1_048_576,  # 1 MB
     ) -> tuple[str, str, int]:
         """Read safe file content. Returns (content, sha256, size_bytes)."""
-        target = cls.resolve_safe_path(root_path, rel_path)
+        if isinstance(root_path_or_project, Project):
+            target = cls.resolve_project_file(root_path_or_project, rel_path)
+        else:
+            target = cls.resolve_safe_path(root_path_or_project, rel_path)
         if not target.is_file():
             raise FileNotFoundError(f"File not found: {rel_path}")
 
@@ -726,34 +818,57 @@ class ProjectStore:
         self.registry_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def list_projects(self) -> list[Project]:
-        return self._load()
+        projects = self._load()
+        updated = False
+        for p in projects:
+            if p.project_id == "proj-conflux-weave" and not Path(p.root_path).is_dir():
+                p.root_path = str(Path.cwd().resolve())
+                updated = True
+        if updated:
+            self._save(projects)
+        return projects
 
     def get_project(self, project_id: str) -> Project | None:
-        for p in self._load():
+        for p in self.list_projects():
             if p.project_id == project_id:
                 return p
         return None
 
-    def register(self, name: str, root_path: str, description: str = "") -> Project:
-        resolved = Path(root_path).resolve()
-        if not resolved.is_dir():
-            raise ValueError(f"Project root path does not exist or is not a directory: {root_path}")
+    def register(
+        self,
+        name: str,
+        root_path: str = "",
+        description: str = "",
+        root_paths: list[str] | None = None,
+    ) -> Project:
+        raw_paths = list(root_paths or ([root_path] if root_path else []))
+        if not raw_paths:
+            raise ValueError("至少需要提供一个有效的项目本地路径。")
+        resolved_paths = []
+        for p in raw_paths:
+            rp = Path(p).resolve()
+            if not rp.is_dir():
+                raise ValueError(f"Project root path does not exist or is not a directory: {p}")
+            resolved_paths.append(str(rp))
 
+        primary_resolved = Path(resolved_paths[0])
         projects = self._load()
         # Check if already registered
         for p in projects:
-            if Path(p.root_path).resolve() == resolved:
+            p_roots = set(p.root_paths) if p.root_paths else {p.root_path}
+            if set(resolved_paths) == p_roots:
                 return p
 
         # Generate unique project id
-        h = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:8]
+        h = hashlib.sha256(";".join(resolved_paths).encode("utf-8")).hexdigest()[:8]
         slug = re.sub(r"[^a-zA-Z0-9_-]", "-", name.lower()).strip("-") or "project"
         project_id = f"proj-{slug}-{h}"
 
         new_proj = Project(
             project_id=project_id,
             name=name.strip(),
-            root_path=str(resolved),
+            root_path=str(primary_resolved),
+            root_paths=resolved_paths,
             description=description.strip(),
         )
         projects.append(new_proj)

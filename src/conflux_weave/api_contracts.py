@@ -147,6 +147,7 @@ class ChatMessageRecord(_ApiModel):
     mode: str
     content: str
     created_at: str
+    run_id: str | None = None
 
 
 class ChatAnswerResponse(ChatMessageRecord):
@@ -320,6 +321,7 @@ class ProjectSummaryResponse(_ApiModel):
     project_id: str
     name: str
     root_path: str
+    root_paths: tuple[str, ...] = ()
     description: str = ""
     created_at: str
     updated_at: str
@@ -329,6 +331,7 @@ class ProjectDetailResponse(_ApiModel):
     project_id: str
     name: str
     root_path: str
+    root_paths: tuple[str, ...] = ()
     description: str = ""
     git_status: dict[str, Any]
     created_at: str
@@ -337,7 +340,8 @@ class ProjectDetailResponse(_ApiModel):
 
 class ProjectRegisterRequest(_ApiModel):
     name: str = Field(min_length=1, max_length=100)
-    root_path: str = Field(min_length=1)
+    root_path: str = Field(default="", min_length=0)
+    root_paths: list[str] = Field(default_factory=list)
     description: str = ""
 
 
