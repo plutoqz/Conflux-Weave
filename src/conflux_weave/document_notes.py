@@ -218,7 +218,8 @@ class DocumentNote:
             lines.extend(["## 研读分析", ""])
             for sec in self.sections:
                 hashes = "#" * max(2, min(6, sec.level + 1))
-                lines.extend([f"{hashes} {sec.title}", "", sec.content, ""])
+                clean_sec_content = re.sub(r"^\s*(\*{0,2}【本节研读与核心论点】\*{0,2}\s*)+", "", sec.content).strip()
+                lines.extend([f"{hashes} {sec.title}", "", clean_sec_content, ""])
                 if sec.citations:
                     c_list = ", ".join(f"`{c}`" for c in sec.citations)
                     lines.extend([f"*引用来源: {c_list}*", ""])
@@ -463,7 +464,8 @@ class NoteHtmlRenderer:
         for idx, sec in enumerate(note.sections, start=1):
             sec_anchor = f"sec-{idx}"
             esc_sec_title = html.escape(sec.title)
-            rendered_sec_content = markdown_to_html(sec.content)
+            clean_sec_content = re.sub(r"^\s*(\*{0,2}【本节研读与核心论点】\*{0,2}\s*)+", "", sec.content).strip()
+            rendered_sec_content = markdown_to_html(clean_sec_content)
             toc_items.append(f'<li><a href="#{sec_anchor}">{esc_sec_title}</a></li>')
 
             badges = []

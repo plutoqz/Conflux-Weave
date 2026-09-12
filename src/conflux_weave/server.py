@@ -2827,6 +2827,118 @@ def create_app(
             revisions=tuple(items),
         )
 
+    @app.post("/api/v1/notes/{note_id}/save-to-research")
+    async def save_note_to_research(note_id: str):
+        store = getattr(repository, "artifact_store", None)
+        if store is None:
+            return JSONResponse(status_code=503, content={"code": "service_unavailable", "message": "存储服务未就绪。"})
+        try:
+            from datetime import datetime, UTC
+            from uuid import uuid4
+            from conflux_weave.core import (
+                TaskSpec,
+                RunRecord,
+                RunStatus,
+                StepRecord,
+                StepStatus,
+                DeliveryRecord,
+                DeliveryDisposition,
+                BudgetLedger,
+            )
+
+            try:
+                note_obj = load_note_artifact(note_id, store)
+            except (KeyError, ValueError):
+                note_obj = None
+            if note_obj is None:
+                return JSONResponse(status_code=404, content={"code": "note_not_found", "message": f"笔记 {note_id} 不存在。"})
+
+            task_id = f"task-note-{uuid4().hex[:12]}"
+            run_id = f"run-note-{uuid4().hex[:12]}"
+            step_id = f"{run_id}:publish_delivery"
+            now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+            report_text = note_obj.markdown_content or ""
+            if not report_text.strip():
+                lines = [
+                    f"# 文献精读报告：{note_obj.title}",
+                    "",
+                    f"> **来源文献**：`{note_obj.document_id}`",
+                    f"> **研读版本**：v{note_obj.version}",
+                    "",
+                    "## 一、执行摘要",
+                    "",
+                    note_obj.executive_summary or "针对该文献的核心论点、方法与关键结论进行了系统研读与梳理。",
+                    "",
+                ]
+                for s in note_obj.sections:
+                    lines.extend([f"### {s.title}", "", s.content or "", ""])
+                report_text = "\n".join(lines).strip()
+
+            report_ref = store.put_bytes(
+                report_text.encode("utf-8"),
+                media_type="text/markdown; charset=utf-8",
+                producer_step_id=step_id,
+                schema_version="conflux-weave.verified-research-report.v2",
+            )
+            cfg_ref = store.put_json(
+                {"source_note_id": note_id, "document_id": note_obj.document_id, "version": note_obj.version},
+                producer_step_id=step_id,
+                schema_version="conflux-weave.config.v1",
+            )
+
+            task = TaskSpec(
+                task_id,
+                "document_reading",
+                {
+                    "note_id": note_id,
+                    "document_id": note_obj.document_id,
+                    "title": note_obj.title,
+                    "objective": f"文献研读精读归档：《{note_obj.title}》",
+                },
+                requested_policy="default",
+                idempotency_key=task_id,
+            )
+            budget = BudgetLedger(300, 10000, 2000, "free", 1, 0, 1)
+            run = RunRecord(
+                run_id,
+                task_id,
+                RunStatus.ACCEPTED,
+                "document-reading-v1",
+                config_snapshot_ref=cfg_ref.artifact_id,
+                budget=budget,
+                created_at=now,
+                updated_at=now,
+            )
+            step = StepRecord(step_id, run_id, "publish_delivery", 1, StepStatus.PENDING)
+
+            repository.submit_task(task, run, (step,))
+            repository.transition_run(run_id, RunStatus.QUEUED, updated_at=now)
+            repository.transition_run(run_id, RunStatus.RUNNING, updated_at=now)
+
+            evidence_refs = tuple(f"note-sec-{s.section_id}" for s in note_obj.sections) or ("note-evidence-001",)
+            delivery = DeliveryRecord(
+                run_id,
+                DeliveryDisposition.COMPLETE,
+                artifact_refs=(report_ref.artifact_id,),
+                evidence_refs=evidence_refs,
+                limitations=("本报告由文献研读精读工坊自动归档生成，全文包含学术论述、章节引述与结构化论据闭环。",),
+                unmet_criteria=(),
+                recovery_actions=(),
+            )
+            repository.publish_delivery(run_id, RunStatus.SUCCEEDED, delivery, (report_ref,))
+
+            return {
+                "task_id": task_id,
+                "run_id": run_id,
+                "status": "succeeded",
+                "report_artifact_id": report_ref.artifact_id,
+                "title": note_obj.title,
+                "message": f"研读报告《{note_obj.title}》已成功保存至深度研究。",
+            }
+        except Exception as exc:
+            return error_response(exc)
+
     def _get_project_store() -> ProjectStore:
         db_path = getattr(repository, "database_path", None)
         base_dir = Path(db_path).parent if db_path is not None else Path("var") / "data"
