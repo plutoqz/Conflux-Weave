@@ -47,7 +47,15 @@ export const App: React.FC = () => {
   useEffect(() => {
     api.getRuns().then((res) => setRuns(res.items || [])).catch(() => {});
     api.getHealthReady().then(setHealth).catch(() => {});
-  }, [setRuns, setHealth]);
+    // P6-A3：刷新后恢复上次查看的 Run（任务进行中时刷新不丢上下文）
+    try {
+      const restored = localStorage.getItem("cw_active_run_id");
+      const params = new URLSearchParams(window.location.hash.split("?")[1] || "");
+      if (restored && !params.get("run") && !params.get("run_id")) {
+        setActiveRunId(restored);
+      }
+    } catch {}
+  }, [setRuns, setHealth, setActiveRunId]);
 
   const handleOpenNote = (docId: string) => {
     setSelectedNoteDocId(docId);

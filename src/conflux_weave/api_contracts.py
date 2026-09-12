@@ -227,6 +227,10 @@ class ProgressResponse(_ApiModel):
     completed_steps: int = Field(ge=0)
     total_steps: int = Field(ge=0)
     active: bool
+    current_phase: str = ""
+    last_event_message: str = ""
+    last_event_at: str | None = None
+    updated_at: str | None = None
 
 
 class BudgetResponse(_ApiModel):
@@ -1134,12 +1138,20 @@ class WorkbenchQueryService:
         }
         lifecycle_map = self.repository.get_run_lifecycle_map([run_id])
         summary = _summary(overview, lifecycle_map.get(run_id, ("active", None, None)))
+        running_step = next((step for step in steps if step.status is StepStatus.RUNNING), None)
+        pending_step = next((step for step in steps if step.status is StepStatus.PENDING), None)
+        current_step = running_step or pending_step
+        last_event_record = self.repository.get_latest_run_event(run_id)
         return RunDetailResponse(
             **summary.model_dump(),
             progress=ProgressResponse(
                 completed_steps=sum(step.status in complete_statuses for step in steps),
                 total_steps=len(steps),
                 active=any(step.status is StepStatus.RUNNING for step in steps),
+                current_phase=_phase_label(current_step.kind) if current_step else "",
+                last_event_message=_event_message(last_event_record) if last_event_record else "",
+                last_event_at=last_event_record.created_at if last_event_record else None,
+                updated_at=run.updated_at,
             ),
             budget=BudgetResponse(
                 state=budget.state,
@@ -1329,6 +1341,27 @@ def _summary(
         archived_at=lifecycle[1],
         deleted_at=lifecycle[2],
     )
+
+
+_PHASE_LABELS: dict[str, str] = {
+    "plan_objective": "规划研究目标",
+    "rank_candidates": "候选排序与核验",
+    "merge_and_rank": "合并排序",
+    "execute_research": "执行研究",
+    "publish_delivery": "发布交付",
+    "analyze_document": "文档分析",
+    "research_fixture": "固定流程执行",
+}
+
+
+def _phase_label(step_kind: str) -> str:
+    return _PHASE_LABELS.get(step_kind, step_kind)
+
+
+def _event_message(record) -> str:
+    detail = record.detail if isinstance(record.detail, dict) else {}
+    message = detail.get("message") or detail.get("status_message") or record.event_type
+    return str(message)
 
 
 def _research_context(task_kind: str, task_input: dict[str, Any]) -> ResearchRunContextResponse:

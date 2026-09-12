@@ -85,7 +85,13 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
   runs: [],
   setRuns: (runs) => set({ runs }),
   activeRunId: null,
-  setActiveRunId: (id) => set({ activeRunId: id }),
+  setActiveRunId: (id) => {
+    try {
+      if (id) localStorage.setItem("cw_active_run_id", id);
+      else localStorage.removeItem("cw_active_run_id");
+    } catch {}
+    set({ activeRunId: id });
+  },
   activeRunDetail: null,
   setActiveRunDetail: (detail) => set({ activeRunDetail: detail }),
 

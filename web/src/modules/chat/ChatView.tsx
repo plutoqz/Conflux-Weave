@@ -42,23 +42,76 @@ const DeepResearchMessageBubble: React.FC<{
 }> = ({ message, onReportLoaded }) => {
   const [runState, setRunState] = useState<string>("running");
   const [stepCount, setStepCount] = useState<number>(0);
+  const [currentPhase, setCurrentPhase] = useState<string>("");
 
   const isPending = message.content.includes("已为您启动深度研究任务");
+
+  const handleTerminal = (st: string, detail: any) => {
+    // P6-A3：浏览器通知 + 页面内横幅（离开页面也能看到完成/失败）
+    const title = message.content.replace(/^.*?(?=(深度研究|【))/, "").slice(0, 60) || "深度研究任务";
+    const finishedOk = st === "complete" || st === "partial";
+    try {
+      if (typeof Notification !== "undefined") {
+        if (Notification.permission === "granted") {
+          const n = new Notification(finishedOk ? "深度研究已完成" : `深度研究${st}`, {
+            body: finishedOk ? `${title} —— 报告已就绪，点击查看。` : `Run ${message.run_id}，点击进入错误与恢复入口。`,
+            tag: message.run_id || undefined,
+          });
+          n.onclick = () => {
+            window.focus();
+            window.location.hash = `#/research?run_id=${encodeURIComponent(message.run_id!)}`;
+          };
+        } else if (Notification.permission === "default") {
+          Notification.requestPermission();
+        }
+      }
+    } catch {}
+    if (finishedOk) {
+      const artifactIds = detail?.delivery?.artifact_ids || detail?.delivery?.artifact_refs || [];
+      if (artifactIds.length > 0) {
+        api.getArtifactContent(message.run_id!, artifactIds[0]).then((res) => {
+          const content = typeof res === "string" ? res : res.content;
+          if (content && typeof content === "string") onReportLoaded(content);
+        }).catch(() => {});
+      }
+    }
+  };
 
   useEffect(() => {
     if (!message.run_id || !isPending) return;
 
     let cancelled = false;
+
+    // P6-A3：主通道 = SSE 事件流（带游标补发与断线重连）；轮询降级为兜底。
+    const unsubscribe = api.subscribeRunEvents(message.run_id, {
+      onEvent: (event) => {
+        if (cancelled) return;
+        if (event.state) setRunState(event.state);
+        if (event.message) setCurrentPhase(event.message);
+      },
+      onTerminal: (state) => {
+        if (cancelled || !state) return;
+        setRunState(state);
+        api.getRunDetail(message.run_id!).then((detail) => handleTerminal(state, detail)).catch(() => {});
+      },
+    });
+
+    // 兜底轮询（SSE 不可用时仍能推进；同轮询内做报告回填）
     const interval = setInterval(async () => {
       try {
         const detail = await api.getRunDetail(message.run_id!);
         if (cancelled) return;
         const st = detail.state || detail.status || "running";
         setRunState(st);
-        if (detail.steps) setStepCount(detail.steps.length);
+        if (detail.progress) {
+          if (detail.progress.current_phase) setCurrentPhase(detail.progress.current_phase);
+          if (detail.progress.total_steps) setStepCount(detail.progress.total_steps);
+        }
 
         if (st === "complete" || st === "partial") {
           clearInterval(interval);
+          unsubscribe();
+          handleTerminal(st, detail);
           const artifactIds = detail.delivery?.artifact_ids || detail.delivery?.artifact_refs || [];
           if (artifactIds.length > 0) {
             const res = await api.getArtifactContent(message.run_id!, artifactIds[0]);
@@ -73,7 +126,9 @@ const DeepResearchMessageBubble: React.FC<{
           }
         } else if (st === "failed" || st === "waiting_for_user" || st === "cancelled" || st === "expired") {
           clearInterval(interval);
+          unsubscribe();
           setRunState(st);
+          handleTerminal(st, detail);
         }
       } catch (err) {
         console.error("Polling run detail error:", err);
@@ -83,6 +138,7 @@ const DeepResearchMessageBubble: React.FC<{
     return () => {
       cancelled = true;
       clearInterval(interval);
+      unsubscribe();
     };
   }, [message.run_id, isPending]);
 
@@ -118,6 +174,26 @@ const DeepResearchMessageBubble: React.FC<{
             </Button>
           </div>
         </div>
+      ) : runState === "complete" || runState === "partial" ? (
+        <div className="rounded-xl border border-emerald-600/30 bg-emerald-50/60 dark:bg-emerald-950/20 p-4 space-y-2.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2 text-emerald-800 dark:text-emerald-300 font-semibold text-sm">
+              <CheckCircle2 className="h-4 w-4" />
+              <span>深度研究已完成（{runState}）</span>
+            </div>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 text-xs text-emerald-900 dark:text-emerald-200 hover:bg-emerald-600/10 gap-1 px-2"
+              onClick={() => {
+                window.location.hash = `#/research?run_id=${encodeURIComponent(message.run_id!)}`;
+              }}
+            >
+              <span>查看报告与证据链</span>
+              <ExternalLink className="h-3 w-3" />
+            </Button>
+          </div>
+        </div>
       ) : isPending ? (
         <div className="rounded-xl border border-amber-600/30 bg-amber-50/50 dark:bg-amber-950/20 p-4 space-y-2.5">
           <div className="flex items-center justify-between">
@@ -131,6 +207,7 @@ const DeepResearchMessageBubble: React.FC<{
           </div>
           <p className="text-xs text-foreground/80 leading-relaxed font-sans">
             正在执行多智能体计划分解、多源文献检索与闭环证据核验。已推进 {stepCount} 项流水线阶段，结果将自动同步刷新到此处。
+            {currentPhase && <span className="block mt-1 font-mono text-amber-700 dark:text-amber-300">当前阶段：{currentPhase}</span>}
           </p>
           <div className="flex items-center justify-between pt-1 border-t border-amber-600/20 text-xs">
             <span className="font-mono text-muted-foreground">Run ID: {message.run_id}</span>

@@ -636,6 +636,40 @@ class LeaseRepositoryMixin:
             )
         return tuple(records)
 
+    def get_latest_run_event(self, run_id: str) -> RunEventRecord | None:
+        """P6-A3：最近一条 Run 事件（进度展示与断线续传游标来源）。"""
+        with self._connect() as connection:
+            exists = connection.execute(
+                "SELECT 1 FROM runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if exists is None:
+                raise RecordNotFound("Run not found")
+            row = connection.execute(
+                """
+                    SELECT event_id, run_id, step_id, attempt_id,
+                           event_type, detail_json, created_at
+                    FROM run_events
+                    WHERE run_id = ?
+                    ORDER BY event_id DESC
+                    LIMIT 1
+                """,
+                (run_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        detail = json.loads(row["detail_json"])
+        if not isinstance(detail, dict):
+            raise PersistenceInvariantError("Run Event detail must be an object")
+        return RunEventRecord(
+            event_id=int(row["event_id"]),
+            run_id=str(row["run_id"]),
+            step_id=row["step_id"],
+            attempt_id=row["attempt_id"],
+            event_type=str(row["event_type"]),
+            detail=detail,
+            created_at=str(row["created_at"]),
+        )
+
     def cancel_claim(self, claim: LeaseClaim, *, now: str | None = None) -> RunRecord:
         cancelled_at = _normalize_timestamp(now or self.clock())
         with self._connect() as connection:

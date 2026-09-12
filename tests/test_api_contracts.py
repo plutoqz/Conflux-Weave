@@ -352,3 +352,30 @@ def test_readiness_is_local_and_does_not_expose_paths_or_credentials(tmp_path) -
     }
     assert str(tmp_path) not in serialized
     assert "api_key" not in serialized.casefold()
+
+def test_run_detail_progress_carries_phase_and_last_event(tmp_path) -> None:
+    """P6-A3：进度响应暴露当前阶段、最近事件与最后更新时间。"""
+    repository, store = build_repository(tmp_path)
+    run_id, checkpoint, report = complete_run(
+        repository, store, "progress", evidence_checkpoint("quoted source")
+    )
+
+    service = WorkbenchQueryService(repository)
+    detail = service.get_run(run_id)
+
+    assert detail.progress.completed_steps >= 1
+    assert detail.progress.total_steps >= 2
+    assert detail.progress.updated_at == NOW
+    # 已终态 Run：当前阶段为空，但最近事件必须带消息与时间戳
+    assert detail.progress.last_event_at is not None
+    assert len(detail.progress.last_event_message) > 0
+
+    latest = repository.get_latest_run_event(run_id)
+    assert latest is not None
+    assert latest.created_at == detail.progress.last_event_at
+
+
+def test_latest_run_event_is_none_without_events(tmp_path) -> None:
+    repository, store = build_repository(tmp_path)
+    result = submit_run(repository, "noevents")
+    assert repository.get_latest_run_event(result.run_id) is None

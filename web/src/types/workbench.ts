@@ -61,6 +61,17 @@ export interface StepRecord {
   completed_at?: string;
 }
 
+export interface RunProgress {
+  completed_steps?: number;
+  total_steps?: number;
+  active?: boolean;
+  current_phase?: string;
+  current_step_kind?: string;
+  last_event_message?: string;
+  last_event_at?: string | null;
+  updated_at?: string | null;
+}
+
 export interface RunDetail {
   run_id: string;
   task_id: string;
@@ -68,6 +79,7 @@ export interface RunDetail {
   status?: string;
   created_at: string;
   updated_at?: string;
+  progress?: RunProgress;
   delivery?: DeliveryRecord | null;
   report_content?: string | null;
   evidence?: EvidenceRecord[];

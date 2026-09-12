@@ -130,6 +130,62 @@ export const api = {
       `${noteId}.${format === "markdown" ? "md" : "json"}`
     ),
 
+  // Run events SSE (P6-A3): cursor-tracked subscription with replay on reconnect.
+  // The server replays every event after `after` from persistent run_events, so a
+  // reconnect with the last seen cursor neither misses nor duplicates key events.
+  subscribeRunEvents: (
+    runId: string,
+    handlers: {
+      onEvent?: (event: { cursor: number; kind: string; state?: string; message?: string; created_at?: string }) => void;
+      onTerminal?: (state?: string) => void;
+      onOpen?: () => void;
+    }
+  ): (() => void) => {
+    let cursor = 0;
+    let source: EventSource | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let closed = false;
+
+    const open = () => {
+      if (closed) return;
+      source = new EventSource(
+        `/api/v1/runs/${encodeURIComponent(runId)}/events?after=${cursor}`
+      );
+      source.onopen = () => handlers.onOpen?.();
+      const handleRaw = (raw: MessageEvent) => {
+        try {
+          const data = JSON.parse(raw.data);
+          if (typeof data.cursor === "number" && data.cursor > cursor) cursor = data.cursor;
+          handlers.onEvent?.(data);
+          if (["complete", "partial", "failed", "cancelled", "expired"].includes(data.state)) {
+            handlers.onTerminal?.(data.state);
+            closed = true;
+            source?.close();
+          }
+        } catch {
+          // ignore malformed frames
+        }
+      };
+      source.onmessage = handleRaw;
+      for (const kind of ["progress", "status", "recovery"]) {
+        source.addEventListener(kind, handleRaw as EventListener);
+      }
+      source.onerror = () => {
+        source?.close();
+        if (!closed) {
+          // 断线重连：带最后游标重开，服务端从 run_events 表补发
+          reconnectTimer = setTimeout(open, 2000);
+        }
+      };
+    };
+    open();
+    return () => {
+      closed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      source?.close();
+    };
+  },
+
   // Chat & Conversations
   getConversations: (status = "active") =>
     request<{ items: ConversationSummary[] }>(`/api/v1/conversations?status=${encodeURIComponent(status)}`),
