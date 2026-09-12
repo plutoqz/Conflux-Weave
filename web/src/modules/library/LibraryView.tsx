@@ -12,22 +12,51 @@ import {
   SlidersHorizontal,
   Layers,
   Database,
+  Image as ImageIcon,
+  FileSearch,
+  ZoomIn,
+  Loader2,
+  Filter,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { DonutChart, HistogramChart } from "@/components/common/Charts";
 import { api } from "@/services/api";
 import { cn } from "@/lib/utils";
 import type { LibraryDocument, PaperItem } from "@/types/workbench";
 
 export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = ({ onOpenNote }) => {
-  const [activeTab, setActiveTab] = useState<"documents" | "papers">("documents");
+  const [activeTab, setActiveTab] = useState<"documents" | "multimodal" | "assets" | "papers">("documents");
   const [documents, setDocuments] = useState<LibraryDocument[]>([]);
   const [papers, setPapers] = useState<PaperItem[]>([]);
   const [paperQuery, setPaperQuery] = useState("");
   
+  // Multimodal RAG states
+  const [multimodalQuery, setMultimodalQuery] = useState("");
+  const [multimodalLoading, setMultimodalLoading] = useState(false);
+  const [multimodalResults, setMultimodalResults] = useState<{
+    query: string;
+    text_hits_count: number;
+    image_hits_count: number;
+    fusion_strategy: string;
+    fused_hits: any[];
+  } | null>(null);
+  const [modalityFilter, setModalityFilter] = useState<"all" | "text" | "image">("all");
+
+  // Visual Assets states
+  const [allAssets, setAllAssets] = useState<any[]>([]);
+  const [assetsLoading, setAssetsLoading] = useState(false);
+  const [assetTypeFilter, setAssetTypeFilter] = useState<string>("all");
+  const [lightboxAsset, setLightboxAsset] = useState<{ url: string; title: string; caption?: string } | null>(null);
+
   // Advanced filters for paper discovery
   const [yearFrom, setYearFrom] = useState("");
   const [yearTo, setYearTo] = useState("");
@@ -43,6 +72,41 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
     api.getDocuments().then((res) => setDocuments(res.items || [])).catch(() => {});
   }, []);
 
+  const loadAssets = async () => {
+    setAssetsLoading(true);
+    try {
+      const res = await api.getLibraryAssets({ limit: 80 });
+      setAllAssets(res.items || []);
+    } catch {
+      // ignore
+    } finally {
+      setAssetsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === "assets" && allAssets.length === 0) {
+      loadAssets();
+    }
+  }, [activeTab]);
+
+  const handleMultimodalSearch = async (e?: React.FormEvent, customQuery?: string) => {
+    if (e) e.preventDefault();
+    const q = (customQuery ?? multimodalQuery).trim();
+    if (!q) return;
+
+    if (customQuery) setMultimodalQuery(customQuery);
+    setMultimodalLoading(true);
+    try {
+      const res = await api.searchLibraryMultimodal(q, 15, 8);
+      setMultimodalResults(res);
+    } catch (err: any) {
+      alert(`多模态检索失败: ${err.message}`);
+    } finally {
+      setMultimodalLoading(false);
+    }
+  };
+
   const handleSearchPapers = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!paperQuery.trim()) return;
@@ -52,6 +116,7 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
       const params: Record<string, string> = {
         query: paperQuery.trim(),
         limit,
+        max_results: limit,
         sources: source,
         sort,
       };
@@ -111,11 +176,11 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
           <h1 className="text-2xl font-serif-academic font-bold text-foreground">文献资料库与知识资产</h1>
         </div>
 
-        <div className="flex items-center space-x-1.5 bg-muted/60 p-1 rounded-lg">
+        <div className="flex flex-wrap items-center space-x-1.5 bg-muted/60 p-1 rounded-lg">
           <button
             onClick={() => setActiveTab("documents")}
             className={cn(
-              "px-3.5 py-1.5 rounded-md text-xs font-serif-academic transition",
+              "px-3 py-1.5 rounded-md text-xs font-serif-academic transition",
               activeTab === "documents"
                 ? "bg-background text-foreground shadow-xs font-semibold border border-border/60"
                 : "text-muted-foreground hover:text-foreground"
@@ -124,9 +189,33 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
             本地文档库 ({documents.length})
           </button>
           <button
+            onClick={() => setActiveTab("multimodal")}
+            className={cn(
+              "px-3 py-1.5 rounded-md text-xs font-serif-academic transition flex items-center space-x-1.5",
+              activeTab === "multimodal"
+                ? "bg-background text-foreground shadow-xs font-semibold border border-border/60"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            <Sparkles className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-400" />
+            <span>多模态RAG检索</span>
+          </button>
+          <button
+            onClick={() => setActiveTab("assets")}
+            className={cn(
+              "px-3 py-1.5 rounded-md text-xs font-serif-academic transition flex items-center space-x-1.5",
+              activeTab === "assets"
+                ? "bg-background text-foreground shadow-xs font-semibold border border-border/60"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            <ImageIcon className="h-3.5 w-3.5 text-emerald-800 dark:text-emerald-300" />
+            <span>图表资产画廊 ({allAssets.length > 0 ? allAssets.length : "查看"})</span>
+          </button>
+          <button
             onClick={() => setActiveTab("papers")}
             className={cn(
-              "px-3.5 py-1.5 rounded-md text-xs font-serif-academic transition",
+              "px-3 py-1.5 rounded-md text-xs font-serif-academic transition",
               activeTab === "papers"
                 ? "bg-background text-foreground shadow-xs font-semibold border border-border/60"
                 : "text-muted-foreground hover:text-foreground"
@@ -216,11 +305,21 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
                   >
                     <div className="space-y-2">
                       <div className="flex items-start justify-between gap-2">
-                        <div className="flex items-center space-x-2 min-w-0">
-                          <FileText className="h-4 w-4 text-emerald-800 dark:text-emerald-400 shrink-0" />
-                          <h4 className="text-sm sm:text-base font-serif-academic font-semibold text-foreground truncate">
-                            {doc.title}
-                          </h4>
+                        <div className="flex items-start space-x-2.5 min-w-0">
+                          <FileText className="h-5 w-5 text-emerald-800 dark:text-emerald-400 shrink-0 mt-0.5" />
+                          <div className="min-w-0">
+                            <h4
+                              className="text-sm sm:text-base font-serif-academic font-semibold text-foreground line-clamp-2 leading-snug"
+                              title={doc.title}
+                            >
+                              {doc.title}
+                            </h4>
+                            {doc.relative_path && doc.relative_path !== doc.title && (
+                              <span className="text-xs text-foreground/60 font-mono block mt-0.5 truncate" title={doc.relative_path}>
+                                📄 {doc.relative_path}
+                              </span>
+                            )}
+                          </div>
                         </div>
                         <Badge variant="outline" className="text-xs font-mono shrink-0">
                           {doc.source_type}
@@ -228,9 +327,9 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
                       </div>
 
                       {/* Prevent 70-char SHA256 overflow using break-all & font-mono */}
-                      <div className="text-xs text-foreground/75 font-mono bg-muted/40 p-2 rounded leading-tight break-all border border-border/40">
-                        ID: {doc.document_id.length > 36 ? `${doc.document_id.slice(0, 28)}...${doc.document_id.slice(-8)}` : doc.document_id}
-                        <span className="text-foreground ml-1 font-semibold">· {doc.chunk_count || 0} 切片</span>
+                      <div className="text-xs text-foreground/75 font-mono bg-muted/40 p-2 rounded leading-tight break-all border border-border/40 flex items-center justify-between">
+                        <span>ID: {doc.document_id.length > 32 ? `${doc.document_id.slice(0, 16)}...${doc.document_id.slice(-8)}` : doc.document_id}</span>
+                        <span className="text-foreground ml-1 font-semibold whitespace-nowrap">{doc.chunk_count || 0} 切片</span>
                       </div>
                     </div>
 
@@ -253,6 +352,292 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
         </div>
       )}
 
+      {/* Tab: Multimodal RAG Panel */}
+      {activeTab === "multimodal" && (
+        <div className="space-y-6 animate-in fade-in-50" id="library-multimodal-panel">
+          {/* Header Banner */}
+          <div className="p-4 rounded-xl border border-emerald-800/30 bg-emerald-950/10 dark:bg-emerald-950/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="space-y-1">
+              <div className="flex items-center space-x-2">
+                <Sparkles className="h-4 w-4 text-emerald-800 dark:text-emerald-300" />
+                <h3 className="text-sm font-serif-academic font-bold text-foreground">
+                  多模态图文联合检索 (Multimodal RAG with RRF Fusion)
+                </h3>
+                <Badge variant="outline" className="text-[10px] font-mono border-emerald-700/40 text-emerald-800 dark:text-emerald-300">
+                  Dense + Sparse + Visual Assets
+                </Badge>
+              </div>
+              <p className="text-xs text-foreground/75 font-serif-academic leading-relaxed">
+                输入自然语言学术问题或技术关键词，系统将自动联合检索本地学术库中的正文切片、论文图表、架构示意图并进行互惠排序融合。
+              </p>
+            </div>
+          </div>
+
+          {/* Search Form */}
+          <form onSubmit={handleMultimodalSearch} className="flex gap-2">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                value={multimodalQuery}
+                onChange={(e) => setMultimodalQuery(e.target.value)}
+                placeholder="输入学术问题或技术概念（例如：多模态RAG向量索引构建原理、Attention 架构图、Agent Loop 流程）..."
+                className="pl-9 text-xs font-serif-academic bg-card"
+              />
+            </div>
+            <Button
+              type="submit"
+              size="sm"
+              disabled={multimodalLoading || !multimodalQuery.trim()}
+              className="bg-emerald-800 hover:bg-emerald-900 text-white font-serif-academic px-5 gap-1.5"
+            >
+              {multimodalLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Search className="h-3.5 w-3.5" />}
+              <span>图文联合检索</span>
+            </Button>
+          </form>
+
+          {/* Query Suggestions */}
+          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+            <span className="text-muted-foreground flex items-center gap-1 text-[11px]">
+              <Sparkles className="h-3 w-3 text-emerald-700 dark:text-emerald-400" />
+              推荐多模态查询:
+            </span>
+            {[
+              "多模态RAG向量索引构建原理",
+              "Agent Harness 系统架构图",
+              "Attention 注意力机制权重分布",
+              "自主地理智能体 GIS Agent",
+              "Loop Engineering 编码循环",
+            ].map((q) => (
+              <button
+                key={q}
+                type="button"
+                onClick={() => handleMultimodalSearch(undefined, q)}
+                className="px-2.5 py-1 rounded bg-muted/60 hover:bg-muted text-[11px] font-serif-academic text-foreground/85 border border-border/50 transition"
+              >
+                {q}
+              </button>
+            ))}
+          </div>
+
+          {/* Multimodal Results Display */}
+          {multimodalResults && (
+            <div className="space-y-4">
+              {/* Statistics & Modality Filter Bar */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 bg-card rounded-lg border border-border/70 text-xs font-serif-academic">
+                <div className="flex items-center space-x-3">
+                  <span className="font-semibold text-foreground">
+                    检索到 {multimodalResults.fused_hits.length} 项融合结果
+                  </span>
+                  <span className="text-foreground/70 font-mono text-[11px]">
+                    (文本切片 {multimodalResults.text_hits_count} ｜ 视觉图表 {multimodalResults.image_hits_count})
+                  </span>
+                  <Badge variant="secondary" className="font-mono text-[10px]">
+                    策略: {multimodalResults.fusion_strategy}
+                  </Badge>
+                </div>
+
+                <div className="flex items-center space-x-1 bg-muted/70 p-0.5 rounded-md text-xs">
+                  {(["all", "image", "text"] as const).map((m) => (
+                    <button
+                      key={m}
+                      onClick={() => setModalityFilter(m)}
+                      className={cn(
+                        "px-2.5 py-0.5 rounded transition text-[11px] font-medium",
+                        modalityFilter === m
+                          ? "bg-background text-foreground shadow-2xs font-semibold"
+                          : "text-muted-foreground hover:text-foreground"
+                      )}
+                    >
+                      {m === "all" ? "全部模态" : m === "image" ? "仅视觉图表" : "仅正文文本"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Fused Results Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {multimodalResults.fused_hits
+                  .filter((hit) => modalityFilter === "all" || hit.modality === modalityFilter)
+                  .map((hit, idx) => (
+                    <div
+                      key={hit.hit_id || idx}
+                      className={cn(
+                        "p-4 rounded-xl border bg-card text-xs sm:text-sm space-y-2.5 shadow-2xs top-bevel transition flex flex-col justify-between",
+                        hit.modality === "image"
+                          ? "border-emerald-800/40 hover:border-emerald-700 bg-emerald-950/5 dark:bg-emerald-950/10"
+                          : "border-border/80 hover:border-border"
+                      )}
+                    >
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between text-xs">
+                          <div className="flex items-center space-x-1.5">
+                            {hit.modality === "image" ? (
+                              <Badge className="bg-emerald-800/15 text-emerald-800 dark:text-emerald-300 border-emerald-800/30 text-[10px] gap-1">
+                                <ImageIcon className="h-3 w-3" />
+                                <span>视觉图表资产</span>
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline" className="text-[10px] gap-1">
+                                <FileText className="h-3 w-3" />
+                                <span>正文文本切片</span>
+                              </Badge>
+                            )}
+                            <span className="text-foreground/75 font-mono text-[11px]">
+                              第 {hit.page || hit.locator?.page || 1} 页
+                            </span>
+                          </div>
+                          <span className="font-mono text-[11px] text-emerald-800 dark:text-emerald-300 font-semibold">
+                            Rank #{hit.rank} ｜ {(hit.score * 100).toFixed(1)}%
+                          </span>
+                        </div>
+
+                        {hit.modality === "image" ? (
+                          <div className="space-y-2">
+                            <div
+                              className="relative rounded-lg overflow-hidden border border-border/70 bg-background/50 cursor-pointer group flex items-center justify-center p-1.5 max-h-52"
+                              onClick={() =>
+                                setLightboxAsset({
+                                  url: `/api/v1/library/assets/${hit.asset_id}/content`,
+                                  title: `文献插图与图表资产 (第 ${hit.page || 1} 页)`,
+                                  caption: hit.text || hit.locator?.caption || `资产标识: ${hit.asset_id}`,
+                                })
+                              }
+                            >
+                              <img
+                                src={`/api/v1/library/assets/${hit.asset_id}/content?variant=thumbnail`}
+                                alt={hit.text || "图表资产"}
+                                className="max-h-48 w-full object-contain rounded transition-transform group-hover:scale-[1.02]"
+                                onError={(e) => {
+                                  (e.target as HTMLElement).setAttribute("src", `/api/v1/library/assets/${hit.asset_id}/content`);
+                                }}
+                              />
+                              <div className="absolute bottom-2 right-2 bg-black/75 text-white text-[10px] px-2 py-0.5 rounded font-mono flex items-center space-x-1 opacity-85 group-hover:opacity-100 transition">
+                                <ZoomIn className="h-3 w-3" />
+                                <span>查看原图</span>
+                              </div>
+                            </div>
+                            {hit.text && (
+                              <p className="text-xs text-foreground/85 font-serif-academic italic leading-relaxed line-clamp-2">
+                                {hit.text}
+                              </p>
+                            )}
+                          </div>
+                        ) : (
+                          <p className="text-xs sm:text-sm text-foreground/90 font-serif-academic leading-relaxed line-clamp-4">
+                            {hit.text || "文本片段匹配"}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="pt-2 border-t border-border/50 flex items-center justify-between text-[11px] text-foreground/60 font-mono">
+                        <span className="truncate max-w-[200px]">来源快照: {hit.source_snapshot_id || hit.hit_id}</span>
+                        {hit.asset_id && <span className="font-semibold text-emerald-800 dark:text-emerald-300">ID: {hit.asset_id}</span>}
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Tab: Visual Assets Gallery */}
+      {activeTab === "assets" && (
+        <div className="space-y-6 animate-in fade-in-50" id="library-assets-panel">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-card rounded-xl border border-border/80 shadow-2xs">
+            <div>
+              <h3 className="text-sm sm:text-base font-serif-academic font-bold text-foreground flex items-center space-x-2">
+                <ImageIcon className="h-4 w-4 text-emerald-800 dark:text-emerald-300" />
+                <span>文献图表与视觉资产库 (Visual Assets Gallery)</span>
+              </h3>
+              <p className="text-xs text-foreground/75 font-serif-academic mt-0.5">
+                自动从收录论文中提取并持久化的高清架构图、模型拓扑、实验曲线与消融实验数据表。
+              </p>
+            </div>
+
+            <div className="flex items-center space-x-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={loadAssets}
+                disabled={assetsLoading}
+                className="h-8 text-xs font-serif-academic gap-1"
+              >
+                {assetsLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                <span>刷新资产</span>
+              </Button>
+            </div>
+          </div>
+
+          {assetsLoading ? (
+            <div className="text-center py-24 space-y-3">
+              <Loader2 className="h-8 w-8 animate-spin mx-auto text-emerald-800 dark:text-emerald-400" />
+              <p className="text-xs sm:text-sm text-muted-foreground font-serif-academic">正在聚合文献视觉图表与插图...</p>
+            </div>
+          ) : allAssets.length === 0 ? (
+            <div className="text-center py-20 bg-card rounded-xl border border-dashed border-border/80 space-y-2">
+              <ImageIcon className="h-10 w-10 mx-auto text-muted-foreground/50" />
+              <h4 className="text-sm font-serif-academic font-medium text-foreground">暂未提取到图表资产</h4>
+              <p className="text-xs text-muted-foreground max-w-sm mx-auto font-serif-academic">
+                可在多模态检索栏中直接搜索图表，或导入包含插图的 PDF 文档自动提取。
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+              {allAssets.map((asset) => (
+                <div
+                  key={asset.asset_id}
+                  className="rounded-xl border border-border/80 bg-card overflow-hidden shadow-2xs top-bevel hover:border-emerald-800/50 transition group flex flex-col justify-between"
+                >
+                  <div
+                    className="relative bg-muted/20 p-2 cursor-pointer flex items-center justify-center min-h-[160px] max-h-52 overflow-hidden"
+                    onClick={() =>
+                      setLightboxAsset({
+                        url: `/api/v1/library/assets/${asset.asset_id}/content`,
+                        title: asset.document_title || `图表资产 ${asset.asset_id}`,
+                        caption: asset.caption || `第 ${asset.page} 页插图`,
+                      })
+                    }
+                  >
+                    <img
+                      src={`/api/v1/library/assets/${asset.asset_id}/content?variant=thumbnail`}
+                      alt={asset.caption || "文献图表"}
+                      className="max-h-48 w-full object-contain rounded transition-transform group-hover:scale-105"
+                      onError={(e) => {
+                        (e.target as HTMLElement).setAttribute("src", `/api/v1/library/assets/${asset.asset_id}/content`);
+                      }}
+                    />
+                    <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
+                      <span className="bg-black/80 text-white text-xs px-2.5 py-1 rounded-md font-mono flex items-center space-x-1">
+                        <ZoomIn className="h-3.5 w-3.5" />
+                        <span>点击放大</span>
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="p-3 space-y-1.5 border-t border-border/60 bg-card">
+                    <div className="flex items-center justify-between text-xs">
+                      <Badge variant="outline" className="text-[10px] font-mono border-emerald-800/30 text-emerald-800 dark:text-emerald-300">
+                        Page {asset.page}
+                      </Badge>
+                      <span className="text-[10px] font-mono text-muted-foreground uppercase">{asset.asset_type || "figure"}</span>
+                    </div>
+                    <p className="text-xs font-serif-academic font-semibold text-foreground line-clamp-1 truncate" title={asset.document_title}>
+                      {asset.document_title || "未知文献"}
+                    </p>
+                    {asset.caption && (
+                      <p className="text-[11px] text-foreground/75 font-serif-academic line-clamp-2 leading-relaxed">
+                        {asset.caption}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Tab 2: Papers Panel (With Complete Filters & Batch Actions) */}
       {activeTab === "papers" && (
         <div className="space-y-4" id="library-papers-panel">
@@ -263,7 +648,7 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
               <Input
                 value={paperQuery}
                 onChange={(e) => setPaperQuery(e.target.value)}
-                placeholder="输入学术主题、标题、DOI 或 arXiv ID（如：Quantum error correction, LLM reasoning）..."
+                placeholder="支持自然语言描述研究意图或关键词（如：大模型长文本注意力优化机制、Quantum error correction in superconducting qubits）..."
                 className="pl-9 text-xs font-serif-academic bg-card"
               />
             </div>
@@ -276,6 +661,31 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
               {loading ? "检索中..." : "多源检索"}
             </Button>
           </form>
+
+          {/* Natural language query suggestions */}
+          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+            <span className="text-muted-foreground flex items-center gap-1 text-[11px]">
+              <Sparkles className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+              自然语言检索推荐:
+            </span>
+            {[
+              "大语言模型长上下文注意力机制优化",
+              "超导量子比特容错量子纠错机制",
+              "多智能体协作与复杂任务规划推理",
+              "Diffusion models for biomedical image synthesis",
+            ].map((suggestion) => (
+              <button
+                key={suggestion}
+                type="button"
+                onClick={() => {
+                  setPaperQuery(suggestion);
+                }}
+                className="px-2 py-0.5 rounded-full bg-muted/60 hover:bg-muted text-muted-foreground hover:text-foreground text-[11px] font-serif-academic border border-border/50 transition cursor-pointer"
+              >
+                {suggestion}
+              </button>
+            ))}
+          </div>
 
           {/* Advanced Multi-criteria Filter Bar */}
           <div className="p-3.5 rounded-xl border border-border/80 bg-card/70 flex flex-wrap items-center gap-3 text-xs font-serif-academic">
@@ -458,6 +868,30 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
             })}
           </div>
         </div>
+      )}
+
+      {lightboxAsset && (
+        <Dialog open={!!lightboxAsset} onOpenChange={(open) => !open && setLightboxAsset(null)}>
+          <DialogContent className="max-w-4xl max-h-[90vh] p-4 bg-background flex flex-col">
+            <DialogHeader>
+              <DialogTitle className="text-sm font-serif-academic font-bold truncate text-foreground">
+                {lightboxAsset.title}
+              </DialogTitle>
+            </DialogHeader>
+            <div className="flex-1 overflow-auto flex items-center justify-center p-3 bg-muted/20 rounded-lg">
+              <img
+                src={lightboxAsset.url}
+                alt="Visual Asset Full View"
+                className="max-h-[70vh] max-w-full object-contain rounded shadow-xs"
+              />
+            </div>
+            {lightboxAsset.caption && (
+              <p className="text-xs text-foreground/80 font-serif-academic italic pt-1 px-1">
+                {lightboxAsset.caption}
+              </p>
+            )}
+          </DialogContent>
+        </Dialog>
       )}
     </div>
   );

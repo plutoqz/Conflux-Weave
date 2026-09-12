@@ -94,6 +94,7 @@
 
 @layer base {
   html {
+    font-size: 17.5px;
     scrollbar-gutter: stable;
   }
 
@@ -102,9 +103,10 @@
   }
 
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground text-sm sm:text-base;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    line-height: 1.6;
   }
 
   /* Academic Serif Class for titles and reading reports */

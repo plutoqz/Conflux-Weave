@@ -12,6 +12,9 @@ import {
   PanelLeftClose,
   PanelLeft,
   Clock,
+  Loader2,
+  CheckCircle2,
+  ExternalLink,
 } from "lucide-react";
 import { marked } from "marked";
 import { Button } from "@/components/ui/button";
@@ -19,6 +22,154 @@ import { Badge } from "@/components/ui/badge";
 import { api } from "@/services/api";
 import { cn } from "@/lib/utils";
 import type { ChatMessage, ConversationSummary } from "@/types/workbench";
+
+const renderMarkdown = (content: string) => {
+  try {
+    return { __html: marked.parse(content, { gfm: true, breaks: true }) as string };
+  } catch {
+    return { __html: content };
+  }
+};
+
+const DeepResearchMessageBubble: React.FC<{
+  message: ChatMessage;
+  onReportLoaded: (content: string) => void;
+}> = ({ message, onReportLoaded }) => {
+  const [runState, setRunState] = useState<string>("running");
+  const [stepCount, setStepCount] = useState<number>(0);
+
+  const isPending = message.content.includes("已为您启动深度研究任务");
+
+  useEffect(() => {
+    if (!message.run_id || !isPending) return;
+
+    let cancelled = false;
+    const interval = setInterval(async () => {
+      try {
+        const detail = await api.getRunDetail(message.run_id!);
+        if (cancelled) return;
+        const st = detail.state || detail.status || "running";
+        setRunState(st);
+        if (detail.steps) setStepCount(detail.steps.length);
+
+        if (st === "complete" || st === "partial") {
+          clearInterval(interval);
+          const artifactIds = detail.delivery?.artifact_ids || detail.delivery?.artifact_refs || [];
+          if (artifactIds.length > 0) {
+            const res = await api.getArtifactContent(message.run_id!, artifactIds[0]);
+            const content = typeof res === "string" ? res : res.content;
+            if (content && typeof content === "string") {
+              onReportLoaded(content);
+              return;
+            }
+          }
+          if (detail.report_content) {
+            onReportLoaded(detail.report_content);
+          }
+        } else if (st === "failed" || st === "waiting_for_user" || st === "cancelled" || st === "expired") {
+          clearInterval(interval);
+          setRunState(st);
+        }
+      } catch (err) {
+        console.error("Polling run detail error:", err);
+      }
+    }, 2500);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [message.run_id, isPending]);
+
+  const isFailed = runState === "failed" || runState === "waiting_for_user" || runState === "cancelled" || runState === "expired";
+
+  return (
+    <div className="space-y-3">
+      {isFailed ? (
+        <div className="rounded-xl border border-rose-600/30 bg-rose-50/50 dark:bg-rose-950/20 p-4 space-y-2.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2 text-rose-800 dark:text-rose-300 font-semibold text-sm">
+              <span>⚠️ 深度研究任务中断或需人工介入</span>
+            </div>
+            <Badge variant="outline" className="text-xs font-mono border-rose-600/40 text-rose-800 dark:text-rose-300">
+              {runState}
+            </Badge>
+          </div>
+          <p className="text-xs text-foreground/80 leading-relaxed font-sans">
+            研究流水线在推进到第 {stepCount} 阶段时暂停。您可以前往研究中心查看具体阶段错误日志或重试该任务。
+          </p>
+          <div className="flex items-center justify-between pt-1 border-t border-rose-600/20 text-xs">
+            <span className="font-mono text-muted-foreground">Run ID: {message.run_id}</span>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 text-xs text-rose-900 dark:text-rose-200 hover:bg-rose-600/10 gap-1 px-2"
+              onClick={() => {
+                window.location.hash = `#/research?run_id=${encodeURIComponent(message.run_id!)}`;
+              }}
+            >
+              <span>在研究中心查看与恢复</span>
+              <ExternalLink className="h-3 w-3" />
+            </Button>
+          </div>
+        </div>
+      ) : isPending ? (
+        <div className="rounded-xl border border-amber-600/30 bg-amber-50/50 dark:bg-amber-950/20 p-4 space-y-2.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2 text-amber-800 dark:text-amber-300 font-semibold text-sm">
+              <Loader2 className="h-4 w-4 animate-spin text-amber-600" />
+              <span>深度研究引擎持续推理中...</span>
+            </div>
+            <Badge variant="outline" className="text-xs font-mono border-amber-600/40 text-amber-800 dark:text-amber-300">
+              {runState}
+            </Badge>
+          </div>
+          <p className="text-xs text-foreground/80 leading-relaxed font-sans">
+            正在执行多智能体计划分解、多源文献检索与闭环证据核验。已推进 {stepCount} 项流水线阶段，结果将自动同步刷新到此处。
+          </p>
+          <div className="flex items-center justify-between pt-1 border-t border-amber-600/20 text-xs">
+            <span className="font-mono text-muted-foreground">Run ID: {message.run_id}</span>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 text-xs text-amber-900 dark:text-amber-200 hover:bg-amber-600/10 gap-1 px-2"
+              onClick={() => {
+                window.location.hash = `#/research?run_id=${encodeURIComponent(message.run_id!)}`;
+              }}
+            >
+              <span>在研究中心查看</span>
+              <ExternalLink className="h-3 w-3" />
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div>
+          <div className="flex items-center justify-between pb-2 mb-3 border-b border-border/60 text-xs font-mono text-muted-foreground">
+            <span className="flex items-center gap-1.5 text-emerald-800 dark:text-emerald-400 font-semibold">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              深度学术综述已就绪
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 text-xs text-emerald-800 dark:text-emerald-300 hover:bg-emerald-900/10 gap-1 px-2"
+              onClick={() => {
+                window.location.hash = `#/research?run_id=${encodeURIComponent(message.run_id!)}`;
+              }}
+            >
+              <span>查看完整证据链</span>
+              <ExternalLink className="h-3 w-3" />
+            </Button>
+          </div>
+          <div
+            className="prose prose-stone dark:prose-invert max-w-none text-base leading-relaxed font-serif-academic text-foreground"
+            dangerouslySetInnerHTML={renderMarkdown(message.content)}
+          />
+        </div>
+      )}
+    </div>
+  );
+};
 
 const MODE_CONFIG = {
   direct: {
@@ -134,6 +285,7 @@ export const ChatView: React.FC = () => {
         mode: res.routed_mode || res.mode || mode,
         created_at: new Date().toISOString(),
         memory_candidates: res.memory_candidates,
+        run_id: res.run_id,
       };
       setMessages((prev) => [...prev, assistantMsg]);
 
@@ -157,18 +309,16 @@ export const ChatView: React.FC = () => {
     }
   };
 
+  const updateMessageContent = (index: number, newContent: string) => {
+    setMessages((prev) =>
+      prev.map((m, idx) => (idx === index ? { ...m, content: newContent } : m))
+    );
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
-    }
-  };
-
-  const renderMarkdown = (content: string) => {
-    try {
-      return { __html: marked.parse(content, { gfm: true, breaks: true }) as string };
-    } catch {
-      return { __html: content };
     }
   };
 
@@ -360,6 +510,11 @@ export const ChatView: React.FC = () => {
                     >
                       {isUser ? (
                         <div className="whitespace-pre-wrap">{msg.content}</div>
+                      ) : msg.run_id ? (
+                        <DeepResearchMessageBubble
+                          message={msg}
+                          onReportLoaded={(newContent) => updateMessageContent(i, newContent)}
+                        />
                       ) : (
                         <div
                           className="prose prose-stone dark:prose-invert max-w-none text-base leading-relaxed font-serif-academic text-foreground"

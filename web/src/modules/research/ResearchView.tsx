@@ -11,11 +11,18 @@ import {
   CheckCircle2,
   ExternalLink,
   ChevronRight,
+  Image as ImageIcon,
 } from "lucide-react";
 import { useWorkbenchStore } from "@/stores/useWorkbenchStore";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { api } from "@/services/api";
 import { cn } from "@/lib/utils";
 import type { RunDetail } from "@/types/workbench";
@@ -33,6 +40,7 @@ export const ResearchView: React.FC = () => {
   const [rightTab, setRightTab] = useState<"toc" | "evidence" | "activity">("toc");
   const [headings, setHeadings] = useState<Array<{ id: string; text: string; level: number }>>([]);
   const [evidenceList, setEvidenceList] = useState<any[]>([]);
+  const [previewImage, setPreviewImage] = useState<{ url: string; title: string } | null>(null);
 
   useEffect(() => {
     if (!activeRunId) return;
@@ -414,9 +422,41 @@ export const ResearchView: React.FC = () => {
                         {ev.locator?.page ? `第 ${ev.locator.page} 页` : ev.locator?.heading || ev.extraction_method || "核验证据"}
                       </span>
                     </div>
-                    <p className="text-foreground/90 leading-relaxed italic border-l-2 border-emerald-800/60 pl-2.5 my-1 font-serif-academic">
-                      “{ev.quote}”
-                    </p>
+                    {(ev.modality === "image" || ev.asset_id) ? (
+                      <div className="space-y-2 pt-1">
+                        <div
+                          className="relative rounded-md overflow-hidden border border-border/70 bg-muted/20 cursor-pointer group flex items-center justify-center p-1 hover:border-emerald-700/60 transition"
+                          onClick={() =>
+                            setPreviewImage({
+                              url: `/api/v1/library/assets/${ev.asset_id}/content`,
+                              title: `视觉实证图片：${ev.evidence_id} (第 ${ev.locator?.page || 1} 页)`,
+                            })
+                          }
+                        >
+                          <img
+                            src={`/api/v1/library/assets/${ev.asset_id}/content?variant=thumbnail`}
+                            alt={ev.quote || "视觉实证图表"}
+                            className="w-full max-h-48 object-contain bg-background/50 rounded transition-transform group-hover:scale-[1.01]"
+                            onError={(e) => {
+                              (e.target as HTMLElement).setAttribute("src", `/api/v1/library/assets/${ev.asset_id}/content`);
+                            }}
+                          />
+                          <div className="absolute bottom-1.5 right-1.5 bg-black/70 text-white text-[10px] px-1.5 py-0.5 rounded font-mono flex items-center space-x-1 opacity-80 group-hover:opacity-100 transition">
+                            <ImageIcon className="h-3 w-3" />
+                            <span>点击放大原图</span>
+                          </div>
+                        </div>
+                        {ev.quote && (
+                          <p className="text-foreground/90 leading-relaxed italic border-l-2 border-emerald-800/60 pl-2.5 my-1 font-serif-academic text-xs">
+                            “{ev.quote}”
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="text-foreground/90 leading-relaxed italic border-l-2 border-emerald-800/60 pl-2.5 my-1 font-serif-academic">
+                        “{ev.quote}”
+                      </p>
+                    )}
                     {ev.source_snapshot_id && (
                       <div className="text-xs font-mono text-foreground/70 truncate pt-0.5">
                         来源: {ev.source_snapshot_id.length > 32 ? `${ev.source_snapshot_id.slice(0, 24)}...` : ev.source_snapshot_id}
@@ -452,6 +492,25 @@ export const ResearchView: React.FC = () => {
           </Tabs>
         </aside>
       </div>
+
+      {previewImage && (
+        <Dialog open={!!previewImage} onOpenChange={(open) => !open && setPreviewImage(null)}>
+          <DialogContent className="max-w-4xl max-h-[90vh] p-4 bg-background flex flex-col">
+            <DialogHeader>
+              <DialogTitle className="text-sm font-serif-academic font-bold truncate text-foreground">
+                {previewImage.title}
+              </DialogTitle>
+            </DialogHeader>
+            <div className="flex-1 overflow-auto flex items-center justify-center p-3 bg-muted/20 rounded-lg">
+              <img
+                src={previewImage.url}
+                alt="Evidence Asset"
+                className="max-h-[72vh] max-w-full object-contain rounded shadow-xs"
+              />
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 };

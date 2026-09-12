@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { FileText, Copy, Sparkles, Check, History, Loader2, AlertCircle } from "lucide-react";
 import { marked } from "marked";
+import { renderMarkdownWithMath, cleanDocumentNoteText } from "@/lib/math";
 import { api } from "@/services/api";
 import { cn } from "@/lib/utils";
 import type { DocumentNote } from "@/types/workbench";
@@ -31,16 +32,20 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [revisions, setRevisions] = useState<any[]>([]);
+  const [savingToResearch, setSavingToResearch] = useState(false);
+  const [savedResearchRunId, setSavedResearchRunId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open || !documentId) {
       setNote(null);
       setError(null);
       setRevisions([]);
+      setSavedResearchRunId(null);
       return;
     }
     setLoading(true);
     setError(null);
+    setSavedResearchRunId(null);
 
     // Call analyzeDocument (which gets existing or builds new)
     api.analyzeDocument(documentId)
@@ -94,14 +99,46 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
     }
   };
 
-  const htmlContent = note?.html_content || note?.content_html || "";
-  const mdContent = note?.markdown_content || note?.content_markdown || "";
+  const handleSaveToResearch = async () => {
+    if (!note?.note_id) return;
+    try {
+      setSavingToResearch(true);
+      const res = await api.saveNoteToResearch(note.note_id);
+      setSavedResearchRunId(res.run_id);
+    } catch (err: any) {
+      alert(`保存报告到研究失败: ${err.message || err}`);
+    } finally {
+      setSavingToResearch(false);
+    }
+  };
 
-  // Prepared HTML for iframe: if htmlContent is present, use it; otherwise parse mdContent
-  const displayHtml = htmlContent
-    ? htmlContent
-    : mdContent
-    ? `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+  const rawHtml = note?.html_content || note?.content_html || "";
+  const rawMd = note?.markdown_content || note?.content_markdown || "";
+
+  const mdContent = cleanDocumentNoteText(rawMd);
+
+  // Prepared HTML for iframe: if htmlContent is present, enhance it; otherwise parse mdContent
+  let displayHtml = "";
+  if (rawHtml) {
+    let enhancedHtml = cleanDocumentNoteText(rawHtml);
+    if (!enhancedHtml.includes("katex.min.css")) {
+      const katexHead = `
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+        <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+        <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js" onload="renderMathInElement(document.body, {delimiters: [{left: '$$', right: '$$', display: true}, {left: '\\\\[', right: '\\\\]', display: true}, {left: '$', right: '$', display: false}, {left: '\\\\(', right: '\\\\)', display: false}], throwOnError: false});"></script>
+      `;
+      if (enhancedHtml.includes("</head>")) {
+        enhancedHtml = enhancedHtml.replace("</head>", `${katexHead}</head>`);
+      } else {
+        enhancedHtml = `${katexHead}${enhancedHtml}`;
+      }
+    }
+    displayHtml = enhancedHtml;
+  } else if (mdContent) {
+    const renderedBody = renderMarkdownWithMath(mdContent);
+    displayHtml = `<!DOCTYPE html><html><head><meta charset="utf-8">
+      <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+      <style>
         body { font-family: "江西拙楷", "JiangXiZhuoKai", "LXGW WenKai", "Charter", "Source Serif 4", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif; padding: 24px 32px; line-height: 1.85; color: #181816; background: #FAF9F6; margin: 0; }
         h1 { font-family: "江西拙楷", "JiangXiZhuoKai", "LXGW WenKai", "Charter", "Source Serif 4", Georgia, serif; color: #1B4931; margin-top: 1.6em; border-bottom: 2px solid #1B4931; padding-bottom: 8px; font-size: 1.6rem; font-weight: 700; }
         h2 { font-family: "江西拙楷", "JiangXiZhuoKai", "LXGW WenKai", "Charter", "Source Serif 4", Georgia, serif; color: #6d28d9; border-left: 4px solid #8b5cf6; padding-left: 10px; margin-top: 1.5em; font-size: 1.3rem; font-weight: 700; }
@@ -114,8 +151,11 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
         th { background: #EAE8E0; font-weight: 600; }
         code { background: #EAE8E0; padding: 2px 6px; border-radius: 4px; font-size: 12px; font-family: monospace; }
         blockquote { border-left: 3px solid #1B4931; margin: 16px 0; padding-left: 16px; color: #555; }
-      </style></head><body>${marked.parse(mdContent, { gfm: true, breaks: true })}</body></html>`
-    : "<p style='padding: 24px; color: #888;'>暂无内容</p>";
+        .katex-display { margin: 16px 0; overflow-x: auto; text-align: center; }
+      </style></head><body>${renderedBody}</body></html>`;
+  } else {
+    displayHtml = "<p style='padding: 24px; color: #888;'>暂无内容</p>";
+  }
 
   const handleCopyMd = () => {
     if (mdContent) {
@@ -206,6 +246,29 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
               {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
               <span>{copied ? "已复制" : "复制"}</span>
             </Button>
+
+            {savedResearchRunId ? (
+              <Badge variant="outline" className="text-xs font-serif-academic border-emerald-600 text-emerald-700 bg-emerald-50 dark:bg-emerald-950/40 dark:text-emerald-300 gap-1 py-1 px-2.5">
+                <Check className="h-3 w-3 text-emerald-600" />
+                <span>已保存到研究 ({savedResearchRunId.slice(0, 12)})</span>
+              </Badge>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleSaveToResearch}
+                disabled={!note || savingToResearch}
+                title="将当前研读报告归档并保存到深度研究中心"
+                className="h-7 px-2.5 text-xs font-serif-academic gap-1.5 border-emerald-700/50 text-emerald-800 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/50"
+              >
+                {savingToResearch ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Sparkles className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-400" />
+                )}
+                <span>保存报告到研究</span>
+              </Button>
+            )}
           </div>
         </div>
 

@@ -91,6 +91,7 @@ export interface ChatMessage {
   content: string;
   created_at?: string;
   mode?: "auto" | "direct" | "rag" | "deep" | "document" | "project";
+  run_id?: string;
   memory_candidates?: Array<{
     candidate_id: string;
     key: string;
@@ -127,6 +128,7 @@ export interface LibraryDocument {
   title: string;
   source_type: string;
   created_at: string;
+  relative_path?: string;
   chunk_count?: number;
   asset_count?: number;
 }
@@ -147,7 +149,9 @@ export interface PaperItem {
 export interface ProjectSummary {
   project_id: string;
   name: string;
-  path: string;
+  root_path?: string;
+  root_paths?: string[];
+  path?: string;
   description?: string;
   branch?: string;
   dirty_files?: number;
@@ -169,6 +173,13 @@ export interface DocumentNote {
   revisions?: Array<{ note_id?: string; revision_id?: string; version: number; instruction?: string; created_at: string }>;
 }
 
+export interface SkillBudget {
+  max_tokens: number;
+  timeout_seconds: number;
+  max_steps?: number;
+  estimated_time_seconds?: number;
+}
+
 export interface SkillSummary {
   skill_id: string;
   name: string;
@@ -177,14 +188,13 @@ export interface SkillSummary {
   author: string;
   version: string;
   required_tools: string[];
-  default_budget: {
-    max_tokens: number;
-    timeout_seconds: number;
-  };
+  default_budget: SkillBudget;
   created_at: string;
 }
 
 export interface SkillDetail extends SkillSummary {
+  prompt_template?: string;
+  rules?: string[];
   input_schema: {
     type: string;
     properties?: Record<string, any>;

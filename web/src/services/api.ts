@@ -96,7 +96,27 @@ export const api = {
   getDocuments: () => request<{ items: LibraryDocument[] }>("/api/v1/library"),
   searchPapers: (params: Record<string, string>) => {
     const qs = new URLSearchParams(params).toString();
-    return request<{ items: PaperItem[]; total?: number; sources?: any[] }>(`/api/v1/library/search?${qs}`);
+    return request<{ items: any[]; total?: number; deduplicated_count?: number; sources?: any[] }>(
+      `/api/v1/library/papers/search?${qs}`,
+      { method: "POST" }
+    ).then((res) => {
+      const items: PaperItem[] = (res.items || []).map((p: any) => ({
+        id: p.paper_id || p.id,
+        title: p.title || "未命名论文",
+        authors: p.authors || [],
+        doi: p.doi,
+        arxiv_id: p.arxiv_id,
+        abstract: p.summary || p.abstract || "",
+        url: (p.landing_urls && p.landing_urls[0]) || (p.pdf_candidates && p.pdf_candidates[0]?.url) || p.url || "",
+        published_year: p.year || (p.published ? parseInt(p.published.slice(0, 4)) : undefined),
+        source: Array.isArray(p.sources) ? p.sources.join(", ") : (p.source || "arXiv/OpenAlex"),
+      }));
+      return {
+        items,
+        total: res.deduplicated_count ?? res.total ?? items.length,
+        sources: res.sources,
+      };
+    });
   },
 
   // Document Notes
@@ -112,9 +132,59 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ patch_prompt: patchPrompt, target_version: targetVersion }),
     }),
+  saveNoteToResearch: (noteId: string) =>
+    request<{ task_id: string; run_id: string; status: string; report_artifact_id: string; title: string; message: string }>(
+      `/api/v1/notes/${encodeURIComponent(noteId)}/save-to-research`,
+      { method: "POST" }
+    ),
+
+  // Multimodal RAG & Visual Assets
+  searchLibraryMultimodal: (query: string, topK = 10, imageK = 5) =>
+    request<{
+      query: string;
+      text_hits_count: number;
+      image_hits_count: number;
+      fusion_strategy: string;
+      fused_hits: Array<{
+        hit_id: string;
+        score: number;
+        rank: number;
+        modality: "text" | "image";
+        source_snapshot_id: string;
+        locator: Record<string, any>;
+        text: string;
+        asset_id?: string;
+        artifact_ref?: string;
+        thumbnail_artifact_ref?: string;
+        page?: number;
+        bbox?: number[];
+        parent_chunk_ids?: string[];
+      }>;
+    }>(`/api/v1/library/search?query=${encodeURIComponent(query)}&top_k=${topK}&image_k=${imageK}`, {
+      method: "POST",
+    }),
+  getLibraryAssets: (params?: { documentId?: string; assetType?: string; limit?: number }) => {
+    const sp = new URLSearchParams();
+    if (params?.documentId) sp.append("document_id", params.documentId);
+    if (params?.assetType) sp.append("asset_type", params.assetType);
+    if (params?.limit) sp.append("limit", params.limit.toString());
+    const qs = sp.toString();
+    return request<{ total: number; items: any[] }>(`/api/v1/library/assets${qs ? `?${qs}` : ""}`);
+  },
+  getDocumentAssets: (documentId: string) =>
+    request<{ document_id: string; asset_count: number; items: any[] }>(
+      `/api/v1/library/documents/${encodeURIComponent(documentId)}/assets`
+    ),
 
   // Projects
   getProjects: () => request<ProjectSummary[]>("/api/v1/projects"),
+  createProject: (data: { name: string; root_path?: string; root_paths?: string[]; description?: string }) =>
+    request<any>("/api/v1/projects", { method: "POST", body: JSON.stringify(data) }),
+  browseFolder: (initialDir?: string) =>
+    request<{ path: string | null }>(
+      `/api/v1/projects/browse-folder${initialDir ? `?initial_dir=${encodeURIComponent(initialDir)}` : ""}`,
+      { method: "POST" }
+    ),
   getProjectDetail: (projectId: string) => request<any>(`/api/v1/projects/${projectId}`),
   getProjectTree: (projectId: string) => request<any>(`/api/v1/projects/${projectId}/tree`),
   getProjectFile: (projectId: string, filePath: string) =>
