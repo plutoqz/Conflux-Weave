@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 import subprocess
+import tempfile
 from datetime import UTC, datetime
 
 from dotenv import dotenv_values
@@ -24,6 +25,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from conflux_weave.chat import ChatMessage, ChatService
 from conflux_weave.memory_recall import MemoryRecallService
+from conflux_weave.compute_tools import (
+    ComputeToolRequest,
+    RestrictedComputeSandbox,
+    ToolClass,
+    ToolDecision,
+    ToolPolicy,
+)
 from conflux_weave.export_bundle import (
     ExportService,
     build_export_json,
@@ -1600,6 +1608,47 @@ def create_app(
         corpus_manifest_path=_corpus_manifest_path,
     )
     app.state.export_service = export_service
+
+    # ------------------------------------------------------ P6-B2/B3 受限计算工具
+    compute_workspace = Path(db_path).parent / "workspace" / "compute" if db_path and db_path != ":memory:" else Path(tempfile.gettempdir()) / "cw-compute"
+    _compute_store = getattr(repository, "artifact_store", None)
+    compute_sandbox = (
+        RestrictedComputeSandbox(_compute_store, workspace_root=compute_workspace)
+        if _compute_store is not None
+        else None
+    )
+    app.state.compute_sandbox = compute_sandbox
+
+    @app.post("/api/v1/tools/compute")
+    async def execute_compute_tool(request: Request):
+        """P6-B2/B3：受限计算工具（compute 类，满足资源限制后自动执行）。
+
+        工具调用与产物关系通过 agent_events 进入 Run 可见面（携带 run_id 时）。
+        非法输入折叠为 422；沙箱内部错误不影响 API 进程。
+        """
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse(status_code=422, content={"code": "invalid_request", "message": "请求体必须是 JSON。"})
+        try:
+            tool_request = ComputeToolRequest.from_payload(payload)
+        except ValueError as exc:
+            return JSONResponse(status_code=422, content={"code": "invalid_request", "message": str(exc)})
+        policy = ToolPolicy.from_payload(payload.get("tool_policy"))
+        run_id = payload.get("run_id")
+
+        # B3 决策：compute 类自动执行（策略显式禁止除外）
+        if compute_sandbox is None:
+            return JSONResponse(status_code=503, content={"code": "service_unavailable", "message": "计算工具存储未就绪。"})
+        decision = policy.decide(str(payload.get("tool_name") or "python.compute"), ToolClass.COMPUTE)
+        if decision is ToolDecision.DENIED:
+            return JSONResponse(
+                status_code=403,
+                content={"code": "tool_denied", "message": "该工具被当前策略禁止。", "tool_policy": policy.to_dict()},
+            )
+
+        result = compute_sandbox.execute(tool_request, policy=policy, run_id=run_id)
+        return result.to_dict()
     _EXPORT_FORMATS = ("markdown", "bibtex", "json", "zip")
 
     def _export_response(document, export_format: str, download_stem: str) -> Response:
