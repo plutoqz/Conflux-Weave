@@ -14,6 +14,9 @@ export const SettingsView: React.FC = () => {
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState("");
   const [memories, setMemories] = useState<any[]>([]);
+  const [recallQuery, setRecallQuery] = useState("");
+  const [recallResult, setRecallResult] = useState<any[] | null>(null);
+  const [recallBusy, setRecallBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
@@ -46,6 +49,19 @@ export const SettingsView: React.FC = () => {
     api.getMemories().then((res) => setMemories(res.items || [])).catch(() => {});
     fetchMcpServers();
   }, []);
+
+  const handleRecallPreview = async () => {
+    if (!recallQuery.trim() || recallBusy) return;
+    setRecallBusy(true);
+    try {
+      const res = await api.recallMemories(recallQuery.trim());
+      setRecallResult(res.items || []);
+    } catch {
+      setRecallResult([]);
+    } finally {
+      setRecallBusy(false);
+    }
+  };
 
   const fetchMcpServers = async () => {
     setMcpLoading(true);
@@ -258,6 +274,43 @@ export const SettingsView: React.FC = () => {
               ))}
             </div>
           )}
+
+          {/* P6-B1：召回预览 —— 为什么召回 */}
+          <div className="mt-4 pt-4 border-t border-border/60 space-y-2.5">
+            <div className="flex items-center gap-2">
+              <Input
+                value={recallQuery}
+                onChange={(e) => setRecallQuery(e.target.value)}
+                placeholder="输入查询，预览将召回哪些记忆及原因…"
+                className="h-8 text-xs"
+                onKeyDown={(e) => e.key === "Enter" && handleRecallPreview()}
+              />
+              <Button size="sm" variant="outline" className="h-8 text-xs" disabled={!recallQuery.trim() || recallBusy} onClick={handleRecallPreview}>
+                {recallBusy ? "召回中…" : "预览召回"}
+              </Button>
+            </div>
+            {recallResult !== null && (
+              <div className="space-y-1.5">
+                {recallResult.length === 0 ? (
+                  <div className="text-xs text-muted-foreground py-2">无相关记忆，不会强行注入上下文。</div>
+                ) : (
+                  recallResult.map((record) => (
+                    <div key={record.memory_id} className="p-2.5 rounded-md border border-border/60 bg-background/60 text-xs flex items-start justify-between gap-2">
+                      <div className="space-y-0.5 min-w-0">
+                        <p className="text-foreground">{record.statement}</p>
+                        <p className="font-mono text-[11px] text-muted-foreground">
+                          {record.memory_id.slice(0, 12)} · {record.scope} · score {record.score}
+                        </p>
+                      </div>
+                      <Badge variant="outline" className="text-[10px] font-mono shrink-0 border-emerald-700/40 text-emerald-700 dark:text-emerald-300">
+                        {record.reason}
+                      </Badge>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
         </CardContent>
       </Card>
 

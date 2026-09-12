@@ -219,6 +219,10 @@ export const api = {
 
   // Memory
   getMemories: () => request<{ items: any[] }>("/api/v1/memories"),
+  recallMemories: (query: string, projectId?: string) =>
+    request<{ query: string; items: any[]; semantic_available: boolean }>(
+      `/api/v1/memories/recall?query=${encodeURIComponent(query)}${projectId ? `&project_id=${encodeURIComponent(projectId)}` : ""}`
+    ),
   deleteMemory: (memoryId: string) => request(`/api/v1/memories/${memoryId}`, { method: "DELETE" }),
 
   // Library

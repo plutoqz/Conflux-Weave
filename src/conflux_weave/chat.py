@@ -397,6 +397,7 @@ class ChatService:
             mem_ctx = self._memory_agent.format_prompt_context(
                 user_id="user_default",
                 conversation_id=conversation,
+                query=normalized,
             )
             if mem_ctx:
                 system_prompt = f"{DIRECT_SYSTEM_PROMPT}\n\n{mem_ctx}"
@@ -510,6 +511,7 @@ class ChatService:
             mem_ctx = self._memory_agent.format_prompt_context(
                 user_id="user_default",
                 conversation_id=conversation,
+                query=normalized,
             )
             if mem_ctx:
                 system_prompt = f"{RAG_SYSTEM_PROMPT}\n\n{mem_ctx}"

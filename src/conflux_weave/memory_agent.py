@@ -63,9 +63,12 @@ class MemoryAgent:
         self,
         store: HierarchicalMemoryStore,
         chat_adapter: OpenAICompatibleChatAdapter | None = None,
+        recall_service=None,
     ) -> None:
         self.store = store
         self.chat = chat_adapter
+        # P6-B1：可选混合召回服务（None 时维持 recency 确定性路径）
+        self.recall = recall_service
 
     def extract_heuristics(
         self,
@@ -229,9 +232,43 @@ class MemoryAgent:
         project_id: str | None = None,
         conversation_id: str | None = None,
         max_chars: int = 1200,
+        query: str | None = None,
     ) -> str:
-        """Format active memories into a compact System Prompt injection block (L0/L1 budget <= 400 tokens)."""
+        """Format active memories into a compact System Prompt injection block (L0/L1 budget <= 400 tokens).
+
+        P6-B1：提供 query 且召回服务可用时走混合召回（结构化过滤 → 语义/词法候选
+        → 重排 → 配额截断）；召回服务不可用或抛错时退回原 recency 确定性路径。
+        两种路径的注入总量都不超过本方法的 max_chars 预算。
+        """
         lines: list[str] = []
+        recalled_by_id: dict[str, object] = {}
+
+        if query and self.recall is not None:
+            try:
+                records = self.recall.recall(
+                    query,
+                    user_id=user_id,
+                    project_id=project_id,
+                    conversation_id=conversation_id,
+                )
+            except Exception:
+                records = []
+            if records:
+                scope_titles = {"user": "【用户偏好与习惯约定】", "project": "【项目架构与技术约定】", "session": "【会话当前事实与约束】"}
+                current_title = ""
+                for record in records:
+                    title = scope_titles.get(record.scope)
+                    if title and title != current_title:
+                        lines.append(title)
+                        current_title = title
+                    label = {"preference": "偏好", "fact": "事实", "constraint": "限制", "decision": "约定"}.get(record.category, "记忆")
+                    lines.append(f"- [{label}] {record.statement}")
+                    recalled_by_id[record.memory_id] = record
+                block = "\n".join(lines)
+                if len(block) > max_chars:
+                    block = block[:max_chars].rsplit("\n", 1)[0] + "\n...(已截断超出预算的记忆)"
+                self.last_recall = records
+                return block
 
         # 1. User memories (global habits/preferences)
         user_mems = self.store.list_memories(scope=MemoryScope.USER, target_id=user_id, status=MemoryStatus.ACTIVE)

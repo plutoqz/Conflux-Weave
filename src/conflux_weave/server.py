@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from conflux_weave.chat import ChatMessage, ChatService
+from conflux_weave.memory_recall import MemoryRecallService
 from conflux_weave.export_bundle import (
     ExportService,
     build_export_json,
@@ -354,7 +355,18 @@ def create_app(
     db_path = getattr(repository, "database_path", ":memory:")
     memory_store = HierarchicalMemoryStore(db_path if db_path else ":memory:")
     chat_adapter = getattr(chat_service, "_chat", None) if chat_service else None
-    memory_agent = MemoryAgent(memory_store, chat_adapter=chat_adapter)
+    # P6-B1：语义记忆召回（embedder/索引不可用时内部退回确定性路径）
+    _memory_embedder = None
+    _pipeline_embedding = getattr(retrieval_pipeline, "embedding", None)
+    if _pipeline_embedding is not None:
+        def _memory_embedder(texts):
+            return [list(v) for v in _pipeline_embedding.embed(texts, producer_step_id="memory-recall").vectors]
+    memory_recall_service = MemoryRecallService(
+        memory_store,
+        _memory_embedder,
+        lancedb_root=Path(db_path).parent / "lancedb-memory" if db_path and db_path != ":memory:" else None,
+    )
+    memory_agent = MemoryAgent(memory_store, chat_adapter=chat_adapter, recall_service=memory_recall_service)
     conversation_router = ConversationRouter(chat_adapter=chat_adapter)
     skill_registry = SkillRegistry(db_path if db_path and db_path != ":memory:" else None)
     skill_runner = SkillRunner(skill_registry, provider=chat_adapter)
@@ -872,6 +884,31 @@ def create_app(
                 created=result.created,
                 state=state,
             )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.get("/api/v1/memories/recall")
+    async def recall_memories(
+        query: str = Query(..., min_length=1, max_length=2000),
+        user_id: str = "user_default",
+        project_id: str | None = None,
+        conversation_id: str | None = None,
+        limit: int = Query(default=8, ge=1, le=13),
+    ):
+        """P6-B1：召回预览——返回带 score/reason 的混合召回结果（Memory Studio「为什么召回」）。"""
+        try:
+            records = memory_recall_service.recall(
+                query,
+                user_id=user_id,
+                project_id=project_id,
+                conversation_id=conversation_id,
+                total_limit=limit,
+            )
+            return {
+                "query": query,
+                "items": [record.to_dict() for record in records],
+                "semantic_available": memory_recall_service.semantic_available,
+            }
         except Exception as exc:
             return error_response(exc)
 
