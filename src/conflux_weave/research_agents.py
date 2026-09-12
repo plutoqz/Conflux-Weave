@@ -287,13 +287,21 @@ class VerifiedResearchWorkflow:
         )
 
     def _plan_queries(self, objective: str, *, max_queries: int):
-        queries, refs, warning = (objective,), [], None
+        clean_objective = objective
+        if "Subquestion:" in objective:
+            for line in objective.splitlines():
+                if line.strip().startswith("Subquestion:"):
+                    extracted = line.replace("Subquestion:", "").strip()
+                    if extracted:
+                        clean_objective = extracted
+                    break
+        queries, refs, warning = (clean_objective,), [], None
         if max_queries <= 1:
             return queries, refs, warning
         try:
             completion = self.chat.complete(
                 system_prompt=QUERY_PLANNER_SYSTEM_PROMPT,
-                user_prompt=json.dumps({"objective": objective, "max_queries": max_queries}, ensure_ascii=False),
+                user_prompt=json.dumps({"objective": clean_objective, "max_queries": max_queries}, ensure_ascii=False),
                 max_output_tokens=QUERY_PLAN_TOKENS,
                 temperature=0,
                 json_object=True,

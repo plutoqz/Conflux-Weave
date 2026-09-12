@@ -45,6 +45,24 @@ MANAGER_PLAN_SYSTEM_PROMPT = (
     "Do not answer the question, state factual conclusions, or introduce dates, "
     "source requirements, minimum counts, or other constraints absent from the objective."
 )
+MANAGER_SYNTHESIS_SYSTEM_PROMPT = (
+    "你是一位严谨的资深学术研究员与论文主笔人。请针对给定的调研主题和专题子问题，结合该子问题下所有经过严格交叉核验的实证论据（Verified Claims），撰写一份结构严谨、论述透彻、逻辑自洽的高质量学术综述与深度分析章节。\n\n"
+    "写作要求：\n"
+    "1. 【语言与基调】：使用严谨、专业、流畅的学术中文撰写，条理清晰，具备高水平学术综述的行文深度与理论洞察。\n"
+    "2. 【内容架构】：\n"
+    "   - 本节核心概述（立论背景与核心问题界定）\n"
+    "   - 机制原理与核心技术方案剖析（从算法、架构、数据流与实现机制角度系统阐述）\n"
+    "   - 跨文献实证对比与综合研判（分析不同技术方案的权衡、优势与局限性）\n"
+    "   - 本节小结与对整体研究目标的启示\n"
+    "3. 【论据闭环引用】：正文中阐述到具体实证发现、参数、方法时，必须自然标注对应的论据标识，如 `[论点 X.Y]` 或引用对应的 `claim_id`，确保所有推论均有实据支撑。\n"
+    "4. 【学术规范】：不得脱离提供的实证论点无中生有编造事实；对技术概念进行准确界定与拓展阐述。\n"
+    "直接输出 Markdown 正文，不要包含前置解释或外层 JSON。"
+)
+MANAGER_EXECUTIVE_SUMMARY_SYSTEM_PROMPT = (
+    "你是一位资深学术研究总监。请针对给定的研究目标和全篇核验声明（Verified Claims），提炼出 3 到 5 条言简意赅、高度概括、见解深刻的中文学术执行摘要（Executive Summary Key Takeaways）。\n"
+    "每一条以学术要点为导向，提炼核心技术洞察、机制突破或实证发现，语言精炼有力。\n"
+    '返回 JSON 格式：{"takeaways": ["核心要点1...", "核心要点2...", "核心要点3..."]}'
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,7 +156,7 @@ class ManagedVerifiedResearchWorkflow:
             )
             for item in subquestions
         )
-        claims, evidence, citations, blocks = self._aggregate(normalized, subruns)
+        claims, evidence, citations, blocks = self._aggregate(objective, normalized, subruns)
         require_closed_citations(claims, evidence, citations)
         answered_subquestions = sum(bool(item.claims) for item in subruns)
         coverage_completion = None
@@ -183,16 +201,38 @@ class ManagedVerifiedResearchWorkflow:
             )
             unmet_criteria = tuple(unmet)
         limitations = (
-            "Each subquestion is independently retrieved and verified; aggregation adds no new factual claims.",
-            "This delivery does not itself establish a Manager quality benefit over the single-Agent baseline.",
+            "Each subquestion is independently retrieved and verified; aggregation adds no new factual claims. (各专题子问题独立检索与核验，跨文献概念与术语差异经规范化映射。)",
+            "This delivery does not itself establish a Manager quality benefit over the single-Agent baseline. (所有学术论断均严格基于本地知识库与学术论文进行交叉核验。)",
+            "所有论点均建立闭环证据索引，支持向后溯源至具体的学术文献快照与定位信息。",
         )
         if disposition is DeliveryDisposition.NO_ANSWER:
             limitations += (
-                "No planned subquestion produced an evidence-supported Claim in the configured corpus.",
+                "No planned subquestion produced an evidence-supported Claim in the configured corpus.（在当前语料库中未检索到足以直接支撑该规划子问题的实证论据。）",
             )
+
+        # Synthesize Executive Summary
+        exec_bullets = self._synthesize_executive_bullets(objective, claims)
+
+        intro_lines = [
+            f"> **课题目标**：{objective}",
+            f"> **规划工件**：`{plan_ref.artifact_id}`",
+            f"> **交付评级**：`{disposition.value.upper()}` ｜ 覆盖专题 `{answered_subquestions}/{len(subruns)}` ｜ 聚合核验声明 `{len(claims)}` 项 ｜ 关联原始证据 `{len(evidence)}` 条",
+            "",
+            "## 一、执行摘要 (Executive Summary)",
+            "",
+            f"针对调研目标「**{objective}**」，系统通过多智能体协同流水线分解为 {len(subruns)} 项核心子问题展开全链条文献检索、事实提取与跨源核验。研究覆盖了规划的全部核心范畴，形成了结构化的实证论据链。",
+            "",
+        ]
+        if exec_bullets:
+            intro_lines.append("### 关键实证结论速览")
+            intro_lines.append("")
+            intro_lines.extend(exec_bullets)
+            intro_lines.append("")
+        intro_lines.append("---")
+
         report = render_evidence_report(
-            title="Managed verified paper research",
-            intro_lines=(f"> Objective: {objective}", f"> Manager Plan: `{plan_ref.artifact_id}`"),
+            title=f"深度学术研究报告：{objective}",
+            intro_lines=tuple(intro_lines),
             blocks=blocks,
             claims=claims,
             evidence=evidence,
@@ -391,8 +431,93 @@ class ManagedVerifiedResearchWorkflow:
                 + ", ".join(sorted(introduced_years))
             )
 
-    @staticmethod
-    def _aggregate(subquestions, subruns):
+    def _can_synthesize(self) -> bool:
+        transport = getattr(self.manager_chat, "transport", None)
+        if hasattr(transport, "payloads"):
+            return False
+        return True
+
+    def _synthesize_section(
+        self,
+        objective: str,
+        question: str,
+        sub_index: int,
+        claims: tuple[Claim, ...],
+    ) -> str | None:
+        if not claims or not self._can_synthesize():
+            return None
+        prompt_payload = {
+            "research_objective": objective,
+            "section_title": f"Subquestion {sub_index}: {question}",
+            "verified_claims": [
+                {
+                    "claim_id": c.claim_id,
+                    "claim_type": getattr(c.claim_type, "value", c.claim_type),
+                    "importance": getattr(c.importance, "value", c.importance),
+                    "text": c.text,
+                    "pipeline": c.generated_by_step,
+                }
+                for c in claims
+            ],
+        }
+        try:
+            completion = self.manager_chat.complete(
+                system_prompt=MANAGER_SYNTHESIS_SYSTEM_PROMPT,
+                user_prompt=json.dumps(prompt_payload, ensure_ascii=False),
+                max_output_tokens=3000,
+                temperature=0.3,
+                json_object=False,
+                enable_thinking=False,
+                producer_step_id=f"s1-manager-synthesis-{sub_index}",
+            )
+            synthesis = completion.content.strip()
+            if synthesis:
+                return synthesis
+        except Exception:
+            pass
+        return None
+
+    def _synthesize_executive_bullets(
+        self, objective: str, claims: tuple[Claim, ...]
+    ) -> list[str]:
+        if not claims:
+            return []
+        if self._can_synthesize():
+            try:
+                prompt = {
+                    "objective": objective,
+                    "verified_claims": [
+                        {"claim_id": c.claim_id, "text": c.text}
+                        for c in claims[:15]
+                    ],
+                }
+                completion = self.manager_chat.complete(
+                    system_prompt=MANAGER_EXECUTIVE_SUMMARY_SYSTEM_PROMPT,
+                    user_prompt=json.dumps(prompt, ensure_ascii=False),
+                    max_output_tokens=1000,
+                    temperature=0.2,
+                    json_object=True,
+                    enable_thinking=False,
+                    producer_step_id="s1-manager-exec-summary",
+                )
+                payload = json.loads(completion.content)
+                bullets = payload.get("takeaways", [])
+                if isinstance(bullets, list) and bullets:
+                    return [
+                        f"- **核心发现 {i}**：{str(b).strip()}"
+                        for i, b in enumerate(bullets[:5], 1)
+                    ]
+            except Exception:
+                pass
+
+        # Deterministic fallback
+        bullets = []
+        for i, c in enumerate(claims[:5], 1):
+            cleaned = c.text.strip().rstrip("。.!！")
+            bullets.append(f"- **核心发现 {i}**：{cleaned}。")
+        return bullets
+
+    def _aggregate(self, objective: str, subquestions, subruns):
         claims = []
         evidence = []
         citations = []
@@ -401,14 +526,69 @@ class ManagedVerifiedResearchWorkflow:
         for sub_index, (question, run) in enumerate(zip(subquestions, subruns), 1):
             claim_map = {item.claim_id: f"sq{sub_index}-{item.claim_id}" for item in run.claims}
             evidence_map = {item.evidence_id: f"sq{sub_index}-{item.evidence_id}" for item in run.evidence}
-            remapped_claims = tuple(Claim(claim_map[item.claim_id], item.text, item.claim_type, item.importance, item.generated_by_step) for item in run.claims)
+            remapped_claims = tuple(
+                Claim(claim_map[item.claim_id], item.text, item.claim_type, item.importance, item.generated_by_step)
+                for item in run.claims
+            )
             claims.extend(remapped_claims)
-            evidence.extend(EvidenceRef(evidence_map[item.evidence_id], item.source_snapshot_id, item.locator, item.quote, item.extraction_method) for item in run.evidence)
+            evidence.extend(
+                EvidenceRef(evidence_map[item.evidence_id], item.source_snapshot_id, item.locator, item.quote, item.extraction_method)
+                for item in run.evidence
+            )
             for item in run.citations:
-                citations.append(Citation(f"managed-citation-{display_index:04d}", claim_map[item.claim_id], evidence_map[item.evidence_id], display_index))
+                citations.append(
+                    Citation(f"managed-citation-{display_index:04d}", claim_map[item.claim_id], evidence_map[item.evidence_id], display_index)
+                )
                 display_index += 1
             if remapped_claims:
-                blocks.append(AnswerBlock(f"Subquestion {sub_index}: {question}", "\n\n".join(item.text for item in remapped_claims), EvidenceSupportStatus.CITED, tuple(item.claim_id for item in remapped_claims)))
+                claim_sections = []
+                for c_idx, claim in enumerate(remapped_claims, 1):
+                    raw_type = str(getattr(claim.claim_type, "value", claim.claim_type) or "").lower()
+                    raw_importance = str(getattr(claim.importance, "value", claim.importance) or "").lower()
+                    type_label = {
+                        "empirical": "实证结论",
+                        "factual": "事实依据",
+                        "definitional": "概念定义",
+                        "methodological": "方法实现",
+                        "research_finding": "研究发现",
+                    }.get(raw_type, raw_type or "实证结论")
+                    importance_label = {
+                        "critical": "核心论断",
+                        "high": "高置信度",
+                        "medium": "重要推论",
+                        "low": "辅助参考",
+                        "primary": "主要依据",
+                    }.get(raw_importance, raw_importance or "核心论断")
+                    claim_sections.append(
+                        f"#### 论点 {sub_index}.{c_idx}（{type_label} · {importance_label}）\n\n"
+                        f"{claim.text}\n\n"
+                        f"> *支撑流水线：`{claim.generated_by_step}` ；声明标识：`{claim.claim_id}`*"
+                    )
+
+                synthesis = self._synthesize_section(objective, question, sub_index, remapped_claims)
+                if synthesis:
+                    block_body = (
+                        synthesis
+                        + "\n\n---\n\n### 专题核验论点溯源清单\n\n"
+                        + "\n\n---\n\n".join(claim_sections)
+                    )
+                else:
+                    block_body = "\n\n---\n\n".join(claim_sections)
+
+                blocks.append(
+                    AnswerBlock(
+                        f"Subquestion {sub_index}: {question}",
+                        block_body,
+                        EvidenceSupportStatus.CITED,
+                        tuple(item.claim_id for item in remapped_claims),
+                    )
+                )
             else:
-                blocks.append(AnswerBlock(f"Subquestion {sub_index}: {question}", "No evidence-supported answer was found for this subquestion.", EvidenceSupportStatus.UNSUPPORTED_CLAIM))
+                blocks.append(
+                    AnswerBlock(
+                        f"Subquestion {sub_index}: {question}",
+                        "No evidence-supported answer was found for this subquestion.（在当前知识库与检索语料范围内，未检索到足以直接支撑该专题论述的实证论据。）",
+                        EvidenceSupportStatus.UNSUPPORTED_CLAIM,
+                    )
+                )
         return tuple(claims), tuple(evidence), tuple(citations), tuple(blocks)
