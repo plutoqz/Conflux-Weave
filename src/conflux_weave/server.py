@@ -1446,6 +1446,15 @@ def create_app(
         except Exception as exc:
             return error_response(exc)
 
+    @app.get("/api/v1/runs/{run_id}/checkpoints")
+    async def list_run_checkpoints(run_id: str):
+        """P6-C2：Step 级 checkpoint 台账——恢复后的 Run 可追溯每一步。"""
+        try:
+            repository.get_run(run_id)
+        except Exception as exc:
+            return error_response(exc)
+        return {"run_id": run_id, "items": repository.list_step_checkpoints(run_id)}
+
     @app.post("/api/v1/runs/{run_id}/cancel", response_model=RunDetailResponse)
     async def cancel_run(run_id: str):
         try:

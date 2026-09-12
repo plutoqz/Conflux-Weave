@@ -169,6 +169,7 @@ def test_existing_version_five_database_upgrades_without_checksum_changes(tmp_pa
         connection.execute("DROP TABLE IF EXISTS document_lifecycle")
         connection.execute("DROP TABLE IF EXISTS tool_budget_reservations")
         connection.execute("DROP TABLE IF EXISTS tool_budget_usage")
+        connection.execute("DROP TABLE IF EXISTS step_checkpoints")
         connection.execute("ALTER TABLE runs DROP COLUMN archived_at")
         connection.execute("ALTER TABLE runs DROP COLUMN deleted_at")
         connection.execute("PRAGMA user_version = 5")
@@ -178,4 +179,4 @@ def test_existing_version_five_database_upgrades_without_checksum_changes(tmp_pa
     assert upgraded.migration_records()[:5] == original
     assert upgraded.migration_records()[5].name == "v03_agent_messages"
     assert upgraded.migration_records()[6].name == "v03_hierarchical_memories"
-    assert upgraded.migration_records()[-1].name == "v03_p6_tool_budget"
+    assert upgraded.migration_records()[-1].name == "v03_p6_step_checkpoints"

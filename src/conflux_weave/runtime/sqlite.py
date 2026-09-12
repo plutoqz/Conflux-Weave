@@ -35,6 +35,7 @@ from conflux_weave.runtime.sqlite_delivery import DeliveryArtifactRepositoryMixi
 from conflux_weave.runtime.sqlite_leases import LeaseRepositoryMixin
 from conflux_weave.runtime.sqlite_lifecycle import LifecycleRepositoryMixin
 from conflux_weave.runtime.sqlite_tool_budget import ToolBudgetMixin
+from conflux_weave.runtime.sqlite_step_checkpoints import StepCheckpointMixin
 from conflux_weave.runtime.sqlite_task_runs import TaskRunRepositoryMixin
 from conflux_weave.runtime.sqlite_telemetry import TelemetryRepositoryMixin
 
@@ -48,6 +49,7 @@ class SQLiteRuntimeRepository(
     TelemetryRepositoryMixin,
     LifecycleRepositoryMixin,
     ToolBudgetMixin,
+    StepCheckpointMixin,
     _SQLiteRepositoryBase,
 ):
     """SQLite authority assembled from cohesive persistence domains."""

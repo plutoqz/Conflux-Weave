@@ -433,6 +433,16 @@ class DurableResearchRuntime:
                 effect.side_effect is SideEffectClass.PAID_EXTERNAL_UNKNOWN
                 and effect.effect_state == "request_started"
             )
+            # C2 恢复规则：可重试错误（可重放的只读外部读取）自动重试；
+            # 不确定结果标记 unknown_outcome；外部副作用付费调用禁止自动重试。
+            if (
+                not unknown
+                and effect.side_effect is SideEffectClass.REPLAYABLE_EXTERNAL_READ
+                and claim.attempt_number < 3
+            ):
+                self.worker.fail(claim, detail.artifact_id, now=now)
+                self.repository.requeue_failed_step(claim.run_id, claim.step_id, now=now)
+                return DurableWorkResult(claim.run_id, step.kind, "retrying")
             error = ErrorRecord(
                 "research_batch_outcome_unknown" if unknown else "research_step_failed",
                 ErrorCategory.PROVIDER if unknown else ErrorCategory.UNKNOWN,
@@ -453,6 +463,7 @@ class DurableResearchRuntime:
             )
             self.repository.record_error(claim, error, (detail,), now=now)
             if unknown:
+                self.repository.mark_step_checkpoints_unknown_outcome(claim.run_id, claim.step_id)
                 self.repository.block_unknown_external_outcome(claim, detail, now=now)
                 return DurableWorkResult(claim.run_id, step.kind, "waiting_for_user")
             self.worker.fail(claim, detail.artifact_id, now=now)
@@ -479,6 +490,12 @@ class DurableResearchRuntime:
         self, claim: LeaseClaim, *, now: str | None
     ) -> None:
         task = self.repository.get_task_for_run(claim.run_id)
+        # C2 Step checkpoint：同输入摘要下已有可复用产物 → 不再重跑付费批次。
+        input_digest = self._input_digest(task)
+        checkpoint = self.repository.reuse_step_checkpoint(claim.run_id, "retrieve", input_digest)
+        if checkpoint is not None:
+            if self._reuse_checkpoint_execution(claim, checkpoint, now=now):
+                return
         intent = self.artifact_store.put_json(
             {
                 "schema_version": "conflux-weave.durable-research-intent.v1",
@@ -565,6 +582,17 @@ class DurableResearchRuntime:
             (response.artifact_id,),
             "Inspect the completed response and submit a new Run with a corrected budget.",
         )
+        self.repository.record_step_checkpoint(
+            claim.run_id,
+            claim.step_id,
+            chain_phase="retrieve",
+            input_digest=input_digest,
+            output_artifact_id=response.artifact_id,
+            attempt=claim.attempt_number,
+            started_at=now or self.clock(),
+            finished_at=now or self.clock(),
+            resumable=True,
+        )
         self.repository.complete_external_attempt(
             claim,
             (intent, response),
@@ -637,6 +665,17 @@ class DurableResearchRuntime:
             claim=claim,
             published_at=now,
         )
+        self.repository.record_step_checkpoint(
+            claim.run_id,
+            claim.step_id,
+            chain_phase="deliver",
+            input_digest=execute_step.step_id,
+            output_artifact_id=report.artifact_id,
+            attempt=claim.attempt_number,
+            started_at=now or self.clock(),
+            finished_at=now or self.clock(),
+            resumable=False,
+        )
 
     def _copy_artifact(
         self,
@@ -655,6 +694,50 @@ class DurableResearchRuntime:
             producer_step_id=producer_step_id,
             schema_version=schema_version,
         )
+
+    @staticmethod
+    def _input_digest(task: TaskSpec) -> str:
+        payload = json.dumps(
+            {
+                "kind": task.kind,
+                "objective": task.input["objective"],
+                "max_subquestions": task.input["max_subquestions"],
+                "reservation": task.input["reservation"],
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+        ).encode("utf-8")
+        return f"sha256:{hashlib.sha256(payload).hexdigest()}"
+
+    def _reuse_checkpoint_execution(self, claim: LeaseClaim, checkpoint: dict, *, now: str | None) -> bool:
+        """C2 复用：同输入摘要的已成功 checkpoint 直接作为本次 attempt 输出。
+
+        复用不重新授权外部调用，也不新增预算消耗（原始 attempt 已如实入账）；
+        产物经 artifact store 完整性校验失败时退回正常执行路径。
+        """
+        refs = self.repository.get_artifact_registrations(checkpoint["output_artifact_id"])
+        response_ref = next((ref for ref in refs if ref.schema_version == EXECUTION_SCHEMA), None)
+        if response_ref is None:
+            return False
+        try:
+            payload = json.loads(self.artifact_store.read_bytes(response_ref))
+            if not payload.get("report_artifact_id"):
+                return False
+        except Exception:
+            return False
+        self.worker.complete(claim, (response_ref,), now=now)
+        self.repository.record_step_checkpoint(
+            claim.run_id,
+            claim.step_id,
+            chain_phase="retrieve",
+            input_digest=checkpoint["input_digest"],
+            output_artifact_id=checkpoint["output_artifact_id"],
+            attempt=claim.attempt_number,
+            started_at=now or self.clock(),
+            finished_at=now or self.clock(),
+            resumable=True,
+        )
+        return True
 
     def _validate_execution(self, execution: DurableResearchExecution) -> None:
         if execution.provider_call_count < 1:

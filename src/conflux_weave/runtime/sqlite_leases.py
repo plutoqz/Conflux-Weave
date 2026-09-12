@@ -636,6 +636,21 @@ class LeaseRepositoryMixin:
             )
         return tuple(records)
 
+    def requeue_failed_step(self, run_id: str, step_id: str, *, now: str | None = None) -> bool:
+        """C2：可重试错误后把失败步骤放回队列（下一次认领 attempt+1）。
+
+        仅重置步骤状态；attempt_effects/原始失败记录保持不变（可追溯）。
+        """
+        applied_at = _normalize_timestamp(now or self.clock())
+        with self._connect() as connection:
+            with _transaction(connection):
+                changed = connection.execute(
+                    "UPDATE steps SET status = 'pending', error_ref = NULL "
+                    "WHERE run_id = ? AND step_id = ? AND status = 'failed'",
+                    (run_id, step_id),
+                ).rowcount
+        return changed == 1
+
     def get_latest_run_event(self, run_id: str) -> RunEventRecord | None:
         """P6-A3：最近一条 Run 事件（进度展示与断线续传游标来源）。"""
         with self._connect() as connection:

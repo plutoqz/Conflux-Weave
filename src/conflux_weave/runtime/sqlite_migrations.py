@@ -535,5 +535,34 @@ _MIGRATIONS = (
             """,
         ),
     ),
+    _Migration(
+        version=11,
+        name="v03_p6_step_checkpoints",
+        statements=(
+            """
+            CREATE TABLE step_checkpoints (
+                checkpoint_id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE RESTRICT,
+                step_id TEXT NOT NULL REFERENCES steps(step_id) ON DELETE RESTRICT,
+                chain_phase TEXT NOT NULL CHECK (chain_phase IN (
+                    'plan', 'retrieve', 'claim', 'verify', 'synthesize', 'write', 'deliver'
+                )),
+                input_digest TEXT NOT NULL,
+                output_artifact_id TEXT NOT NULL,
+                attempt INTEGER NOT NULL CHECK (attempt >= 1),
+                status TEXT NOT NULL CHECK (status IN ('succeeded', 'failed', 'unknown_outcome')),
+                error_ref TEXT,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                resumable INTEGER NOT NULL CHECK (resumable IN (0, 1)),
+                created_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE INDEX step_checkpoints_run_idx
+            ON step_checkpoints(run_id, chain_phase, created_at)
+            """,
+        ),
+    ),
 )
 

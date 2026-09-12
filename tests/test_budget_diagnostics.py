@@ -106,6 +106,7 @@ def test_v4_migration_backfills_existing_run_budget_snapshot(tmp_path):
         connection.execute("DROP TABLE IF EXISTS document_lifecycle")
         connection.execute("DROP TABLE IF EXISTS tool_budget_reservations")
         connection.execute("DROP TABLE IF EXISTS tool_budget_usage")
+        connection.execute("DROP TABLE IF EXISTS step_checkpoints")
         connection.execute("ALTER TABLE runs DROP COLUMN archived_at")
         connection.execute("ALTER TABLE runs DROP COLUMN deleted_at")
         connection.execute("PRAGMA user_version = 3")
@@ -117,7 +118,7 @@ def test_v4_migration_backfills_existing_run_budget_snapshot(tmp_path):
     assert status.concurrency == 1
     assert status.limit.output_tokens == 2_048
     assert status.estimated_cost_limit == "unavailable"
-    assert reopened.migration_records()[-1].version == 10
+    assert reopened.migration_records()[-1].version == 11
 
 
 def test_expired_wall_clock_budget_starts_zero_external_calls(tmp_path):
