@@ -22,7 +22,7 @@ export const Topbar: React.FC = () => {
   return (
     <header className="sticky top-0 z-40 flex h-14 w-full items-center justify-between border-b border-border/70 bg-background/80 px-4 backdrop-blur-md">
       {/* Brand & Nav */}
-      <div className="flex items-center space-x-6">
+      <div className="flex items-center space-x-3 sm:space-x-6 min-w-0">
         <button
           onClick={() => setSection("overview")}
           className="flex items-center space-x-2.5 text-left transition hover:opacity-90"
@@ -40,14 +40,17 @@ export const Topbar: React.FC = () => {
           </div>
         </button>
 
-        <nav className="flex items-center space-x-1" aria-label="工作台分区">
+        <nav
+          className="flex items-center space-x-0.5 sm:space-x-1 overflow-x-auto max-w-[62vw] sm:max-w-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          aria-label="工作台分区"
+        >
           {navItems.map((item) => {
             const active = section === item.id;
             return (
               <button
                 key={item.id}
                 onClick={() => setSection(item.id)}
-                className={`relative px-3.5 py-1.5 text-xs sm:text-sm font-serif-academic transition-all rounded-md ${
+                className={`relative px-2 sm:px-3.5 py-1.5 text-xs sm:text-sm font-serif-academic transition-all rounded-md shrink-0 whitespace-nowrap ${
                   active
                     ? "bg-card text-foreground font-semibold shadow-2xs border border-border/70"
                     : "text-foreground/75 hover:text-foreground hover:bg-muted/50"
