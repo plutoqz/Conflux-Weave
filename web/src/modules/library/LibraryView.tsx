@@ -1,5 +1,8 @@
 import React, { useState, useEffect } from "react";
 import {
+  Archive,
+  Trash2,
+  RotateCcw,
   Search,
   BookOpen,
   FileText,
@@ -36,6 +39,24 @@ import type { LibraryDocument, PaperItem } from "@/types/workbench";
 export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = ({ onOpenNote }) => {
   const [activeTab, setActiveTab] = useState<"documents" | "multimodal" | "assets" | "papers">("documents");
   const [documents, setDocuments] = useState<LibraryDocument[]>([]);
+  const [docFilter, setDocFilter] = useState<"active" | "archived" | "deleted">("active");
+
+  const refreshDocuments = async (filter = docFilter) => {
+    try {
+      const res = await api.getDocuments(filter);
+      setDocuments(res.items || []);
+    } catch {
+      // keep current list
+    }
+  };
+  const handleDocLifecycle = async (documentId: string, action: "archive" | "delete" | "restore") => {
+    try {
+      await api.setDocumentLifecycle(documentId, action);
+      await refreshDocuments();
+    } catch (err) {
+      alert(`操作失败: ${err instanceof Error ? err.message : err}`);
+    }
+  };
   const [papers, setPapers] = useState<PaperItem[]>([]);
   const [paperQuery, setPaperQuery] = useState("");
   
@@ -69,7 +90,7 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
   const [selectedPaperIds, setSelectedPaperIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    api.getDocuments().then((res) => setDocuments(res.items || [])).catch(() => {});
+    api.getDocuments(docFilter).then((res) => setDocuments(res.items || [])).catch(() => {});
   }, []);
 
   const loadAssets = async () => {
@@ -292,9 +313,32 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
               </h3>
             </div>
 
+            <div className="flex items-center gap-1.5">
+              {([
+                ["active", "进行中"],
+                ["archived", "已归档"],
+                ["deleted", "回收站"],
+              ] as const).map(([value, label]) => (
+                <button
+                  key={value}
+                  onClick={() => {
+                    setDocFilter(value);
+                    refreshDocuments(value);
+                  }}
+                  className={cn(
+                    "text-xs px-2 py-1 rounded-md font-serif-academic transition cursor-pointer border",
+                    docFilter === value
+                      ? "bg-primary/10 text-primary dark:text-emerald-200 border-primary/30 font-semibold"
+                      : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
             {documents.length === 0 ? (
               <div className="text-center py-16 text-foreground/70 text-xs sm:text-sm font-serif-academic">
-                本地知识库中尚无论元文档。可通过导入 PDF / Markdown 构建语料库。
+                {docFilter === "active" ? "本地知识库中尚无论元文档。可通过导入 PDF / Markdown 构建语料库。" : docFilter === "archived" ? "暂无已归档文档。" : "回收站为空。"}
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -333,7 +377,24 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
                       </div>
                     </div>
 
-                    <div className="pt-2 border-t border-border/50 flex justify-end">
+                    <div className="pt-2 border-t border-border/50 flex items-center justify-between">
+                      <div className="flex items-center gap-2.5">
+                        {docFilter === "active" ? (
+                          <>
+                            <button type="button" title="归档" className="text-muted-foreground hover:text-foreground cursor-pointer bg-transparent border-none p-0" onClick={() => handleDocLifecycle(doc.document_id, "archive")}>
+                              <Archive className="h-3.5 w-3.5" />
+                            </button>
+                            <button type="button" title="移入回收站" className="text-muted-foreground hover:text-red-600 cursor-pointer bg-transparent border-none p-0" onClick={() => handleDocLifecycle(doc.document_id, "delete")}>
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </>
+                        ) : (
+                          <button type="button" title="恢复" className="text-muted-foreground hover:text-emerald-700 cursor-pointer bg-transparent border-none p-0 flex items-center gap-1 text-xs" onClick={() => handleDocLifecycle(doc.document_id, "restore")}>
+                            <RotateCcw className="h-3.5 w-3.5" />
+                            <span>恢复</span>
+                          </button>
+                        )}
+                      </div>
                       <Button
                         size="sm"
                         variant="ghost"

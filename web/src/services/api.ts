@@ -76,7 +76,13 @@ export const api = {
     request<any>("/api/v1/config/provider", { method: "POST", body: JSON.stringify(data) }),
 
   // Runs / Research
-  getRuns: (limit = 50) => request<{ items: RunSummary[] }>(`/api/v1/runs?limit=${limit}`),
+  getRuns: (limit = 50, lifecycle = "active") =>
+    request<{ items: RunSummary[] }>(`/api/v1/runs?limit=${limit}&lifecycle=${encodeURIComponent(lifecycle)}`),
+  setRunLifecycle: (runId: string, action: "archive" | "delete" | "restore") =>
+    request<{ run_id: string; lifecycle: string }>(`/api/v1/runs/${runId}/lifecycle`, {
+      method: "POST",
+      body: JSON.stringify({ action }),
+    }),
   getRunDetail: (runId: string) => request<RunDetail>(`/api/v1/runs/${runId}`),
   getArtifactContent: (runId: string, artifactId: string) =>
     request<{ artifact: any; content: string }>(`/api/v1/runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactId)}/content`),
@@ -125,7 +131,24 @@ export const api = {
     ),
 
   // Chat & Conversations
-  getConversations: () => request<{ items: ConversationSummary[] }>("/api/v1/conversations"),
+  getConversations: (status = "active") =>
+    request<{ items: ConversationSummary[] }>(`/api/v1/conversations?status=${encodeURIComponent(status)}`),
+  renameConversation: (convId: string, title: string) =>
+    request<{ conversation_id: string; title: string; updated_at: string }>(
+      `/api/v1/conversations/${encodeURIComponent(convId)}`,
+      { method: "PATCH", body: JSON.stringify({ title }) }
+    ),
+  deleteConversation: (convId: string) =>
+    request<{ conversation_id: string; lifecycle: string }>(`/api/v1/conversations/${encodeURIComponent(convId)}`, { method: "DELETE" }),
+  restoreConversation: (convId: string) =>
+    request<{ conversation_id: string; lifecycle: string }>(`/api/v1/conversations/${encodeURIComponent(convId)}/restore`, { method: "POST" }),
+  setConversationLifecycle: (convId: string, action: "archive" | "delete" | "restore") =>
+    request<{ conversation_id: string; lifecycle: string }>(
+      action === "delete"
+        ? `/api/v1/conversations/${encodeURIComponent(convId)}`
+        : `/api/v1/conversations/${encodeURIComponent(convId)}/${action}`,
+      { method: action === "delete" ? "DELETE" : "POST" }
+    ),
   getConversationDetail: (convId: string) =>
     request<{
       conversation_id: string;
@@ -143,7 +166,13 @@ export const api = {
   deleteMemory: (memoryId: string) => request(`/api/v1/memories/${memoryId}`, { method: "DELETE" }),
 
   // Library
-  getDocuments: () => request<{ items: LibraryDocument[] }>("/api/v1/library"),
+  getDocuments: (status = "active") =>
+    request<{ items: LibraryDocument[]; total: number }>(`/api/v1/library?status=${encodeURIComponent(status)}`),
+  setDocumentLifecycle: (documentId: string, action: "archive" | "delete" | "restore") =>
+    request<{ document_id: string; lifecycle: string }>(
+      `/api/v1/library/documents/${encodeURIComponent(documentId)}/lifecycle`,
+      { method: "POST", body: JSON.stringify({ action }) }
+    ),
   searchPapers: (params: Record<string, string>) => {
     const qs = new URLSearchParams(params).toString();
     return request<{ items: any[]; total?: number; deduplicated_count?: number; sources?: any[] }>(

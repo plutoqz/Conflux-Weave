@@ -481,5 +481,24 @@ _MIGRATIONS = (
             """,
         ),
     ),
+    _Migration(
+        version=9,
+        name="v03_p6_lifecycle",
+        statements=(
+            "ALTER TABLE runs ADD COLUMN archived_at TEXT",
+            "ALTER TABLE runs ADD COLUMN deleted_at TEXT",
+            """
+            CREATE TABLE document_lifecycle (
+                document_id TEXT PRIMARY KEY,
+                archived_at TEXT,
+                deleted_at TEXT
+            )
+            """,
+            """
+            CREATE INDEX runs_lifecycle_idx
+            ON runs(deleted_at, archived_at, created_at)
+            """,
+        ),
+    ),
 )
 

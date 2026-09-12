@@ -109,6 +109,24 @@ class ConversationSummary(_ApiModel):
     message_count: int = 0
     active_mode: str = "direct"
     archived_at: str | None = None
+    deleted_at: str | None = None
+    lifecycle: Literal["active", "archived", "deleted"] = "active"
+
+
+class ConversationRenameRequest(_ApiModel):
+    title: str = Field(min_length=1, max_length=120)
+
+
+class ConversationLifecycleRequest(_ApiModel):
+    action: Literal["archive", "delete", "restore"]
+
+
+class RunLifecycleRequest(_ApiModel):
+    action: Literal["archive", "delete", "restore"]
+
+
+class DocumentLifecycleRequest(_ApiModel):
+    action: Literal["archive", "delete", "restore"]
 
 
 class ConversationDetail(ConversationSummary):
@@ -260,6 +278,9 @@ class RunSummaryResponse(_ApiModel):
     is_terminal: bool
     created_at: str
     updated_at: str
+    lifecycle: Literal["active", "archived", "deleted"] = "active"
+    archived_at: str | None = None
+    deleted_at: str | None = None
 
 
 class DocumentAnalyzeRequest(_ApiModel):
@@ -1045,13 +1066,32 @@ class WorkbenchQueryService:
     def __init__(self, repository: SQLiteRuntimeRepository) -> None:
         self.repository = repository
 
-    def list_runs(self, *, cursor: str | None = None, limit: int = 20) -> RunPageResponse:
+    def list_runs(
+        self,
+        *,
+        cursor: str | None = None,
+        limit: int = 20,
+        lifecycle: str = "active",
+    ) -> RunPageResponse:
         page = self.repository.list_runs(
             cursor=decode_run_cursor(cursor) if cursor is not None else None,
             limit=limit,
+            lifecycle=lifecycle,
+        )
+        lifecycle_map = self.repository.get_run_lifecycle_map(
+            [item.run.run_id for item in page.items]
+        )
+        annotated = tuple(
+            _summary(
+                item,
+                lifecycle_map.get(
+                    item.run.run_id, ("active", None, None)
+                ),
+            )
+            for item in page.items
         )
         return RunPageResponse(
-            items=tuple(_summary(item) for item in page.items),
+            items=annotated,
             next_cursor=(
                 encode_run_cursor(page.next_cursor) if page.next_cursor is not None else None
             ),
@@ -1092,7 +1132,8 @@ class WorkbenchQueryService:
             StepStatus.CANCELLED,
             StepStatus.SKIPPED,
         }
-        summary = _summary(overview)
+        lifecycle_map = self.repository.get_run_lifecycle_map([run_id])
+        summary = _summary(overview, lifecycle_map.get(run_id, ("active", None, None)))
         return RunDetailResponse(
             **summary.model_dump(),
             progress=ProgressResponse(
@@ -1260,7 +1301,9 @@ class WorkbenchQueryService:
             ) from exc
 
 
-def _summary(record: RunOverviewRecord) -> RunSummaryResponse:
+def _summary(
+    record: RunOverviewRecord, lifecycle: tuple[str, str | None, str | None] = ("active", None, None)
+) -> RunSummaryResponse:
     state = map_run_state(record.run.status)
     query = record.task_input.get("query", record.task_input.get("objective"))
     if record.task_kind == "research_fixture":
@@ -1282,6 +1325,9 @@ def _summary(record: RunOverviewRecord) -> RunSummaryResponse:
         is_terminal=record.run.status.is_terminal,
         created_at=record.run.created_at,
         updated_at=record.run.updated_at,
+        lifecycle=lifecycle[0],  # type: ignore[arg-type]
+        archived_at=lifecycle[1],
+        deleted_at=lifecycle[2],
     )
 
 

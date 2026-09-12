@@ -254,6 +254,7 @@ class TaskRunRepositoryMixin:
         *,
         cursor: RunCursor | None = None,
         limit: int = 20,
+        lifecycle: str = "active",
     ) -> RunListPage:
         if not 1 <= limit <= 100:
             raise ValueError("Run page limit must be between 1 and 100")
@@ -261,16 +262,24 @@ class TaskRunRepositoryMixin:
             not cursor.created_at.strip() or not cursor.run_id.strip()
         ):
             raise ValueError("Run cursor fields must not be empty")
-        where = ""
+        lifecycle_clause = {
+            "active": "r.deleted_at IS NULL AND r.archived_at IS NULL",
+            "archived": "r.deleted_at IS NULL AND r.archived_at IS NOT NULL",
+            "deleted": "r.deleted_at IS NOT NULL",
+            "all": None,
+        }.get(lifecycle, "r.deleted_at IS NULL AND r.archived_at IS NULL")
+        conditions: list[str] = []
         parameters: list[object] = []
+        if lifecycle_clause:
+            conditions.append(f"({lifecycle_clause})")
         if cursor is not None:
-            where = """
-                WHERE r.created_at < ?
-                   OR (r.created_at = ? AND r.run_id < ?)
-            """
+            conditions.append(
+                "(r.created_at < ? OR (r.created_at = ? AND r.run_id < ?))"
+            )
             parameters.extend(
                 (cursor.created_at, cursor.created_at, cursor.run_id)
             )
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         parameters.append(limit + 1)
         with self._connect() as connection:
             rows = connection.execute(

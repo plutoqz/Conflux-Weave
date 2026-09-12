@@ -12,6 +12,9 @@ import {
   TrendingUp,
   FileCheck,
   Zap,
+  Archive,
+  Trash2,
+  RotateCcw,
 } from "lucide-react";
 import { useWorkbenchStore } from "@/stores/useWorkbenchStore";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
@@ -21,8 +24,26 @@ import { api } from "@/services/api";
 import { formatTimeAgo, cn } from "@/lib/utils";
 
 export const OverviewView: React.FC = () => {
-  const { health, setHealth, setSection, setIsNewTaskOpen, runs, setActiveRunId } = useWorkbenchStore();
+  const { health, setHealth, setSection, setIsNewTaskOpen, runs, setRuns, setActiveRunId } = useWorkbenchStore();
   const [docCount, setDocCount] = useState(0);
+  const [runFilter, setRunFilter] = useState<"active" | "archived" | "deleted">("active");
+
+  const refreshRuns = async (filter = runFilter) => {
+    try {
+      const res = await api.getRuns(50, filter);
+      setRuns(res.items || []);
+    } catch {
+      // keep current list
+    }
+  };
+  const handleRunLifecycle = async (runId: string, action: "archive" | "delete" | "restore") => {
+    try {
+      await api.setRunLifecycle(runId, action);
+      await refreshRuns();
+    } catch (err) {
+      alert(`操作失败: ${err instanceof Error ? err.message : err}`);
+    }
+  };
 
   useEffect(() => {
     api.getHealthReady().then(setHealth).catch(() => {});
@@ -241,9 +262,32 @@ export const OverviewView: React.FC = () => {
             </div>
           </CardHeader>
           <CardContent className="p-5 pt-2 space-y-2">
+            <div className="flex items-center gap-1.5 pb-1">
+              {([
+                ["active", "进行中"],
+                ["archived", "已归档"],
+                ["deleted", "回收站"],
+              ] as const).map(([value, label]) => (
+                <button
+                  key={value}
+                  onClick={() => {
+                    setRunFilter(value);
+                    refreshRuns(value);
+                  }}
+                  className={cn(
+                    "text-xs px-2 py-1 rounded-md font-serif-academic transition cursor-pointer border",
+                    runFilter === value
+                      ? "bg-primary/10 text-primary dark:text-emerald-200 border-primary/30 font-semibold"
+                      : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
             {runs.length === 0 ? (
               <div className="text-center py-8 text-xs sm:text-sm font-serif-academic text-foreground/75">
-                还没有研究记录，点击“新建研究任务”开启第一次学术探索。
+                {runFilter === "active" ? "还没有研究记录，点击“新建研究任务”开启第一次学术探索。" : runFilter === "archived" ? "暂无已归档研究。" : "回收站为空。"}
               </div>
             ) : (
               runs.slice(0, 5).map((r) => (
@@ -253,7 +297,7 @@ export const OverviewView: React.FC = () => {
                     setActiveRunId(r.run_id);
                     setSection("research");
                   }}
-                  className="p-3.5 rounded-lg border border-border/70 hover:border-emerald-800/40 bg-muted/20 hover:bg-muted/40 transition cursor-pointer flex items-center justify-between"
+                  className="group/run p-3.5 rounded-lg border border-border/70 hover:border-emerald-800/40 bg-muted/20 hover:bg-muted/40 transition cursor-pointer flex items-center justify-between"
                 >
                   <div className="min-w-0 pr-3">
                     <h4 className="text-sm font-serif-academic font-semibold text-foreground truncate">
@@ -263,14 +307,32 @@ export const OverviewView: React.FC = () => {
                       {formatTimeAgo(r.updated_at || r.created_at)}
                     </p>
                   </div>
-                  <span
-                    className={cn(
-                      "px-2.5 py-0.5 rounded text-xs font-mono uppercase shrink-0 font-medium",
-                      r.status === "complete" ? "bg-emerald-900/10 text-emerald-800 dark:text-emerald-300" : "bg-muted text-foreground/80"
-                    )}
-                  >
-                    {r.status}
-                  </span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span
+                      className={cn(
+                        "px-2.5 py-0.5 rounded text-xs font-mono uppercase font-medium",
+                        r.status === "complete" ? "bg-emerald-900/10 text-emerald-800 dark:text-emerald-300" : "bg-muted text-foreground/80"
+                      )}
+                    >
+                      {r.status}
+                    </span>
+                    <span className="hidden group-hover/run:flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                      {runFilter === "active" ? (
+                        <>
+                          <button type="button" title="归档" className="text-muted-foreground hover:text-foreground cursor-pointer bg-transparent border-none p-0" onClick={() => handleRunLifecycle(r.run_id, "archive")}>
+                            <Archive className="h-3.5 w-3.5" />
+                          </button>
+                          <button type="button" title="移入回收站" className="text-muted-foreground hover:text-red-600 cursor-pointer bg-transparent border-none p-0" onClick={() => handleRunLifecycle(r.run_id, "delete")}>
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </>
+                      ) : (
+                        <button type="button" title="恢复" className="text-muted-foreground hover:text-emerald-700 cursor-pointer bg-transparent border-none p-0" onClick={() => handleRunLifecycle(r.run_id, "restore")}>
+                          <RotateCcw className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </span>
+                  </div>
                 </div>
               ))
             )}

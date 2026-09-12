@@ -43,8 +43,11 @@ from conflux_weave.api_contracts import (
     RouterResultResponse,
     ConversationDetail,
     ConversationListResponse,
+    ConversationRenameRequest,
     ConversationSummary,
+    DocumentLifecycleRequest,
     ResearchConversationMessageRequest,
+    RunLifecycleRequest,
     DeepResearchTaskRequest,
     ApiErrorResponse,
     ArtifactContentResponse,
@@ -733,10 +736,69 @@ def create_app(
         )
 
     @app.get("/api/v1/conversations", response_model=ConversationListResponse)
-    async def list_conversations(limit: int = Query(default=50, ge=1, le=100)):
+    async def list_conversations(
+        limit: int = Query(default=50, ge=1, le=100),
+        status: str = Query(default="active"),
+    ):
         if chat_service is None:
             return ConversationListResponse(items=())
-        return ConversationListResponse(items=tuple(ConversationSummary(**item) for item in chat_service.conversations(limit)))
+        return ConversationListResponse(
+            items=tuple(ConversationSummary(**item) for item in chat_service.conversations(limit, status=status))
+        )
+
+    @app.patch("/api/v1/conversations/{conversation_id}", response_model=None)
+    async def rename_conversation(conversation_id: str, request: ConversationRenameRequest):
+        """P6-A2：对话重命名（软删除的对话禁止改名）。"""
+        if chat_service is None:
+            return JSONResponse(status_code=503, content={"code": "service_unavailable", "message": "对话服务未就绪。"})
+        try:
+            updated = chat_service.rename_conversation(conversation_id, request.title)
+        except ValueError as exc:
+            return JSONResponse(status_code=422, content={"code": "invalid_request", "message": str(exc)})
+        except Exception as exc:
+            return error_response(exc)
+        if updated is None:
+            return JSONResponse(status_code=404, content={"code": "conversation_not_found", "message": "对话不存在或已删除。"})
+        return {"conversation_id": updated["conversation_id"], "title": updated["title"], "updated_at": updated["updated_at"]}
+
+    @app.delete("/api/v1/conversations/{conversation_id}")
+    async def delete_conversation(conversation_id: str):
+        """P6-A2：对话软删除（消息与关联 Run 保留，可从回收站恢复）。"""
+        if chat_service is None:
+            return JSONResponse(status_code=503, content={"code": "service_unavailable", "message": "对话服务未就绪。"})
+        try:
+            record = chat_service.set_conversation_lifecycle(conversation_id, "delete")
+        except Exception as exc:
+            return error_response(exc)
+        if record is None:
+            return JSONResponse(status_code=404, content={"code": "conversation_not_found", "message": "对话不存在。"})
+        return record
+
+    @app.post("/api/v1/conversations/{conversation_id}/archive")
+    async def archive_conversation(conversation_id: str):
+        """P6-A2：对话归档（默认列表不再显示，可恢复）。"""
+        if chat_service is None:
+            return JSONResponse(status_code=503, content={"code": "service_unavailable", "message": "对话服务未就绪。"})
+        try:
+            record = chat_service.set_conversation_lifecycle(conversation_id, "archive")
+        except Exception as exc:
+            return error_response(exc)
+        if record is None:
+            return JSONResponse(status_code=404, content={"code": "conversation_not_found", "message": "对话不存在。"})
+        return record
+
+    @app.post("/api/v1/conversations/{conversation_id}/restore")
+    async def restore_conversation(conversation_id: str):
+        """P6-A2：从归档/回收站恢复对话（幂等）。"""
+        if chat_service is None:
+            return JSONResponse(status_code=503, content={"code": "service_unavailable", "message": "对话服务未就绪。"})
+        try:
+            record = chat_service.set_conversation_lifecycle(conversation_id, "restore")
+        except Exception as exc:
+            return error_response(exc)
+        if record is None:
+            return JSONResponse(status_code=404, content={"code": "conversation_not_found", "message": "对话不存在。"})
+        return record
 
     @app.get("/api/v1/conversations/{conversation_id}", response_model=ConversationDetail)
     async def get_conversation(conversation_id: str):
@@ -1305,9 +1367,23 @@ def create_app(
             return error_response(exc)
 
     @app.get("/api/v1/runs", response_model=RunPageResponse)
-    async def list_runs(cursor: str | None = None, limit: int = Query(default=20, ge=1, le=100)):
+    async def list_runs(
+        cursor: str | None = None,
+        limit: int = Query(default=20, ge=1, le=100),
+        lifecycle: str = Query(default="active"),
+    ):
         try:
-            return query_service.list_runs(cursor=cursor, limit=limit)
+            return query_service.list_runs(cursor=cursor, limit=limit, lifecycle=lifecycle)
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/runs/{run_id}/lifecycle")
+    async def set_run_lifecycle(run_id: str, request: RunLifecycleRequest):
+        """P6-A2：Run 归档/软删除/恢复（不触碰 Evidence、Artifact 与交付关系）。"""
+        try:
+            state = repository.set_run_lifecycle(run_id, request.action)
+            detail = query_service.get_run(run_id)
+            return {"run_id": run_id, "lifecycle": state, "state": detail.state}
         except Exception as exc:
             return error_response(exc)
 
@@ -1596,7 +1672,7 @@ def create_app(
         return {"status": "ok"}
 
     @app.get("/api/v1/library")
-    async def library_overview() -> dict[str, Any]:
+    async def library_overview(status: str = Query(default="active")):
         manifest_path = Path((config_paths or {}).get("corpus_manifest", ""))
         registry_path = repository.database_path.with_name("library-registry.json")
         try:
@@ -1682,6 +1758,12 @@ def create_app(
                 "fetch_failure_artifact_id": row.get("fetch_failure_artifact_id"),
                 "manifest_indexed": bool(row.get("_manifest_indexed")),
             })
+        # P6-A2：文档生命周期（SQLite document_lifecycle 表），默认隐藏归档/删除
+        lifecycle_map = repository.get_document_lifecycle_map()
+        for item in items:
+            item["lifecycle"] = lifecycle_map.get(str(item.get("document_id") or ""), "active")
+        if status in {"active", "archived", "deleted"}:
+            items = [item for item in items if item["lifecycle"] == status]
         imported = sum(1 for item in items if item["status"] == "knowledge_ready" or item.get("manifest_indexed"))
         return {
             "total": len(items),
@@ -1818,6 +1900,15 @@ def create_app(
         restored["restored_at"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         save_document_row(restored)
         return {"status": restored.get("status", "parsed"), "document_id": document_id, "restored_from_version": request.version_index}
+
+    @app.post("/api/v1/library/documents/{document_id}/lifecycle")
+    async def set_document_lifecycle(document_id: str, request: DocumentLifecycleRequest):
+        """P6-A2：文档归档/软删除/恢复（SQLite 权威，不物理删除任何资料记录）。"""
+        try:
+            state = repository.set_document_lifecycle(document_id, request.action)
+            return {"document_id": document_id, "lifecycle": state}
+        except Exception as exc:
+            return error_response(exc)
 
     def retrieval_documents(document: Any) -> tuple[RetrievalDocument, ...]:
         return tuple(

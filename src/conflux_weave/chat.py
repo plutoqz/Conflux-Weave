@@ -178,13 +178,83 @@ class ChatService:
         sequence = int(row["n"])
         return f"turn-{uuid4().hex}", sequence
 
-    def conversations(self, limit: int = 50) -> list[dict]:
+    def conversations(self, limit: int = 50, *, status: str = "active") -> list[dict]:
+        """P6-A2：按生命周期状态列出对话（active/archived/deleted/all）。"""
+        clause = {
+            "active": "WHERE archived_at IS NULL AND deleted_at IS NULL",
+            "archived": "WHERE archived_at IS NOT NULL AND deleted_at IS NULL",
+            "deleted": "WHERE deleted_at IS NOT NULL",
+            "all": "",
+        }.get(status, "WHERE archived_at IS NULL AND deleted_at IS NULL")
         conn = self._connect()
         try:
-            rows = conn.execute("SELECT conversation_id,title,created_at,updated_at,last_message_preview,message_count,active_mode,archived_at FROM conversations WHERE archived_at IS NULL ORDER BY updated_at DESC LIMIT ?", (max(1, min(int(limit), 100)),)).fetchall()
+            rows = conn.execute(
+                f"SELECT conversation_id,title,created_at,updated_at,last_message_preview,message_count,active_mode,archived_at,deleted_at FROM conversations {clause} ORDER BY updated_at DESC LIMIT ?",
+                (max(1, min(int(limit), 100)),),
+            ).fetchall()
         finally:
             conn.close()
-        return [dict(row) for row in rows]
+        records = []
+        for row in rows:
+            record = dict(row)
+            record["lifecycle"] = (
+                "deleted" if record.get("deleted_at") else "archived" if record.get("archived_at") else "active"
+            )
+            records.append(record)
+        return records
+
+    def rename_conversation(self, conversation_id: str, title: str) -> dict | None:
+        normalized = (title or "").strip()
+        if not normalized:
+            raise ValueError("title must not be empty")
+        if len(normalized) > 120:
+            raise ValueError("title must be at most 120 characters")
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                "UPDATE conversations SET title = ?, updated_at = ? WHERE conversation_id = ? AND deleted_at IS NULL",
+                (normalized, _utc_now(), conversation_id),
+            )
+            conn.commit()
+            updated = cursor.rowcount > 0
+            if not updated:
+                return None
+            row = conn.execute(
+                "SELECT conversation_id,title,updated_at FROM conversations WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        return dict(row)
+
+    def set_conversation_lifecycle(self, conversation_id: str, action: str) -> dict | None:
+        """P6-A2：对话归档/软删除/恢复（幂等；不触碰消息与 Evidence）。"""
+        if action not in {"archive", "delete", "restore"}:
+            raise ValueError("action must be archive, delete or restore")
+        now = _utc_now()
+        archived_at = now if action == "archive" else None
+        deleted_at = now if action == "delete" else None
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                "UPDATE conversations SET archived_at = ?, deleted_at = ? WHERE conversation_id = ?",
+                (archived_at, deleted_at, conversation_id),
+            )
+            conn.commit()
+            updated = cursor.rowcount > 0
+            if not updated:
+                return None
+            row = conn.execute(
+                "SELECT conversation_id,title,archived_at,deleted_at FROM conversations WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        record = dict(row)
+        record["lifecycle"] = (
+            "deleted" if record.get("deleted_at") else "archived" if record.get("archived_at") else "active"
+        )
+        return record
 
     def conversation_record(self, conversation_id: str) -> dict:
         messages = self.conversation(conversation_id, limit=100)
@@ -272,8 +342,14 @@ class ChatService:
                 last_message_preview TEXT NOT NULL DEFAULT '',
                 message_count INTEGER NOT NULL DEFAULT 0,
                 active_mode TEXT NOT NULL DEFAULT 'direct',
-                archived_at TEXT
+                archived_at TEXT,
+                deleted_at TEXT
             )""")
+            # P6-A2：老库补 deleted_at 生命周期列
+            try:
+                conn.execute("ALTER TABLE conversations ADD COLUMN deleted_at TEXT")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
             # Upgrade existing chat-only databases without rewriting messages.
             conn.execute("""INSERT OR IGNORE INTO conversations
                 (conversation_id, title, created_at, updated_at, last_message_preview, message_count, active_mode)

@@ -16,6 +16,10 @@ import {
   CheckCircle2,
   ExternalLink,
   Download,
+  Pencil,
+  Archive,
+  Trash2,
+  RotateCcw,
 } from "lucide-react";
 import { marked } from "marked";
 import { Button } from "@/components/ui/button";
@@ -200,6 +204,43 @@ export const ChatView: React.FC = () => {
   const [isHistoryOpen, setIsHistoryOpen] = useState(true);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [exportingAnswer, setExportingAnswer] = useState<string>("");
+  const [convFilter, setConvFilter] = useState<"active" | "archived" | "deleted">("active");
+
+  const handleRenameConversation = async (convId: string, current: string) => {
+    const title = window.prompt("重命名对话", current);
+    if (!title || !title.trim()) return;
+    try {
+      await api.renameConversation(convId, title.trim());
+      refreshConversations();
+    } catch (err) {
+      alert(`重命名失败: ${err instanceof Error ? err.message : err}`);
+    }
+  };
+  const handleArchiveConversation = async (convId: string) => {
+    try {
+      await api.setConversationLifecycle(convId, "archive");
+      refreshConversations();
+    } catch (err) {
+      alert(`归档失败: ${err instanceof Error ? err.message : err}`);
+    }
+  };
+  const handleDeleteConversation = async (convId: string) => {
+    if (!window.confirm("确定移入回收站？消息与关联研究仍保留，可随时恢复。")) return;
+    try {
+      await api.deleteConversation(convId);
+      refreshConversations();
+    } catch (err) {
+      alert(`删除失败: ${err instanceof Error ? err.message : err}`);
+    }
+  };
+  const handleRestoreConversation = async (convId: string) => {
+    try {
+      await api.restoreConversation(convId);
+      refreshConversations();
+    } catch (err) {
+      alert(`恢复失败: ${err instanceof Error ? err.message : err}`);
+    }
+  };
 
   const handleExportAnswer = async (messageId: string, format: "markdown" | "json") => {
     if (exportingAnswer) return;
@@ -224,10 +265,10 @@ export const ChatView: React.FC = () => {
   }, [messages]);
 
   // Load conversation list on mount
-  const refreshConversations = async (targetConvId?: string) => {
+  const refreshConversations = async (targetConvId?: string, status = convFilter) => {
     try {
       setLoadingHistory(true);
-      const res = await api.getConversations();
+      const res = await api.getConversations(status);
       const items = res.items || [];
       setConversations(items);
 
@@ -366,6 +407,31 @@ export const ChatView: React.FC = () => {
               </Button>
             </div>
 
+            {/* P6-A2 生命周期筛选 */}
+            <div className="px-3 py-2 border-b border-border/60 flex items-center gap-1.5">
+              {([
+                ["active", "进行中"],
+                ["archived", "已归档"],
+                ["deleted", "回收站"],
+              ] as const).map(([value, label]) => (
+                <button
+                  key={value}
+                  onClick={() => {
+                    setConvFilter(value);
+                    refreshConversations(undefined, value);
+                  }}
+                  className={cn(
+                    "text-xs px-2 py-1 rounded-md font-serif-academic transition cursor-pointer border",
+                    convFilter === value
+                      ? "bg-primary/10 text-primary dark:text-emerald-200 border-primary/30 font-semibold"
+                      : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
             {/* Conversation Threads List */}
             <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
               {loadingHistory && conversations.length === 0 ? (
@@ -376,7 +442,7 @@ export const ChatView: React.FC = () => {
                 </div>
               ) : conversations.length === 0 ? (
                 <div className="text-center py-12 px-3 text-xs sm:text-sm font-serif-academic text-foreground/70">
-                  暂无历史会话记录。<br />提交新问题即可创建对话。
+                  {convFilter === "active" ? (<>暂无历史会话记录。<br />提交新问题即可创建对话。</>) : convFilter === "archived" ? "暂无已归档对话。" : "回收站为空。"}
                 </div>
               ) : (
                 conversations.map((conv) => {
@@ -386,7 +452,7 @@ export const ChatView: React.FC = () => {
                       key={conv.conversation_id}
                       onClick={() => selectConversation(conv.conversation_id)}
                       className={cn(
-                        "w-full text-left p-3 rounded-lg text-xs sm:text-sm font-serif-academic transition-all flex flex-col gap-1.5 cursor-pointer",
+                        "group/conv w-full text-left p-3 rounded-lg text-xs sm:text-sm font-serif-academic transition-all flex flex-col gap-1.5 cursor-pointer",
                         active
                           ? "bg-primary/10 text-primary dark:text-emerald-200 border border-primary/25 font-semibold shadow-xs"
                           : "hover:bg-muted/70 text-foreground/80 hover:text-foreground border border-transparent"
@@ -400,6 +466,29 @@ export const ChatView: React.FC = () => {
                           <span className="text-xs font-mono text-foreground/75 shrink-0 font-medium">
                             {conv.message_count} 问
                           </span>
+                        )}
+                      </div>
+                      <div
+                        className="flex items-center gap-2 text-[11px] font-mono text-muted-foreground opacity-0 group-hover/conv:opacity-100 transition-opacity"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {convFilter === "active" ? (
+                          <>
+                            <button type="button" title="重命名" className="hover:text-foreground cursor-pointer bg-transparent border-none p-0" onClick={() => handleRenameConversation(conv.conversation_id, conv.title)}>
+                              <Pencil className="h-3 w-3" />
+                            </button>
+                            <button type="button" title="归档" className="hover:text-foreground cursor-pointer bg-transparent border-none p-0" onClick={() => handleArchiveConversation(conv.conversation_id)}>
+                              <Archive className="h-3 w-3" />
+                            </button>
+                            <button type="button" title="移入回收站" className="hover:text-red-600 cursor-pointer bg-transparent border-none p-0" onClick={() => handleDeleteConversation(conv.conversation_id)}>
+                              <Trash2 className="h-3 w-3" />
+                            </button>
+                          </>
+                        ) : (
+                          <button type="button" title="恢复到对话列表" className="hover:text-emerald-700 cursor-pointer bg-transparent border-none p-0 flex items-center gap-1" onClick={() => handleRestoreConversation(conv.conversation_id)}>
+                            <RotateCcw className="h-3 w-3" />
+                            <span>恢复</span>
+                          </button>
                         )}
                       </div>
                       <div className="flex items-center justify-between text-xs text-foreground/70 font-mono">

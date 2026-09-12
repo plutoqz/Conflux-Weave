@@ -165,6 +165,10 @@ def test_existing_version_five_database_upgrades_without_checksum_changes(tmp_pa
         connection.execute("DROP TABLE memories")
         connection.execute("DROP TABLE agent_messages")
         connection.execute("DELETE FROM schema_migrations WHERE version >= 6")
+        connection.execute("DROP INDEX IF EXISTS runs_lifecycle_idx")
+        connection.execute("DROP TABLE IF EXISTS document_lifecycle")
+        connection.execute("ALTER TABLE runs DROP COLUMN archived_at")
+        connection.execute("ALTER TABLE runs DROP COLUMN deleted_at")
         connection.execute("PRAGMA user_version = 5")
 
     upgraded = SQLiteRuntimeRepository(repo.database_path, store)
@@ -172,4 +176,4 @@ def test_existing_version_five_database_upgrades_without_checksum_changes(tmp_pa
     assert upgraded.migration_records()[:5] == original
     assert upgraded.migration_records()[5].name == "v03_agent_messages"
     assert upgraded.migration_records()[6].name == "v03_hierarchical_memories"
-    assert upgraded.migration_records()[-1].name == "v03_skills_and_mcp_gateway"
+    assert upgraded.migration_records()[-1].name == "v03_p6_lifecycle"

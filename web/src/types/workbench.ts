@@ -108,6 +108,7 @@ export interface ConversationSummary {
   updated_at: string;
   message_count: number;
   active_mode: string;
+  lifecycle?: "active" | "archived" | "deleted";
 }
 
 export interface HealthCheckItem {
