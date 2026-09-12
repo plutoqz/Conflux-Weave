@@ -718,6 +718,7 @@ def create_app(
                     mode=message.mode,
                     content=message.content,
                     created_at=message.created_at,
+                    run_id=message.run_id,
                 )
                 for message in chat_service.history(limit=limit)
             )
@@ -734,15 +735,51 @@ def create_app(
         if chat_service is None:
             return JSONResponse(status_code=404, content={"code": "conversation_not_found", "message": "对话记录不存在。"})
         record = chat_service.conversation_record(conversation_id)
-        messages = tuple(ChatMessageRecord(message_id=m.message_id, conversation_id=m.conversation_id, role=m.role, mode=m.mode, content=m.content, created_at=m.created_at) for m in record.pop("messages", ()))
-        return ConversationDetail(**record, messages=messages)
+        raw_messages = record.pop("messages", ())
+        message_records = []
+        for m in raw_messages:
+            m_content = m.content
+            # Auto-sync finished deep research report into message content if available
+            if m.run_id and m.role == "assistant" and "已为您启动深度研究任务" in m_content and query_service is not None:
+                try:
+                    run_info = query_service.get_run(m.run_id)
+                    if run_info and run_info.state in ("complete", "partial"):
+                        artifacts = query_service.get_delivery_artifacts(m.run_id)
+                        if artifacts:
+                            _, art_bytes = query_service.read_delivery_artifact(m.run_id, artifacts[0].artifact_id)
+                            report_str = art_bytes.decode("utf-8")
+                            if report_str.strip():
+                                m_content = report_str
+                                conn = chat_service._connect()
+                                try:
+                                    conn.execute(
+                                        "UPDATE chat_messages SET content = ? WHERE message_id = ?",
+                                        (report_str, m.message_id),
+                                    )
+                                    conn.commit()
+                                finally:
+                                    conn.close()
+                except Exception:
+                    pass
+            message_records.append(
+                ChatMessageRecord(
+                    message_id=m.message_id,
+                    conversation_id=m.conversation_id,
+                    role=m.role,
+                    mode=m.mode,
+                    content=m_content,
+                    created_at=m.created_at,
+                    run_id=m.run_id,
+                )
+            )
+        return ConversationDetail(**record, messages=tuple(message_records))
 
     @app.post("/api/v1/conversations/{conversation_id}/messages", response_model=ChatMessageRecord)
     async def record_research_message(conversation_id: str, request: ResearchConversationMessageRequest):
         if chat_service is None:
             return JSONResponse(status_code=503, content={"code": "provider_not_configured", "message": "对话记录不可用。"})
         message = chat_service.record_research_message(conversation_id, request.role, request.content, request.run_id, mode=request.mode)
-        return ChatMessageRecord(message_id=message.message_id, conversation_id=message.conversation_id, role=message.role, mode=message.mode, content=message.content, created_at=message.created_at)
+        return ChatMessageRecord(message_id=message.message_id, conversation_id=message.conversation_id, role=message.role, mode=message.mode, content=message.content, created_at=message.created_at, run_id=message.run_id)
 
     @app.post("/api/v1/tasks/deep-research", response_model=ResearchTaskAcceptedResponse)
     async def submit_deep_research(request: DeepResearchTaskRequest):
