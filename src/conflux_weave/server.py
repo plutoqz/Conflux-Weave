@@ -3289,6 +3289,11 @@ def build_local_app(
                 image_embedding = OpenAICompatibleImageEmbeddingAdapter(
                     store, config, model=image_model
                 )
+            else:
+                from conflux_weave.multimodal_indexing import (
+                    DeterministicImageEmbeddingAdapter,
+                )
+                image_embedding = DeterministicImageEmbeddingAdapter(store)
 
             multimodal_pipeline = MultimodalRetrievalPipeline(
                 text_pipeline,

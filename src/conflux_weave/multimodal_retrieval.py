@@ -38,8 +38,8 @@ EVIDENCE_QUOTE_CHARS = 2400
 
 
 def is_multimodal_env_enabled() -> bool:
-    """Check if multimodal features are enabled via environment variable. Default is false (text-only safe default)."""
-    val = os.environ.get(MULTIMODAL_ENV_FLAG, "false").strip().casefold()
+    """Check if multimodal features are enabled via environment variable. Default is true for rich visual RAG."""
+    val = os.environ.get(MULTIMODAL_ENV_FLAG, "true").strip().casefold()
     return val in {"1", "true", "yes", "on"}
 
 

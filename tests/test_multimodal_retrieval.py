@@ -589,9 +589,9 @@ def test_multimodal_feature_toggle_fallback(tmp_path, monkeypatch):
     assert run_disabled.image_hits == ()
     assert all(h.modality == "text" for h in run_disabled.fused_hits)
 
-    # 2. Test via default unset env var (safe default is False)
+    # 2. Test via default unset env var (2026-09-12 revision: rich visual RAG is on by default)
     monkeypatch.delenv(MULTIMODAL_ENV_FLAG, raising=False)
-    assert not is_multimodal_env_enabled()
+    assert is_multimodal_env_enabled()
 
     # 3. Test via environment variable CONFLUX_WEAVE_MULTIMODAL_ENABLED=false
     monkeypatch.setenv(MULTIMODAL_ENV_FLAG, "false")
@@ -603,6 +603,10 @@ def test_multimodal_feature_toggle_fallback(tmp_path, monkeypatch):
         artifact_store=store,
     )
     assert not env_pipeline.is_multimodal_active()
+
+    # 4. Test via environment variable CONFLUX_WEAVE_MULTIMODAL_ENABLED=true
+    monkeypatch.setenv(MULTIMODAL_ENV_FLAG, "true")
+    assert is_multimodal_env_enabled()
 
 
 def test_api_contracts_serialization():

@@ -297,10 +297,17 @@ def test_p2_benchmark_reaches_frozen_thresholds_offline():
 
 
 def test_default_path_adjudication_rules(monkeypatch):
-    """Verify default path adjudication and feature toggle fallback behavior."""
-    # When CONFLUX_WEAVE_MULTIMODAL_ENABLED is unset or false, default is False
+    """Verify default path adjudication and feature toggle fallback behavior.
+
+    2026-09-12 revision of the P2.3 default-path adjudication: the frozen
+    benchmark verdict stays valid for image-capable corpora, but the out-of-box
+    default flips from text-only to rich visual RAG. Image retrieval still
+    activates only when an image index and embedding port exist, and
+    CONFLUX_WEAVE_MULTIMODAL_ENABLED=false restores the text-only path.
+    """
+    # When CONFLUX_WEAVE_MULTIMODAL_ENABLED is unset, rich visual RAG is the default
     monkeypatch.delenv("CONFLUX_WEAVE_MULTIMODAL_ENABLED", raising=False)
-    assert is_multimodal_env_enabled() is False
+    assert is_multimodal_env_enabled() is True
 
     monkeypatch.setenv("CONFLUX_WEAVE_MULTIMODAL_ENABLED", "false")
     assert is_multimodal_env_enabled() is False
