@@ -346,6 +346,7 @@ def create_app(
     config_paths: dict[str, str] | None = None,
     chat_service: ChatService | None = None,
     retrieval_pipeline: Any | None = None,
+    enable_worker: bool = True,
 ) -> FastAPI:
     """Build the one ASGI application around injected authoritative components."""
 
@@ -356,7 +357,10 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        await worker_loop.start()
+        # C1 进程分离：enable_worker=False 时 API 进程不执行 Worker 循环，
+        # 任务由独立的 `conflux-weave worker` 进程经 SQLite 队列认领执行。
+        if enable_worker:
+            await worker_loop.start()
         try:
             yield
         finally:
@@ -3828,7 +3832,28 @@ def _inject_third_party_keys(dotenv_path: Path | None) -> None:
             os.environ[key] = value.strip()
 
 
-def build_local_app(
+class LocalRuntimeStack:
+    """C1 进程分离：API 与 Worker 共用的权威运行时栈（SQLite + 产物库 + 编排器）。"""
+
+    def __init__(
+        self,
+        *,
+        orchestrator: OrchestratorPort,
+        repository: SQLiteRuntimeRepository,
+        store: LocalArtifactStore,
+        chat_service: ChatService | None,
+        retrieval_pipeline: Any | None,
+        provider_configured: bool,
+    ) -> None:
+        self.orchestrator = orchestrator
+        self.repository = repository
+        self.store = store
+        self.chat_service = chat_service
+        self.retrieval_pipeline = retrieval_pipeline
+        self.provider_configured = provider_configured
+
+
+def build_research_runtimes(
     *,
     database: Path = Path("var") / "db" / "conflux-weave.sqlite3",
     artifact_root: Path = Path("var") / "artifacts" / "sha256",
@@ -3836,8 +3861,8 @@ def build_local_app(
     dotenv_path: Path | None = Path(".env"),
     corpus_manifest: Path = Path("var") / "acceptance" / "v0.3-s1" / "corpus-import-manifest.json",
     lancedb_root: Path = Path("var") / "acceptance" / "v0.3-s1" / "lancedb",
-) -> FastAPI:
-    """Construct the production-shaped local app; no external call occurs here."""
+) -> LocalRuntimeStack:
+    """构造 API/Worker 共用的执行平面（无 HTTP 依赖，可独立进程使用）。"""
     store = LocalArtifactStore(artifact_root)
     repository = SQLiteRuntimeRepository(database, store)
     _inject_third_party_keys(dotenv_path)
@@ -3993,10 +4018,39 @@ def build_local_app(
         repository,
         (fixture_runtime, paper_runtime, research_runtime),
     )
-    return create_app(
-        repository,
-        orchestrator,
+    return LocalRuntimeStack(
+        orchestrator=orchestrator,
+        repository=repository,
+        store=store,
+        chat_service=chat_service,
+        retrieval_pipeline=retrieval_pipeline,
         provider_configured=provider_configured,
+    )
+
+
+def build_local_app(
+    *,
+    database: Path = Path("var") / "db" / "conflux-weave.sqlite3",
+    artifact_root: Path = Path("var") / "artifacts" / "sha256",
+    workspace_root: Path = Path("var") / "workspace",
+    dotenv_path: Path | None = Path(".env"),
+    corpus_manifest: Path = Path("var") / "acceptance" / "v0.3-s1" / "corpus-import-manifest.json",
+    lancedb_root: Path = Path("var") / "acceptance" / "v0.3-s1" / "lancedb",
+    enable_worker: bool = True,
+) -> FastAPI:
+    """Construct the production-shaped local app; no external call occurs here."""
+    stack = build_research_runtimes(
+        database=database,
+        artifact_root=artifact_root,
+        workspace_root=workspace_root,
+        dotenv_path=dotenv_path,
+        corpus_manifest=corpus_manifest,
+        lancedb_root=lancedb_root,
+    )
+    return create_app(
+        stack.repository,
+        stack.orchestrator,
+        provider_configured=stack.provider_configured,
         dotenv_path=dotenv_path,
         config_paths={
             "database": str(database),
@@ -4006,9 +4060,10 @@ def build_local_app(
             "lancedb_root": str(lancedb_root),
             "dotenv": str(dotenv_path) if dotenv_path else "",
         },
-        chat_service=chat_service,
-        retrieval_pipeline=retrieval_pipeline,
+        chat_service=stack.chat_service,
+        retrieval_pipeline=stack.retrieval_pipeline,
+        enable_worker=enable_worker,
     )
 
 
-__all__ = ["WorkerLoop", "build_local_app", "create_app"]
+__all__ = ["WorkerLoop", "LocalRuntimeStack", "build_local_app", "build_research_runtimes", "create_app"]

@@ -197,6 +197,32 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument(
         "--workspace-root", type=Path, default=Path("var") / "workspace"
     )
+    serve.add_argument(
+        "--no-worker",
+        action="store_true",
+        help="C1: run API only; execute tasks with the standalone `worker` command",
+    )
+    worker = subparsers.add_parser(
+        "worker",
+        help="C1: standalone Worker process; claims Steps from the SQLite queue",
+    )
+    worker.add_argument(
+        "--database", type=Path, default=Path("var") / "db" / "conflux-weave.sqlite3"
+    )
+    worker.add_argument(
+        "--artifact-root", type=Path, default=Path("var") / "artifacts" / "sha256"
+    )
+    worker.add_argument(
+        "--workspace-root", type=Path, default=Path("var") / "workspace"
+    )
+    worker.add_argument("--dotenv", type=Path, default=Path(".env"))
+    worker.add_argument(
+        "--interval", type=float, default=0.25, help="poll interval in seconds"
+    )
+    worker.add_argument(
+        "--max-seconds", type=float, default=None,
+        help="optional supervised run length (tests); omit to run until interrupted",
+    )
     subparsers.add_parser(
         "offline-smoke",
         help="run the deterministic no-network package and Workbench smoke path",
@@ -226,11 +252,45 @@ def main(argv: Sequence[str] | None = None) -> int:
                 artifact_root=args.artifact_root,
                 workspace_root=args.workspace_root,
                 dotenv_path=args.dotenv,
+                enable_worker=not args.no_worker,
             ),
             host=args.host,
             port=args.port,
             workers=1,
         )
+        return 0
+    if args.command == "worker":
+        import asyncio
+
+        from conflux_weave.server import WorkerLoop, build_research_runtimes
+
+        stack = build_research_runtimes(
+            database=args.database,
+            artifact_root=args.artifact_root,
+            workspace_root=args.workspace_root,
+            dotenv_path=args.dotenv,
+        )
+        loop = WorkerLoop(stack.orchestrator, interval_seconds=args.interval)
+        print(
+            f"conflux-weave worker started (interval={args.interval}s, "
+            f"database={args.database})",
+            flush=True,
+        )
+
+        async def _supervised() -> None:
+            await loop.start()
+            if args.max_seconds is None:
+                await asyncio.Event().wait()
+            else:
+                await asyncio.sleep(args.max_seconds)
+            await loop.stop()
+
+        try:
+            asyncio.run(_supervised())
+        except KeyboardInterrupt:
+            pass
+        finally:
+            print("conflux-weave worker stopped", flush=True)
         return 0
     if args.command == "offline-smoke":
         from conflux_weave.offline_smoke import main as run_offline_smoke
