@@ -587,3 +587,21 @@ P2.3 冻结基准（`p2-multimodal-retrieval-v1`，40 篇论文）当时的裁�
 
 
 
+
+## P6 可用性闭环、Agent 能力与执行可靠性（2026-09-12，已合入）
+
+范围：P6-A/B/C 全部九个 Gate（P6-D 市场化基础设施按方案暂缓）。逐 Gate 的实现细节、真实服务验证、失败案例与边界声明见 `docs/plans/current/v0.3-P6-执行记录与Gate验收.md`。
+
+| 主题 | 内容 | 边界 |
+| --- | --- | --- |
+| A1 成果导出 | `export_bundle.ExportService` 统一 ExportDocument；run/evidence/chat answer/note 四类对象的 Markdown/BibTeX/JSON/ZIP 导出（API + 前端下载）；引用清单与正文编号一致；本地来源标题/作者/年份/DOI 三级回填 | 导出文件非运行时权威状态源；PDF/Word 高保真导出维持暂缓 |
+| A2 数据生命周期 | migration 9（runs 生命周期列 + document_lifecycle 表）；对话/Run/文档归档、软删除、恢复、重命名 API 与前端筛选；软删除不触碰 Evidence/Artifact/交付 | 第一批不物理删除记录 |
+| A3 长任务反馈 | Progress 响应携带阶段标签/最近事件/时间戳；SSE 游标追踪 + 断线重连从 run_events 补发；浏览器 Notification + 页面内完成横幅；activeRunId 刷新恢复 | 轮询保留为降级兜底 |
+| A4 React 浏览器回归 | `scripts/verify_react_workbench.mjs`（系统 Edge）：五分区、真实导出下载、生命周期筛选、刷新恢复、三档视口无溢出、控制台记账；发现并修复 Topbar 移动端 150px 溢出 | 既有数据问题 run-test-f3c7214c 产物缺失单列记录 |
+| B1 语义记忆召回 | `memory_recall.MemoryRecallService`：结构化过滤→语义+词法→重排→5/5/3 配额；独立 LanceDB 记忆向量索引；召回带 memory_id/scope/score/reason；Memory Studio 召回预览 | 无 Provider 时退回 recency 确定性兜底；注入上限不突破 |
+| B2/B3 计算工具与权限 | 受限 Python 沙箱（临时工作区/只读输入/输出白名单/超时/POSIX 内存上限/输出上限/自动清理 + bootstrap 封禁网络与系统命令）；工具三级分类与 per-run 策略（allow/deny/审批）；`POST /api/v1/tools/compute` | bootstrap 守卫为单机研究工具级防护；Windows 内存上限诚实记录 unavailable |
+| B4 预算硬限制 | migration 10 + `ToolBudgetMixin`：reserve→execute→settle/release；超限即停止（budget state=stopped）且兜底不可绕过；BudgetResponse 暴露 limit/reserved/actual/remaining 并在研究页展示 | 货币预算待 Provider 价格模型冻结 |
+| C1 进程分离 | `build_research_runtimes()` 无 HTTP 运行时栈工厂；`serve --no-worker` + `conflux-weave worker` 独立进程；共享 SQLite 队列 + lease 过期接管；run_events 事务内写入 + 游标重放即事件 outbox | 第一步不引入 Temporal |
+| C2 Step checkpoint | migration 11 step_checkpoints 台账（七阶段/input_digest/产物/attempt/错误/时间/resumable）；retrieve 复用不重跑付费批次（零新增消耗、报告产物一致）；可重放只读失败自动重试 ≤3；unknown_outcome 标记；`GET /runs/{id}/checkpoints` | 第一批覆盖 retrieve/deliver 外层步骤；plan/claim/verify/synthesize 内部阶段沿用 W3 检查点产物，逐段入账待后续 |
+
+回归：`uv run pytest -q` → **670 passed**（基线 599）。服务经 `serve --no-worker` + 独立 `worker` 双进程与默认单进程两种拓扑真实验证。
