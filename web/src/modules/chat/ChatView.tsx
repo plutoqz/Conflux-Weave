@@ -15,6 +15,7 @@ import {
   Loader2,
   CheckCircle2,
   ExternalLink,
+  Download,
 } from "lucide-react";
 import { marked } from "marked";
 import { Button } from "@/components/ui/button";
@@ -198,6 +199,19 @@ export const ChatView: React.FC = () => {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [isHistoryOpen, setIsHistoryOpen] = useState(true);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [exportingAnswer, setExportingAnswer] = useState<string>("");
+
+  const handleExportAnswer = async (messageId: string, format: "markdown" | "json") => {
+    if (exportingAnswer) return;
+    setExportingAnswer(messageId);
+    try {
+      await api.exportChatAnswer(messageId, format);
+    } catch (err) {
+      console.error("导出回答失败:", err);
+    } finally {
+      setExportingAnswer("");
+    }
+  };
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -516,10 +530,31 @@ export const ChatView: React.FC = () => {
                           onReportLoaded={(newContent) => updateMessageContent(i, newContent)}
                         />
                       ) : (
-                        <div
-                          className="prose prose-stone dark:prose-invert max-w-none text-base leading-relaxed font-serif-academic text-foreground"
-                          dangerouslySetInnerHTML={renderMarkdown(msg.content)}
-                        />
+                        <div>
+                          <div
+                            className="prose prose-stone dark:prose-invert max-w-none text-base leading-relaxed font-serif-academic text-foreground"
+                            dangerouslySetInnerHTML={renderMarkdown(msg.content)}
+                          />
+                          {msg.message_id && (
+                            <div className="pt-2 mt-3 border-t border-border/40 flex items-center gap-2.5 text-xs font-mono text-muted-foreground">
+                              <span className="flex items-center gap-1">
+                                <Download className="h-3 w-3" />
+                                导出
+                              </span>
+                              {(["markdown", "json"] as const).map((format) => (
+                                <button
+                                  key={format}
+                                  type="button"
+                                  disabled={exportingAnswer === msg.message_id}
+                                  onClick={() => handleExportAnswer(msg.message_id!, format)}
+                                  className="hover:text-foreground hover:underline bg-transparent border-none p-0 cursor-pointer"
+                                >
+                                  {exportingAnswer === msg.message_id ? "导出中…" : format.toUpperCase()}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       )}
 
                       {/* Memory Candidate Bubble */}

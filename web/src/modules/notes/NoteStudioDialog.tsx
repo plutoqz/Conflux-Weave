@@ -6,7 +6,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { FileText, Copy, Sparkles, Check, History, Loader2, AlertCircle } from "lucide-react";
+import { FileText, Copy, Sparkles, Check, History, Loader2, AlertCircle, Download } from "lucide-react";
 import { marked } from "marked";
 import { renderMarkdownWithMath, cleanDocumentNoteText } from "@/lib/math";
 import { api } from "@/services/api";
@@ -34,6 +34,19 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
   const [revisions, setRevisions] = useState<any[]>([]);
   const [savingToResearch, setSavingToResearch] = useState(false);
   const [savedResearchRunId, setSavedResearchRunId] = useState<string | null>(null);
+  const [exporting, setExporting] = useState<string>("");
+
+  const handleExportNote = async (format: "markdown" | "json") => {
+    if (!note?.note_id || exporting) return;
+    setExporting(format);
+    try {
+      await api.exportNote(note.note_id, format);
+    } catch (err: any) {
+      alert(`导出笔记失败: ${err.message || err}`);
+    } finally {
+      setExporting("");
+    }
+  };
 
   useEffect(() => {
     if (!open || !documentId) {
@@ -245,6 +258,18 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
             >
               {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
               <span>{copied ? "已复制" : "复制"}</span>
+            </Button>
+
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => handleExportNote("markdown")}
+              disabled={!note || !!exporting}
+              title="导出笔记 Markdown 文件"
+              className="h-7 px-2 text-xs font-serif-academic gap-1 text-muted-foreground hover:text-foreground"
+            >
+              <Download className="h-3.5 w-3.5" />
+              <span>{exporting === "markdown" ? "导出中…" : "导出 MD"}</span>
             </Button>
 
             {savedResearchRunId ? (

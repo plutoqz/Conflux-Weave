@@ -40,6 +40,34 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
+async function download(path: string, fallbackName: string): Promise<string> {
+  const res = await fetch(`${API_BASE}${path}`);
+  if (!res.ok) {
+    let errorMsg = `HTTP ${res.status} ${res.statusText}`;
+    try {
+      const errJson = await res.json();
+      if (errJson.message) errorMsg = errJson.message;
+    } catch {
+      // ignore
+    }
+    throw new Error(errorMsg);
+  }
+  const disposition = res.headers.get("Content-Disposition") || "";
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  const plainMatch = disposition.match(/filename="?([^";]+)"?/i);
+  const filename = utf8Match ? decodeURIComponent(utf8Match[1]) : plainMatch ? plainMatch[1] : fallbackName;
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+  return filename;
+}
+
 export const api = {
   // Health & Config
   getHealthReady: () => request<HealthReady>("/api/v1/health/ready"),
@@ -73,6 +101,28 @@ export const api = {
   rerunRun: (runId: string) => request(`/api/v1/runs/${runId}/rerun`, { method: "POST" }),
   followUpRun: (runId: string, query: string) =>
     request(`/api/v1/runs/${runId}/follow-up`, { method: "POST", body: JSON.stringify({ query }) }),
+
+  // Export (P6-A1)
+  exportRun: (runId: string, format: "markdown" | "bibtex" | "json" | "zip") =>
+    download(
+      `/api/v1/runs/${encodeURIComponent(runId)}/export?format=${format}`,
+      `${runId}.${format === "markdown" ? "md" : format === "bibtex" ? "bib" : format}`
+    ),
+  exportRunEvidence: (runId: string, evidenceId: string, format: "markdown" | "json") =>
+    download(
+      `/api/v1/runs/${encodeURIComponent(runId)}/evidence/${encodeURIComponent(evidenceId)}/export?format=${format}`,
+      `${evidenceId}.${format === "markdown" ? "md" : "json"}`
+    ),
+  exportChatAnswer: (messageId: string, format: "markdown" | "json") =>
+    download(
+      `/api/v1/chat/messages/${encodeURIComponent(messageId)}/export?format=${format}`,
+      `${messageId}.${format === "markdown" ? "md" : "json"}`
+    ),
+  exportNote: (noteId: string, format: "markdown" | "json") =>
+    download(
+      `/api/v1/notes/${encodeURIComponent(noteId)}/export?format=${format}`,
+      `${noteId}.${format === "markdown" ? "md" : "json"}`
+    ),
 
   // Chat & Conversations
   getConversations: () => request<{ items: ConversationSummary[] }>("/api/v1/conversations"),

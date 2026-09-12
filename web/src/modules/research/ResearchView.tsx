@@ -11,6 +11,7 @@ import {
   CheckCircle2,
   ExternalLink,
   ChevronRight,
+  Download,
   Image as ImageIcon,
 } from "lucide-react";
 import { useWorkbenchStore } from "@/stores/useWorkbenchStore";
@@ -41,6 +42,21 @@ export const ResearchView: React.FC = () => {
   const [headings, setHeadings] = useState<Array<{ id: string; text: string; level: number }>>([]);
   const [evidenceList, setEvidenceList] = useState<any[]>([]);
   const [previewImage, setPreviewImage] = useState<{ url: string; title: string } | null>(null);
+  const [exporting, setExporting] = useState<string>("");
+  const [exportError, setExportError] = useState<string>("");
+
+  const handleExport = async (format: "markdown" | "bibtex" | "json" | "zip") => {
+    if (!activeRunId || exporting) return;
+    setExporting(format);
+    setExportError("");
+    try {
+      await api.exportRun(activeRunId, format);
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setExporting("");
+    }
+  };
 
   useEffect(() => {
     if (!activeRunId) return;
@@ -273,6 +289,39 @@ export const ResearchView: React.FC = () => {
                           <span>{evidenceList.length} 处核验证据已锚定 (点击查看)</span>
                         </button>
                       </>
+                    )}
+                  </div>
+                  <div className="mt-3 pt-3 border-t border-border/60 flex flex-wrap items-center gap-2">
+                    <span className="text-xs text-foreground/70 flex items-center gap-1 font-mono">
+                      <Download className="h-3.5 w-3.5" />
+                      导出
+                    </span>
+                    {(["markdown", "bibtex", "json", "zip"] as const).map((format) => (
+                      <Button
+                        key={format}
+                        variant="outline"
+                        size="sm"
+                        className="h-7 px-2.5 text-xs font-mono"
+                        disabled={!!exporting}
+                        onClick={() => handleExport(format)}
+                        title={
+                          format === "markdown"
+                            ? "导出 Markdown（含元数据与引用列表）"
+                            : format === "bibtex"
+                              ? "导出 BibTeX 文献条目"
+                              : format === "json"
+                                ? "导出 JSON（含 Evidence 台账）"
+                                : "导出 ZIP 证据包（report.md + references.bib + evidence.json）"
+                        }
+                      >
+                        {exporting === format ? "导出中…" : format.toUpperCase()}
+                      </Button>
+                    ))}
+                    {exportError && (
+                      <span className="text-xs text-red-600 dark:text-red-400 flex items-center gap-1">
+                        <AlertTriangle className="h-3.5 w-3.5" />
+                        导出失败：{exportError}
+                      </span>
                     )}
                   </div>
                 </div>

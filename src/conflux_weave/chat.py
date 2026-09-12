@@ -596,6 +596,35 @@ class ChatService:
             for row in reversed(rows)
         ]
 
+    def load_message(self, message_id: str) -> ChatMessage | None:
+        """P6-A1：按 ID 读取单条消息（导出与归档功能共用）。"""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT message_id, conversation_id, role, mode, content, created_at, context_artifact_id, turn_id, sequence, run_id "
+                "FROM chat_messages WHERE message_id = ?",
+                (message_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            return None
+        return ChatMessage(
+            row["message_id"], row["conversation_id"], row["role"], row["mode"],
+            row["content"], row["created_at"], row["context_artifact_id"], row["turn_id"], row["sequence"], row["run_id"],
+        )
+
+    def read_message_context(self, message: ChatMessage) -> dict | None:
+        """P6-A1：读取消息关联的上下文产物（引用清单所在），无关联时返回 None。"""
+        if not message.context_artifact_id or self._store is None:
+            return None
+        try:
+            raw = self._store.read_bytes_by_id(message.context_artifact_id)
+            payload = json.loads(raw.decode("utf-8"))
+        except (ValueError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
     def _append(self, message: ChatMessage, *, conversation_mode: str | None = None) -> None:
         conn = self._connect()
         try:

@@ -87,6 +87,7 @@ export interface RunDetail {
 
 export interface ChatMessage {
   id?: string;
+  message_id?: string;
   role: "user" | "assistant" | "system";
   content: string;
   created_at?: string;

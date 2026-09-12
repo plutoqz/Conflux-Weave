@@ -23,6 +23,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from conflux_weave.chat import ChatMessage, ChatService
+from conflux_weave.export_bundle import (
+    ExportService,
+    build_export_json,
+    build_export_zip,
+    render_export_bibtex,
+    render_export_markdown,
+)
+from urllib.parse import quote
 from conflux_weave.conversation_router import ConversationRouter, RouterResult
 from conflux_weave.api_contracts import (
     ChatAnswerChecks,
@@ -1459,6 +1467,127 @@ def create_app(
     async def get_evidence(evidence_id: str, run_id: str):
         try:
             return query_service.get_evidence(run_id, evidence_id)
+        except Exception as exc:
+            return error_response(exc)
+
+    # ------------------------------------------------------- P6-A1 成果导出
+    def _export_title_resolver(document_id: str):
+        lookup = getattr(retrieval_pipeline, "document_by_id", None)
+        if not lookup:
+            return None
+        from conflux_weave.documents import document_title_from_segments
+
+        return document_title_from_segments(lookup, document_id, "")
+
+    _corpus_manifest_path = Path(config_paths["corpus_manifest"]) if (config_paths or {}).get("corpus_manifest") else None
+    export_service = ExportService(
+        repository,
+        chat_service,
+        title_resolver=_export_title_resolver,
+        corpus_manifest_path=_corpus_manifest_path,
+    )
+    app.state.export_service = export_service
+    _EXPORT_FORMATS = ("markdown", "bibtex", "json", "zip")
+
+    def _export_response(document, export_format: str, download_stem: str) -> Response:
+        if export_format == "markdown":
+            payload = render_export_markdown(document)
+            media_type = "text/markdown; charset=utf-8"
+            filename = f"{download_stem}.md"
+        elif export_format == "bibtex":
+            payload = render_export_bibtex(document)
+            media_type = "application/x-bibtex; charset=utf-8"
+            filename = f"{download_stem}.bib"
+        elif export_format == "json":
+            payload = build_export_json(document)
+            media_type = "application/json; charset=utf-8"
+            filename = f"{download_stem}.json"
+        else:
+            payload = build_export_zip(document)
+            media_type = "application/zip"
+            filename = f"{download_stem}.zip"
+        quoted = quote(filename, safe="")
+        return Response(
+            content=payload,
+            media_type=media_type,
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quoted}"},
+        )
+
+    def _export_download_stem(document) -> str:
+        raw = str(document.metadata.get("run_id") or document.object_id)
+        stem = re.sub(r"[^\w\u4e00-\u9fff.-]+", "-", raw.strip())
+        return (stem[:80] or "conflux-weave-export") + f"-{document.object_kind}"
+
+    def _export_download_stem(document) -> str:
+        raw = str(document.metadata.get("run_id") or document.object_id)
+        stem = re.sub(r"[^\w\u4e00-\u9fff.-]+", "-", raw.strip())
+        return (stem[:80] or "conflux-weave-export") + f"-{document.object_kind}"
+
+    @app.get("/api/v1/runs/{run_id}/export")
+    async def export_run(run_id: str, format: str = "markdown"):
+        export_format = format.lower().strip()
+        if export_format not in _EXPORT_FORMATS:
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "code": "invalid_request",
+                    "message": f"不支持的导出格式：{format}（可选 {', '.join(_EXPORT_FORMATS)}）。",
+                },
+            )
+        try:
+            document = export_service.collect_run_export(run_id)
+            return _export_response(document, export_format, _export_download_stem(document))
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.get("/api/v1/runs/{run_id}/evidence/{evidence_id}/export")
+    async def export_run_evidence(run_id: str, evidence_id: str, format: str = "markdown"):
+        export_format = format.lower().strip()
+        if export_format not in ("markdown", "json"):
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "code": "invalid_request",
+                    "message": "单条 Evidence 仅支持 markdown 与 json 导出。",
+                },
+            )
+        try:
+            document = export_service.collect_evidence_export(run_id, evidence_id)
+            return _export_response(document, export_format, _export_download_stem(document))
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.get("/api/v1/chat/messages/{message_id}/export")
+    async def export_chat_answer(message_id: str, format: str = "markdown"):
+        export_format = format.lower().strip()
+        if export_format not in _EXPORT_FORMATS:
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "code": "invalid_request",
+                    "message": f"不支持的导出格式：{format}（可选 {', '.join(_EXPORT_FORMATS)}）。",
+                },
+            )
+        try:
+            document = export_service.collect_chat_answer_export(message_id)
+            return _export_response(document, export_format, _export_download_stem(document))
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.get("/api/v1/notes/{note_id}/export")
+    async def export_note(note_id: str, format: str = "markdown"):
+        export_format = format.lower().strip()
+        if export_format not in ("markdown", "json"):
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "code": "invalid_request",
+                    "message": "笔记仅支持 markdown 与 json 导出。",
+                },
+            )
+        try:
+            document = export_service.collect_note_export(note_id)
+            return _export_response(document, export_format, _export_download_stem(document))
         except Exception as exc:
             return error_response(exc)
 
