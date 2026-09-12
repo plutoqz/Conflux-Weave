@@ -31,5 +31,10 @@ Rules:
 The current design basis is
 [`design/current/Conflux-Weave设计文档v0.3.md`](design/current/Conflux-Weave设计文档v0.3.md).
 
+All v0.3 implementation plans frozen to date (S0/P0, S1, UX0-UX3.2, W1-W3.6,
+P2.0-P5) have completed their acceptance gates and are archived under
+[`plans/completed/v0.3/`](plans/completed/v0.3/); `plans/current/` holds no
+active plan right now. New work packages must freeze their plan there first.
+
 The v0.2 design generation, W0-W5 plans, acceptance records, and status snapshot
 are indexed from [`deprecated/v0.2/README.md`](deprecated/v0.2/README.md).

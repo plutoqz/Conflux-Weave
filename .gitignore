@@ -39,3 +39,6 @@ var/*
 tmp/
 .workbuddy/
 .zcode/
+
+# Stray runtime artifact store created at repo root by some live runs
+artifacts/

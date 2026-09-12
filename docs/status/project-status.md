@@ -1,6 +1,6 @@
 # Project status
 
-Updated: 2026-08-26
+Updated: 2026-09-12
 
 | Area | Status | Evidence boundary |
 |---|---|---|
@@ -9,7 +9,12 @@ Updated: 2026-08-26
 | Existing runtime | `legacy_v0.2_implemented` | SQLite, Artifact, Evidence, recovery, FastAPI and Workbench assets remain in source |
 | Existing live capability | `bounded_retrieval_evidence` | Historical qwen3.7flash arXiv/GitHub runs; not full RAG or multi-Agent proof |
 | v0.3 S0/P0 plan | `implemented_and_validated_offline` | S0.0-S0.5 are committed; current work continues on `codex/v0.3-s0-harness` and is pushed to `origin/main` at phase checkpoints |
-| v0.3 S1 | `implemented_partial_live_acceptance_failed` | S1.0-S1.5-B mechanisms exist; the frozen S1.5-C first live matrix was executed but rejected after manual support, coverage and abstention review |
+| v0.3 S1 | `implemented_and_validated_live` | S1.0-S1.6 全部落地；S1.5-C 首矩阵 reject 后经 S1.6-D/E/F 修复并在受影响面 live 验证，S1 Final Closure 于 2026-08-27 获人工签收（`validated_live` / `accepted`）；密封的 S1.6-C Run 保持 `blocked_unknown_outcome` 不改写，详见下文 |
+| v0.3 W1-W2a.2 报告写作链 | `implemented_and_validated` | W1 live 验收完成（c6667df、765a20e）；事实卡片、分层交付、中文文风与无降级确定性兜底 |
+| v0.3 W3 三模式回答 | `implemented_and_validated` | A 直接问答与 B 知识库问答已合入并经浏览器/回归验证；C 深度研究（证据桥 + 融合 Writer）已合入，验收边界见下文 W3 章节 |
+| v0.3 P2 多模态 RAG 与图片资产 | `implemented_and_validated_offline` | P2.0-P2.3 全链路与冻结基准（Recall@5=0.900, MRR=0.867）；2026-09-12 默认路径修订为图文混合（eb7a934，见文末） |
+| v0.3 P3 项目认知与代码治理工作台 | `implemented_and_validated` | 五大支柱与三栏演播室落地（555 passed 检查点，333b37c） |
+| DocumentAgent 权威笔记工坊 | `implemented_and_validated` | 多格式解析、NotePatch 乐观锁修订、Note Studio、UX-3.2 三栏（545 passed 检查点） |
 | v0.3 P4 统一对话路由与分层记忆中心 | `implemented_and_validated_offline` | P4.0-P4.4 全面落地并通过离线全量回归（577 passed）：SQLite Migration v7、HierarchicalMemoryStore、两阶段 ConversationRouter、MemoryAgent、Omnibox 智能补全与 HITL 记忆候选气泡、Settings Memory Studio |
 | v0.3 P5 Skill 与 MCP 增强及多 Agent 协同 | `implemented_and_validated_offline` | P5.1-P5.5 全面落地并通过离线全量回归（597 passed）：声明式 Skill 架构与执行引擎、MCP Client 外部工具接入网关、MCP Server 本地学术能力暴露（SSE & stdio）、异步 EventBus 与并发 DAG 调度引擎、双端工作台协同演播室 (Skill Studio & MCP Gateway Dashboard) |
 
@@ -517,7 +522,7 @@ P2.0 ~ P2.3 多模态 RAG 核心技术闭环已全链路打通并完成基准评
 
 ## P3 面向研究者的项目认知与代码治理工作台（2026-09-09）
 
-按照用户对“项目”分区的研究者定位（非 Web IDE，聚焦实验认知、Git 谱系、理论映射与契约治理）及细化实施方案（`docs/plans/current/v0.3-P3-面向研究者的项目认知与代码治理工作台-细化实施方案.md`），已全量落地五大支柱与前端三栏工作台演播室：
+按照用户对“项目”分区的研究者定位（非 Web IDE，聚焦实验认知、Git 谱系、理论映射与契约治理）及细化实施方案（`docs/plans/completed/v0.3/v0.3-P3-面向研究者的项目认知与代码治理工作台-细化实施方案.md`），已全量落地五大支柱与前端三栏工作台演播室：
 
 | 模块 | 当前状态 | 证据边界 |
 | --- | --- | --- |
@@ -532,7 +537,7 @@ P2.0 ~ P2.3 多模态 RAG 核心技术闭环已全链路打通并完成基准评
 
 ## P4 统一对话路由与分层记忆中心（2026-09-10）
 
-按照《Conflux-Weave 设计文档 v0.3》规范与用户指令，已完成 P4 细化实施方案编制（`docs/plans/current/v0.3-P4-统一对话路由与分层记忆中心-细化实施方案.md`），明确快慢双通道解耦与 Session / Project / User 三层记忆拓扑架构，确立 SQLite Migration v7、人在回路（HITL）物理核准与 L0/L1 紧凑上下文控额红线：
+按照《Conflux-Weave 设计文档 v0.3》规范与用户指令，已完成 P4 细化实施方案编制（`docs/plans/completed/v0.3/v0.3-P4-统一对话路由与分层记忆中心-细化实施方案.md`），明确快慢双通道解耦与 Session / Project / User 三层记忆拓扑架构，确立 SQLite Migration v7、人在回路（HITL）物理核准与 L0/L1 紧凑上下文控额红线：
 
 | 模块 | 当前状态 | 证据边界 |
 | --- | --- | --- |
@@ -546,7 +551,7 @@ P2.0 ~ P2.3 多模态 RAG 核心技术闭环已全链路打通并完成基准评
 
 ## P5 Skill 与 MCP 增强及多 Agent 协同（2026-09-11）
 
-按照《Conflux-Weave 设计文档 v0.3》第 13 节交付路线及细化实施方案（`docs/plans/current/v0.3-P5-Skill与MCP增强及多Agent协同-细化实施方案.md`），已落地声明式 Skill 架构、首批权威学术工作流与 SQLite Migration v8：
+按照《Conflux-Weave 设计文档 v0.3》第 13 节交付路线及细化实施方案（`docs/plans/completed/v0.3/v0.3-P5-Skill与MCP增强及多Agent协同-细化实施方案.md`），已落地声明式 Skill 架构、首批权威学术工作流与 SQLite Migration v8：
 
 | 模块 | 当前状态 | 证据边界 |
 | --- | --- | --- |
@@ -555,9 +560,27 @@ P2.0 ~ P2.3 多模态 RAG 核心技术闭环已全链路打通并完成基准评
 | P5.2 MCP Client 外部工具网关 | `implemented_and_validated_offline` | 实现基于 JSON-RPC 2.0 的 stdio 子进程传输客户端（`MCPClient`）、Harness `ToolSpec` 桥接适配器（`mcp_tool_to_harness_spec`）、`MCPServerManager` 持久化与动态工具发现，以及 `/api/v1/mcp/servers` 完整 REST 端点； |
 | P5.3 MCP Server 学术能力暴露 | `implemented_and_validated_offline` | 实现标准 MCP 2024-11-05 协议核心（`MCPServerCore`）、双向 SSE 会话管理器（`MCPSSEManager`）、stdio 独立执行入口（`python -m conflux_weave.mcp.server`），对外暴露论文检索、证据核查、架构全景与偏好约定 4 大学术工具，挂载 `/api/v1/mcp/sse`、`/api/v1/mcp/messages` 与 `/api/v1/mcp/rpc`； |
 | P5.4 多 Agent 异步事件与并发调度 | `implemented_and_validated_offline` | 落地 `AsyncAgentEventBus`（基于 SQLite `agent_events` 的持久化与 live 广播）与 `DAGTaskScheduler`（拓扑排序、环依赖与缺失依赖检测、就绪队列并发池、故障隔离与下游传播跳过、断点续跑与优雅取消信号），挂载 `/api/v1/dag/plans/*` 与 `/api/v1/runs/{id}/agent-events`； |
-| P5.5 双端工作台协同演播室 | `pending_implementation` | 计划落地技能工坊面板、MCP 配置中心与甘特泳道图。 |
+| P5.5 双端工作台协同演播室 | `implemented_and_validated_browser_and_regression` | 技能工坊面板（Skill 详情 / 输入 Schema / 提示词复制）、MCP Gateway 配置中心与 Multi-Agent DAG 甘特泳道图已合入 React 工作台（a791b4e）。 |
 
-截至本节更新，项目完整离线回归测试为 `596 passed, 2 warnings in 192.75s`。下一唯一验收点为 P5.5 双端工作台演播室与全链路验收。
+截至 P5.5 合入，项目完整离线回归测试为 `597 passed`。P5.0-P5.5 全部切片关闭，无遗留验收点。
+
+## 2026-09-12 工作台体验与检索默认路径更新（已合入）
+
+本节记录 2026-09-12 分批合入主分支的工作台体验增强与一次默认路径裁决修订，全部通过完整离线回归 `599 passed`。按内容拆分为七个提交：
+
+| 提交 | 内容 | 边界 |
+| --- | --- | --- |
+| `eb7a934` feat(multimodal) | `CONFLUX_WEAVE_MULTIMODAL_ENABLED` 默认值由 `false` 改为 `true`；`build_local_app` 在未配置图像模型时回落 `DeterministicImageEmbeddingAdapter`；两个冻结裁决测试同步新默认并补显式 env 覆盖用例；`.env.example` 记录开关 | 修订 P2.3 默认路径裁决（见下）；`CONFLUX_WEAVE_MULTIMODAL_ENABLED=false` 仍可强制纯文本路径 |
+| `04f8a7b` feat(research) | Manager 报告新增"执行摘要（3-5 条中文 Executive Summary）"与分节综合（`_synthesize_section` / `_synthesize_executive_bullets`）；子问题检索查询剥离 `Subquestion:` 前缀 | Provider 不可用时仍走确定性 claim-verbatim 兜底；未新开 live Run |
+| `837a101` feat(notes) | 新增 `POST /api/v1/notes/{id}/save-to-research`（Note Studio 一键转研究）；移除并清理报告"【本节研读与核心论点】"模板占位标签 | 离线实现 |
+| `8de091b` feat(projects) | `Project.root_paths` 多根扫描与安全文件解析；新增 `GET /api/v1/projects/{id}/tree`、`GET /api/v1/projects/{id}/file`、`POST /api/v1/projects/browse-folder`（本机文件夹选择器） | 含 `test_multi_folder_project_scanning` |
+| `76e67cb` feat(library) | 新增全库视觉资产画廊 `GET /api/v1/library/assets`；资料列表补充分段数/媒体类型/标题缓存；arXiv/OA 元数据抽取启发式加固（作者/机构噪声行过滤），limit 与自然语言查询有测试 | 离线实现 |
+| `78ad6eb` feat(chat) | `ChatMessageRecord` 暴露 `run_id`；会话详情在深度研究 Run 完成后自动将"已为您启动深度研究任务"占位消息回填为正式报告正文并持久化 | 离线实现 |
+| `dbe4440` feat(workbench) | Chat/报告 Markdown 渲染接入 KaTeX 数学公式与 PrismJS 代码高亮（字体打包进 dist，零外部 CDN）；资料库四标签页（documents/multimodal/assets/papers，modality 过滤 + lightbox）；项目文件树浏览器与文件夹选择；Skill 详情弹窗（输入 Schema、提示词复制）；笔记转研究入口 | 前端浏览器验证待下一轮 UX 回归脚本覆盖 |
+
+### P2.3 默认路径裁决修订记录
+
+P2.3 冻结基准（`p2-multimodal-retrieval-v1`，40 篇论文）当时的裁决为"默认纯文本"，依据是图像分支每次查询多一次 embedding 调用且收益依赖语料图像资产质量。2026-09-12 经用户确认将默认翻转为"图文混合（图像索引可用时）"，理由：图像索引与资产画廊链路已在真实语料上常态化可用，视觉证据对研读类任务价值显著，成本敏感场景可通过 `CONFLUX_WEAVE_MULTIMODAL_ENABLED=false` 一键回到纯文本路径。冻结基准数字（Recall@5=0.900, MRR=0.867）不受影响——裁决修订只改变默认入口，不改变已验证的检索质量证据。
 
 
 

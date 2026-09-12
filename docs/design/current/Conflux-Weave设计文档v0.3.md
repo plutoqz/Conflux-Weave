@@ -623,9 +623,9 @@ HTML/CSS/JavaScript，不改变 Runtime、API、Artifact/Evidence 或 Agent work
 
 ## 15. 当前状态与下一步
 
-v0.2 已归档至 `docs/design/deprecated/v0.2/`，作为历史设计和已有实现依据，不再作为完整产品路线。对应的 W0-W5 方案、冻结和验收记录保存在 `docs/plans/deprecated/v0.2/`。当前仓库可以复用其 SQLite、Artifact、Evidence、Recovery、FastAPI 和 Workbench 资产，但不能把 v0.2 中“首版不做多智能体、Memory、Skill、MCP 或完整 RAG”的旧非目标继续当作 v0.3 约束。
+本设计文档只描述目标架构与合同，不追踪逐阶段实现状态。v0.2 已归档至 `docs/design/deprecated/v0.2/`，作为历史设计和已有实现依据，不再作为完整产品路线；对应的 W0-W5 方案、冻结和验收记录保存在 `docs/plans/deprecated/v0.2/`，其中“首版不做多智能体、Memory、Skill、MCP 或完整 RAG”的旧非目标不构成 v0.3 约束。
 
-下一步应先冻结 P0 的合同与文件系统布局，再以论文获取 + 完整 RAG 作为第一条新产品垂直切片。P0 的实现不要求先迁移所有旧模块，也不要求一次性实现所有 Agent；但从第一天开始，新的 Agent、工具、上下文和产物都必须走统一 Harness。
+交付路线（第 13 节）中 P0-S0 至 P5 各阶段的实施方案、验收门与证据边界，以 [`docs/status/project-status.md`](../../status/project-status.md) 为权威来源；已关闭阶段的实施方案归档于 `docs/plans/completed/v0.3/`。后续新阶段（如 P6 持续优化）进入实现前，先在 `docs/plans/current/` 冻结计划并同步状态文档。
 
 ## 16. 参考与适用边界
 
