@@ -371,3 +371,61 @@ def test_library_batch_remove_calls_pipeline_and_marks_rows(tmp_path):
     assert result["status"] == "parsed"
     saved = json.loads(registry.read_text(encoding="utf-8"))
     assert saved[0]["removed_from_knowledge_base"] is True
+
+
+def test_search_library_papers_respects_limit_and_natural_language(tmp_path, monkeypatch):
+    store = LocalArtifactStore(tmp_path / "artifacts")
+    repository = SQLiteRuntimeRepository(tmp_path / "db" / "runtime.sqlite3", store)
+
+    sample_papers = tuple(
+        paper(paper_id=f"paper-{i}", doi=f"10.1000/example-{i}", openalex_id=f"W{i}", title=f"Quantum Error Correction in Superconducting Circuits {i}", summary=f"Research on fault tolerance and quantum codes {i}.")
+        for i in range(15)
+    )
+
+    class MockOpenAlex:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def search(self, query, *, max_results=20, **kwargs):
+            return SourceSearchResult("openalex", query, sample_papers[:max_results], False, "artifact-openalex")
+
+    class MockArxiv:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def search(self, query, *, max_results=20, **kwargs):
+            return SourceSearchResult("arxiv", query, (), False, "artifact-arxiv")
+
+    monkeypatch.setattr("conflux_weave.server.OpenAlexSearchAdapter", MockOpenAlex)
+    monkeypatch.setattr("conflux_weave.server.ArxivSearchAdapter", MockArxiv)
+    runtime = PassiveRuntime()
+    app = create_app(repository, runtime, worker=WorkerLoop(runtime, interval_seconds=10))
+
+    # Test limit=5
+    response = asyncio.run(route(app, "/api/v1/library/papers/search")(
+        "quantum error correction in superconducting circuits",
+        max_results=None,
+        sources="openalex,arxiv",
+        year_from=None,
+        year_to=None,
+        oa_only=False,
+        sort="relevance",
+        limit=5,
+    ))
+    assert response["returned_count"] == 5
+    assert len(response["items"]) == 5
+
+    # Test natural language Chinese query without chat service doesn't 503 and uses heuristic fallback
+    cjk_response = asyncio.run(route(app, "/api/v1/library/papers/search")(
+        "我想了解超导量子比特中的容错量子纠错码研究进展",
+        max_results=None,
+        sources="openalex,arxiv",
+        year_from=None,
+        year_to=None,
+        oa_only=False,
+        sort="relevance",
+        limit=10,
+    ))
+    assert cjk_response["status"] in {"success", "partial", "no_results"}
+    assert cjk_response["query_understanding"]["status"] == "heuristic_fallback"
+

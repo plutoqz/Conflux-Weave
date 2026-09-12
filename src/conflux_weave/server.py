@@ -190,6 +190,9 @@ from conflux_weave.runtime import (
 )
 
 
+_LIBRARY_TITLE_CACHE: dict[str, str] = {}
+
+
 class WorkerLoop:
     """Run exactly one injected Runtime worker loop for an ASGI lifespan."""
 
@@ -1448,6 +1451,9 @@ def create_app(
             segment_count = int(row.get("segment_count", 0) or 0)
             characters = int(row.get("character_count", 0) or 0)
             segments_ref = row.get("segments_artifact_id", "")
+            title = row.get("title")
+            stem = Path(relative).stem
+            is_numeric_id = bool(re.match(r"^(?:arXiv:)?(?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[a-z]{2})?/\d{7})(?:v\d+)?$", stem, re.IGNORECASE)) or stem.isdigit()
             if segments_ref.startswith("artifact-sha256-"):
                 try:
                     segment_path = repository.artifact_store.path_for_digest(segments_ref.removeprefix("artifact-sha256-"))
@@ -1455,13 +1461,32 @@ def create_app(
                     segments = segment_payload.get("segments", [])
                     segment_count = len(segments) or segment_count
                     characters = sum(len(str(segment.get("text", ""))) for segment in segments)
+                    if is_numeric_id:
+                        if segments_ref in _LIBRARY_TITLE_CACHE:
+                            title = _LIBRARY_TITLE_CACHE[segments_ref]
+                        elif segments:
+                            first_text = str(segments[0].get("text", "") or "")
+                            lines = [l.strip() for l in first_text.splitlines() if l.strip()]
+                            if lines:
+                                cand = lines[0].lstrip("#").strip().strip("*").strip()
+                                if len(lines) > 1 and len(cand) < 120:
+                                    next_l = lines[1].strip().lstrip("#").strip().strip("*").strip()
+                                    if next_l and not any(next_l.lower().startswith(x) for x in ["abstract", "author", "by ", "http", "doi", "dept", "university", "institute", "arxiv:"]) and (
+                                        cand.endswith(":") or cand.endswith("-") or cand.endswith("and") or next_l[0].islower() or next_l.lower().startswith(("with ", "for ", "and ", "in ", "a ", "on ", "using ", "of "))
+                                    ):
+                                        cand = f"{cand} {next_l}"
+                                if 0 < len(cand) <= 250:
+                                    title = cand
+                                    _LIBRARY_TITLE_CACHE[segments_ref] = cand
                 except (OSError, ValueError, json.JSONDecodeError):
                     pass
+            if not title:
+                title = stem or relative
             item_status = row.get("status", "unknown")
             if item_status == "imported" and not row.get("_manifest_indexed"):
                 item_status = "parsed"
             items.append({
-                "title": row.get("title") or Path(relative).stem or relative,
+                "title": title,
                 "relative_path": relative,
                 "path": row.get("path", ""),
                 "sha256": row.get("sha256", ""),
@@ -1476,6 +1501,7 @@ def create_app(
                 "media_type": "PDF" if row.get("document_id") and (relative.lower().endswith(".pdf") or row.get("paper_id")) else "论文元数据" if row.get("paper_id") else "Markdown",
                 "status": item_status,
                 "segment_count": segment_count,
+                "chunk_count": segment_count,
                 "character_count": characters,
                 "size_bytes": int(row.get("size_bytes", 0) or 0),
                 "source_type": row.get("source_type") or ("网络论文" if row.get("paper_id") or str(row.get("source", "")).startswith("arXiv:") or str(row.get("relative_path", "")).startswith("arXiv:") else "本地文档"),
@@ -1799,6 +1825,37 @@ def create_app(
                 if a.get("asset_id") == asset_id:
                     return a
         return None
+    @app.get("/api/v1/library/assets")
+    async def library_all_assets(
+        document_id: str | None = None,
+        asset_type: str | None = None,
+        limit: int = Query(60, ge=1, le=300),
+    ):
+        overview = await library_overview()
+        items = overview.get("items", [])
+        all_assets = []
+        for item in items:
+            doc_id = str(item.get("document_id") or item.get("paper_id") or item.get("record_id") or "")
+            if document_id and doc_id != document_id:
+                continue
+            doc_title = item.get("title") or doc_id
+            payload = await get_or_extract_document_assets(item)
+            if not payload:
+                continue
+            for a in payload.get("assets", []):
+                if asset_type and a.get("asset_type") != asset_type:
+                    continue
+                detail = _build_asset_detail_response(a).model_dump()
+                detail["document_title"] = doc_title
+                all_assets.append(detail)
+                if len(all_assets) >= limit:
+                    break
+            if len(all_assets) >= limit:
+                break
+        return {
+            "total": len(all_assets),
+            "items": all_assets,
+        }
 
     @app.get("/api/v1/library/documents/{document_id}/assets", response_model=DocumentAssetsResponse)
     async def library_document_assets(document_id: str):
@@ -2094,14 +2151,22 @@ def create_app(
     @app.post("/api/v1/library/papers/search")
     async def search_library_papers(
         query: str = Query(..., min_length=1, max_length=400),
-        max_results: int = Query(20, ge=1, le=50),
+        max_results: int | None = Query(None, ge=1, le=100),
         sources: str = Query("openalex,arxiv"),
         year_from: int | None = Query(None, ge=1900, le=2100),
         year_to: int | None = Query(None, ge=1900, le=2100),
         oa_only: bool = False,
         sort: Literal["relevance", "newest", "impact"] = "relevance",
+        limit: int | None = Query(None, ge=1, le=100),
     ) -> dict[str, Any]:
-        if year_from and year_to and year_from > year_to:
+        val_limit = limit if isinstance(limit, int) else None
+        val_max = max_results if isinstance(max_results, int) else None
+        target_results = val_limit or val_max or 20
+        target_results = max(1, min(target_results, 100))
+
+        val_year_from = year_from if isinstance(year_from, int) else None
+        val_year_to = year_to if isinstance(year_to, int) else None
+        if val_year_from and val_year_to and val_year_from > val_year_to:
             return JSONResponse(status_code=400, content={"code": "invalid_year_range", "message": "起始年份不能晚于结束年份。"})
 
         def contains_cjk(value: str) -> bool:
@@ -2113,61 +2178,97 @@ def create_app(
         required_concepts: tuple[tuple[str, ...], ...] = ()
         identifier_kind = "doi" if re.fullmatch(r"(?:https?://(?:dx\.)?doi\.org/|doi:\s*)?10\.\d{4,9}/\S+", query.strip(), re.IGNORECASE) else "arxiv" if re.fullmatch(r"(?:arxiv:\s*)?(?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[A-Z]{2})?/\d{7})(?:v\d+)?", query.strip(), re.IGNORECASE) else None
         understanding: dict[str, Any] = {"status": "identifier" if identifier_kind else "direct", "queries": queries, "identifier_kind": identifier_kind}
-        if contains_cjk(query) and identifier_kind is None:
-            if chat_service is None or not getattr(chat_service, "_chat", None):
-                return JSONResponse(status_code=503, content={"code": "paper_query_understanding_unavailable", "message": "中文论文主题需要模型服务进行查询理解，请先配置模型服务。"})
-            prompt = (
-                "将用户的中文论文主题转换为学术数据库检索意图。"
-                "只返回 JSON 对象，格式必须是 {\"openalex_query\":\"...\",\"queries\":[\"...\"],\"required_concepts\":[[\"...\",\"...\"],[\"...\",\"...\"]]}。"
-                "openalex_query 是一个精确的英文主题短语；queries 返回 1 到 3 个互补英文短语。"
-                "required_concepts 返回恰好 2 个核心概念组，每组给出 2 到 4 个可替代的英文词或短语；相关论文应从每组至少命中一个表达；"
-                "不要解释、不要中文、不要布尔语法；"
-                "保留领域含义，优先使用学术论文常见术语。用户主题：" + query
-            )
-            try:
-                completion = await asyncio.to_thread(
-                    chat_service._chat.complete,
-                    system_prompt="你是学术检索查询理解器，只输出符合要求的 JSON。",
-                    user_prompt=prompt,
-                    max_output_tokens=256,
-                    temperature=0,
-                    json_object=True,
-                    enable_thinking=False,
-                    producer_step_id="step-library-paper-query-understanding",
+
+        stopwords = {
+            "a", "an", "and", "for", "in", "of", "the", "to", "with", "based", "systems",
+            "i", "me", "my", "we", "our", "you", "your", "want", "would", "like", "find",
+            "looking", "look", "search", "searching", "about", "regarding", "discussing",
+            "paper", "papers", "article", "articles", "study", "studies", "literature",
+            "show", "give", "tell", "need", "can", "could", "please", "help", "how", "what",
+            "which", "where", "when", "why", "who", "is", "are", "was", "were", "be", "been",
+            "being", "have", "has", "had", "do", "does", "did", "recent", "latest", "new",
+            "novel", "current", "state", "art", "overview", "survey", "review", "on", "from",
+            "by", "at", "into", "through", "during", "before", "after", "above", "below",
+        }
+
+        # Natural language query understanding (Chinese or descriptive English sentences)
+        is_natural_language = identifier_kind is None and (
+            contains_cjk(query) or len(re.findall(r"[a-zA-Z0-9\u4e00-\u9fa5]+", query)) >= 4
+        ) and not re.search(r"(?:^|\s)(?:all|ti|au|abs|cat|id):", query, re.IGNORECASE)
+
+        if is_natural_language and identifier_kind is None:
+            has_llm = chat_service is not None and getattr(chat_service, "_chat", None) is not None
+            if has_llm:
+                prompt = (
+                    "将用户的学术研究意图或自然语言描述转换为学术数据库检索意图。"
+                    "只返回 JSON 对象，格式必须是 {\"openalex_query\":\"...\",\"queries\":[\"...\"],\"required_concepts\":[[\"...\",\"...\"],[\"...\",\"...\"]]}。"
+                    "openalex_query 是一个精炼准确的英文学术主题短语（去除所有闲聊引导词，如'我想找'、'find papers on'等）；"
+                    "queries 返回 1 到 3 个互补的英文关键词短语；"
+                    "required_concepts 返回恰好 2 个核心概念组，每组给出 2 到 4 个可替代的英文词或短语；相关论文应从每组至少命中一个表达；"
+                    "不要解释、不要非英文字符、不要布尔语法；"
+                    "保留领域含义，优先使用学术论文常见术语。用户主题：" + query
                 )
-                raw = json.loads(completion.content)
-                candidate_queries = raw.get("queries") if isinstance(raw, dict) else None
-                if not isinstance(candidate_queries, list):
-                    raise ValueError("Provider 未返回 queries 数组")
-                queries = [str(item).strip() for item in candidate_queries if isinstance(item, str) and item.strip()]
-                queries = list(dict.fromkeys(queries))[:3]
-                if not queries:
-                    raise ValueError("Provider 返回了空查询")
-                proposed_openalex = raw.get("openalex_query") if isinstance(raw, dict) else None
-                openalex_query = str(proposed_openalex).strip() if isinstance(proposed_openalex, str) and proposed_openalex.strip() else queries[0]
-                proposed_concepts = raw.get("required_concepts") if isinstance(raw, dict) else None
-                concept_groups = []
-                if isinstance(proposed_concepts, list):
-                    for group in proposed_concepts[:2]:
-                        if not isinstance(group, list):
-                            continue
-                        alternatives = tuple(dict.fromkeys(str(item).strip().lower() for item in group if isinstance(item, str) and re.fullmatch(r"[a-zA-Z][a-zA-Z0-9 -]{1,40}", item.strip())))[:4]
-                        if alternatives:
-                            concept_groups.append(alternatives)
-                required_concepts = tuple(concept_groups)
-                if len(required_concepts) < 2:
-                    fallback_terms = [term.lower() for term in re.findall(r"[a-zA-Z][a-zA-Z0-9-]{1,}", queries[0]) if term.lower() not in {"a", "an", "and", "for", "in", "of", "the", "to", "with", "based", "systems", "intelligent", "intelligence"}]
-                    required_terms = tuple(dict.fromkeys(fallback_terms))[:2]
-                understanding = {"status": "provider_translated", "queries": queries, "openalex_query": openalex_query, "required_concepts": [list(group) for group in required_concepts], "required_terms": list(required_terms), "identifier_kind": None}
-            except Exception as exc:
-                return JSONResponse(status_code=502, content={"code": "paper_query_understanding_failed", "message": f"中文主题查询理解失败：{exc}"})
+                try:
+                    completion = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            chat_service._chat.complete,
+                            system_prompt="你是学术检索查询理解器，只输出符合要求的 JSON。",
+                            user_prompt=prompt,
+                            max_output_tokens=256,
+                            temperature=0,
+                            json_object=True,
+                            enable_thinking=False,
+                            producer_step_id="step-library-paper-query-understanding",
+                        ),
+                        timeout=5.0,
+                    )
+                    raw = json.loads(completion.content)
+                    candidate_queries = raw.get("queries") if isinstance(raw, dict) else None
+                    if isinstance(candidate_queries, list):
+                        parsed_queries = [str(item).strip() for item in candidate_queries if isinstance(item, str) and item.strip()]
+                        parsed_queries = list(dict.fromkeys(parsed_queries))[:3]
+                        if parsed_queries:
+                            queries = parsed_queries
+                    proposed_openalex = raw.get("openalex_query") if isinstance(raw, dict) else None
+                    if isinstance(proposed_openalex, str) and proposed_openalex.strip():
+                        openalex_query = proposed_openalex.strip()
+                    elif queries:
+                        openalex_query = queries[0]
+                    proposed_concepts = raw.get("required_concepts") if isinstance(raw, dict) else None
+                    concept_groups = []
+                    if isinstance(proposed_concepts, list):
+                        for group in proposed_concepts[:2]:
+                            if not isinstance(group, list):
+                                continue
+                            alternatives = tuple(dict.fromkeys(str(item).strip().lower() for item in group if isinstance(item, str) and re.fullmatch(r"[a-zA-Z][a-zA-Z0-9 -]{1,40}", item.strip())))[:4]
+                            if alternatives:
+                                concept_groups.append(alternatives)
+                    required_concepts = tuple(concept_groups)
+                    if len(required_concepts) < 2:
+                        fallback_terms = [term.lower() for term in re.findall(r"[a-zA-Z][a-zA-Z0-9-]{1,}", queries[0]) if term.lower() not in stopwords]
+                        required_terms = tuple(dict.fromkeys(fallback_terms))[:2]
+                    understanding = {"status": "provider_translated", "queries": queries, "openalex_query": openalex_query, "required_concepts": [list(group) for group in required_concepts], "required_terms": list(required_terms), "identifier_kind": None}
+                except Exception:
+                    has_llm = False
+
+            if not has_llm:
+                raw_terms = [term.lower() for term in re.findall(r"[a-zA-Z][a-zA-Z0-9-]{1,}", query) if term.lower() not in stopwords]
+                if raw_terms:
+                    openalex_query = " ".join(raw_terms[:6])
+                    queries = [" ".join(raw_terms[:4])]
+                    if len(raw_terms) >= 2:
+                        required_terms = tuple(dict.fromkeys(raw_terms[:2]))
+                else:
+                    cleaned_cjk = re.sub(r"(我想找|请帮我找|寻找|检索|关于|相关的|最新|综述|论文|研究|探讨|基于|在|中的|应用)", " ", query).strip()
+                    openalex_query = cleaned_cjk or query
+                    queries = [cleaned_cjk or query]
+                understanding = {"status": "heuristic_fallback", "queries": queries, "openalex_query": openalex_query, "required_terms": list(required_terms), "identifier_kind": None}
 
         requested_sources = tuple(dict.fromkeys(item.strip().lower() for item in sources.split(",") if item.strip()))
         invalid_sources = set(requested_sources) - {"openalex", "arxiv"}
         if invalid_sources or not requested_sources:
             return JSONResponse(status_code=400, content={"code": "invalid_paper_sources", "message": "论文来源只支持 openalex 和 arxiv。"})
 
-        stopwords = {"a", "an", "and", "for", "in", "of", "the", "to", "with", "based", "systems"}
         retrieval_queries = []
         if identifier_kind == "arxiv":
             retrieval_queries = ["id:" + re.sub(r"^arxiv:\s*", "", query.strip(), flags=re.IGNORECASE)]
@@ -2176,12 +2277,19 @@ def create_app(
         else:
             for phrase in queries:
                 terms = [term.lower() for term in re.findall(r"[a-zA-Z][a-zA-Z0-9-]{1,}", phrase) if term.lower() not in stopwords]
-                retrieval_queries.append(" AND ".join(f"all:{term}" for term in dict.fromkeys(terms)) if len(terms) >= 2 else phrase)
+                if len(terms) >= 4:
+                    retrieval_queries.append(" AND ".join(f"all:{term}" for term in dict.fromkeys(terms[:3])))
+                elif len(terms) >= 2:
+                    retrieval_queries.append(" AND ".join(f"all:{term}" for term in dict.fromkeys(terms)))
+                elif terms:
+                    retrieval_queries.append(f"all:{terms[0]}")
+                elif not contains_cjk(phrase):
+                    retrieval_queries.append(phrase)
         retrieval_queries = list(dict.fromkeys(retrieval_queries))
         source_states = []
         records = []
         contact_email = third_party_setting("CONFLUX_WEAVE_CONTACT_EMAIL")
-        source_max_results = min(max_results, 25)
+        source_max_results = min(max(target_results, 20), 100)
 
         if "openalex" in requested_sources:
             try:
@@ -2192,39 +2300,39 @@ def create_app(
                 source_states.append({"source": "openalex", "status": "failed", "query": openalex_query, "count": 0, "code": getattr(exc, "code", "openalex_search_failed"), "message": str(exc), "retryable": bool(getattr(exc, "retryable", True)), "recovery_action": "仅重试 OpenAlex 来源。"})
 
         if "arxiv" in requested_sources:
-            adapter = ArxivSearchAdapter(repository.artifact_store)
-            arxiv_count = 0
-            arxiv_cache_hits = 0
-            arxiv_error = None
-            arxiv_failures = []
-            for search_query in retrieval_queries:
-                try:
-                    result = await asyncio.to_thread(adapter.search, search_query, max_results=source_max_results)
-                    arxiv_cache_hits += int(result.cache_hit)
-                    converted = [arxiv_record(paper, rank) for rank, paper in enumerate(result.papers)]
-                    converted = [paper for paper in converted if (not year_from or (paper.year or 0) >= year_from) and (not year_to or (paper.year or 9999) <= year_to) and (not oa_only or paper.is_oa)]
-                    records.extend(converted)
-                    arxiv_count += len(converted)
-                except Exception as exc:
-                    arxiv_error = exc
-                    arxiv_failures.append({"query": search_query, "code": getattr(exc, "code", "arxiv_search_failed"), "message": str(exc), "retryable": bool(getattr(exc, "retryable", True))})
-            if arxiv_count:
-                source_states.append({"source": "arxiv", "status": "partial" if arxiv_error else "success", "query": " OR ".join(retrieval_queries), "count": arxiv_count, "cache_hit": arxiv_cache_hits == len(retrieval_queries), **({"message": str(arxiv_error), "failures": arxiv_failures, "recovery_action": "仅重试 arXiv 来源。"} if arxiv_error else {})})
-            elif arxiv_error:
-                source_states.append({"source": "arxiv", "status": "failed", "query": " OR ".join(retrieval_queries), "count": 0, "code": getattr(arxiv_error, "code", "arxiv_search_failed"), "message": str(arxiv_error), "failures": arxiv_failures, "recovery_action": "仅重试 arXiv 来源。"})
+            if not retrieval_queries and contains_cjk(query):
+                source_states.append({"source": "arxiv", "status": "no_results", "query": query, "count": 0, "message": "arXiv 不支持纯中文字符检索，已使用 OpenAlex 检索。"})
             else:
-                source_states.append({"source": "arxiv", "status": "no_results", "query": " OR ".join(retrieval_queries), "count": 0, "cache_hit": arxiv_cache_hits == len(retrieval_queries)})
+                adapter = ArxivSearchAdapter(repository.artifact_store)
+                arxiv_count = 0
+                arxiv_cache_hits = 0
+                arxiv_error = None
+                arxiv_failures = []
+                for search_query in retrieval_queries:
+                    try:
+                        result = await asyncio.to_thread(adapter.search, search_query, max_results=source_max_results)
+                        arxiv_cache_hits += int(result.cache_hit)
+                        converted = [arxiv_record(paper, rank) for rank, paper in enumerate(result.papers)]
+                        converted = [paper for paper in converted if (not year_from or (paper.year or 0) >= year_from) and (not year_to or (paper.year or 9999) <= year_to) and (not oa_only or paper.is_oa)]
+                        records.extend(converted)
+                        arxiv_count += len(converted)
+                    except Exception as exc:
+                        arxiv_error = exc
+                        arxiv_failures.append({"query": search_query, "code": getattr(exc, "code", "arxiv_search_failed"), "message": str(exc), "retryable": bool(getattr(exc, "retryable", True))})
+                if arxiv_count:
+                    source_states.append({"source": "arxiv", "status": "partial" if arxiv_error else "success", "query": " OR ".join(retrieval_queries), "count": arxiv_count, "cache_hit": arxiv_cache_hits == len(retrieval_queries), **({"message": str(arxiv_error), "failures": arxiv_failures, "recovery_action": "仅重试 arXiv 来源。"} if arxiv_error else {})})
+                elif arxiv_error:
+                    source_states.append({"source": "arxiv", "status": "failed", "query": " OR ".join(retrieval_queries), "count": 0, "code": getattr(arxiv_error, "code", "arxiv_search_failed"), "message": str(arxiv_error), "failures": arxiv_failures, "recovery_action": "仅重试 arXiv 来源。"})
+                else:
+                    source_states.append({"source": "arxiv", "status": "no_results", "query": " OR ".join(retrieval_queries), "count": 0, "cache_hit": arxiv_cache_hits == len(retrieval_queries)})
 
         if all(item["status"] == "failed" for item in source_states):
             return JSONResponse(status_code=502, content={"code": "all_paper_sources_failed", "message": "所有论文来源均请求失败。", "sources": source_states})
         query_terms = () if identifier_kind else tuple(term for term in re.findall(r"[a-zA-Z][a-zA-Z0-9-]{1,}", " ".join(queries).lower()) if term not in stopwords)
-        if not identifier_kind and not required_terms and len(query_terms) >= 2:
-            # Direct English topics need a small precision guard too; without it
-            # arXiv can satisfy a broad geographic token while dropping the
-            # method/agent concept that defines the user's query.
+        if not identifier_kind and not required_terms and not required_concepts and len(query_terms) >= 2:
             required_terms = tuple(dict.fromkeys(query_terms[:2]))
         merged = merge_and_rank(records, query_terms=query_terms, max_results=max(1, len(records)), sort=sort, required_terms=required_terms, required_concepts=required_concepts)
-        papers = merged[:max_results]
+        papers = merged[:target_results]
         overall = "partial" if any(item["status"] in {"failed", "partial"} for item in source_states) else "success"
         items = []
         for paper in papers:
