@@ -298,10 +298,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ document_id: docId, ...options }),
     }),
-  patchDocumentNote: (noteId: string, patchPrompt: string, targetVersion = 1) =>
+  // A5 修复：后端 NotePatchRequest 契约字段是 instruction（此前发 patch_prompt
+  // 会被 extra="forbid" 契约 422 拒绝，UI 修订从未成功过）。
+  patchDocumentNote: (noteId: string, instruction: string, targetVersion = 1) =>
     request<DocumentNote>(`/api/v1/notes/${encodeURIComponent(noteId)}/patch`, {
       method: "POST",
-      body: JSON.stringify({ patch_prompt: patchPrompt, target_version: targetVersion }),
+      body: JSON.stringify({ instruction, target_version: targetVersion }),
     }),
   saveNoteToResearch: (noteId: string) =>
     request<{ task_id: string; run_id: string; status: string; report_artifact_id: string; title: string; message: string }>(
