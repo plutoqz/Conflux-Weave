@@ -13,12 +13,20 @@ export const SettingsView: React.FC = () => {
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState("");
+  const [embeddingModel, setEmbeddingModel] = useState("");
+  const [rerankerModel, setRerankerModel] = useState("");
+  const [engineModel, setEngineModel] = useState("");
+  const [effective, setEffective] = useState<any>(null);
   const [memories, setMemories] = useState<any[]>([]);
   const [recallQuery, setRecallQuery] = useState("");
   const [recallResult, setRecallResult] = useState<any[] | null>(null);
   const [recallBusy, setRecallBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
+  const [statusOk, setStatusOk] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testMsg, setTestMsg] = useState<string | null>(null);
+  const [testOk, setTestOk] = useState(false);
 
   // MCP Gateway State
   const [mcpServers, setMcpServers] = useState<MCPServer[]>([]);
@@ -37,14 +45,23 @@ export const SettingsView: React.FC = () => {
   const [newServerUrl, setNewServerUrl] = useState("");
   const [newServerError, setNewServerError] = useState<string | null>(null);
 
-  useEffect(() => {
-    api.getConfig().then((cfg) => {
+  const loadConfig = () => {
+    return api.getConfig().then((cfg) => {
       if (cfg?.provider) {
         setProvider(cfg.provider.name || "openai");
         setBaseUrl(cfg.provider.base_url || "");
         setModel(cfg.provider.model || "");
+        setEmbeddingModel(cfg.provider.embedding_model || "");
+        setRerankerModel(cfg.provider.reranker_model || "");
+        setEngineModel(cfg.provider.engine_model || "");
       }
+      // A5：当前进程生效值（启动时装配）；保存后、重启前与持久值不同。
+      setEffective(cfg?.provider_effective ?? null);
     }).catch(() => {});
+  };
+
+  useEffect(() => {
+    loadConfig();
 
     api.getMemories().then((res) => setMemories(res.items || [])).catch(() => {});
     fetchMcpServers();
@@ -126,17 +143,59 @@ export const SettingsView: React.FC = () => {
     setSaving(true);
     setStatusMsg(null);
     try {
-      await api.updateProviderConfig({
-        provider,
-        base_url: baseUrl.trim() || undefined,
+      const res = await api.updateProviderConfig({
+        base_url: baseUrl.trim(),
         api_key: apiKey.trim() || undefined,
-        model: model.trim() || undefined,
+        model: model.trim(),
+        embedding_model: embeddingModel.trim() || undefined,
+        reranker_model: rerankerModel.trim() || undefined,
+        engine_model: engineModel.trim() || undefined,
       });
-      setStatusMsg("Provider 配置已成功保存！");
+      // A5 反馈三要素之二：生效方式。保存写入持久层（dotenv），进程内适配器
+      // 仍是启动时装配的旧值，requires_restart=true 时需重启服务才生效。
+      setStatusOk(true);
+      setStatusMsg(
+        res.requires_restart
+          ? `${res.message || "配置已保存。"}当前进程仍使用启动时的配置，重启服务后生效。`
+          : `${res.message || "配置已保存。"}立即生效。`
+      );
+      await loadConfig();
     } catch (e: any) {
+      setStatusOk(false);
       setStatusMsg(`保存失败: ${e.message}`);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleTestProvider = async () => {
+    if (testing) return;
+    setTesting(true);
+    setTestMsg(null);
+    try {
+      const res = await api.testProviderConfig({
+        base_url: baseUrl.trim() || undefined,
+        api_key: apiKey.trim() || undefined,
+        model: model.trim() || undefined,
+        embedding_model: embeddingModel.trim() || undefined,
+      });
+      setTestOk(res.ok);
+      const parts = [
+        `${res.ok ? "✓ Chat 连通" : "✗ Chat 失败"}${res.latency_ms != null ? ` (${res.latency_ms}ms)` : ""} — ${res.message}`,
+      ];
+      if (res.embedding?.attempted) {
+        parts.push(
+          res.embedding.ok
+            ? `✓ Embedding 连通 (${res.embedding.latency_ms}ms, ${res.embedding.dimensions} 维${res.embedding.input_tokens != null ? `, ${res.embedding.input_tokens} tokens` : ""})`
+            : `✗ Embedding 失败 — ${res.embedding.message}`
+        );
+      }
+      setTestMsg(parts.join("；"));
+    } catch (e: any) {
+      setTestOk(false);
+      setTestMsg(`测试失败: ${e.message}`);
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -191,6 +250,33 @@ export const SettingsView: React.FC = () => {
               </div>
             </div>
 
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <label className="font-medium text-foreground">Embedding 模型 (记忆语义召回 / 检索向量)</label>
+                <Input
+                  value={embeddingModel}
+                  onChange={(e) => setEmbeddingModel(e.target.value)}
+                  placeholder="例如：embedding-3（留空则记忆召回退回 recency 兜底）"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="font-medium text-foreground">Reranker 模型 (检索重排，可选)</label>
+                <Input
+                  value={rerankerModel}
+                  onChange={(e) => setRerankerModel(e.target.value)}
+                  placeholder="例如：qwen3-rerank"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="font-medium text-foreground">深度研究引擎模型 (Engine，可选)</label>
+                <Input
+                  value={engineModel}
+                  onChange={(e) => setEngineModel(e.target.value)}
+                  placeholder="留空回退到 Chat 模型"
+                />
+              </div>
+            </div>
+
             <div className="space-y-1.5">
               <label className="font-medium text-foreground">API Base URL (留空使用默认地址)</label>
               <Input
@@ -208,17 +294,53 @@ export const SettingsView: React.FC = () => {
                 type="password"
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
-                placeholder="••••••••••••••••••••••••"
+                placeholder={effective?.api_key_configured ? "已配置（输入可覆盖）" : "••••••••••••••••••••••••"}
               />
             </div>
 
             {statusMsg && (
-              <div className="p-2.5 rounded-md bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 font-medium">
+              <div
+                className={`p-2.5 rounded-md border font-medium ${
+                  statusOk
+                    ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400"
+                    : "bg-rose-500/10 border-rose-500/30 text-rose-600 dark:text-rose-400"
+                }`}
+              >
                 {statusMsg}
               </div>
             )}
 
-            <div className="flex justify-end pt-2">
+            {testMsg && (
+              <div
+                className={`p-2.5 rounded-md border font-medium whitespace-pre-wrap ${
+                  testOk
+                    ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400"
+                    : "bg-amber-500/10 border-amber-500/30 text-amber-600 dark:text-amber-400"
+                }`}
+              >
+                {testMsg}
+              </div>
+            )}
+
+            {/* A5 反馈三要素之三：当前进程生效值（与上方持久值对比，判断是否需要重启）。 */}
+            <div className="p-2.5 rounded-md border border-border/60 bg-muted/20 text-[11px] font-mono space-y-0.5">
+              <p className="font-sans font-semibold text-foreground">当前进程生效值（启动时装配）</p>
+              {effective ? (
+                <>
+                  <p className="text-muted-foreground">model: {effective.model || "—"}{effective.api_key_configured ? " · key ✓" : " · key ✗"}</p>
+                  <p className="text-muted-foreground">embedding: {effective.embedding_model || "—（recency 兜底）"}</p>
+                  <p className="text-muted-foreground">reranker: {effective.reranker_model || "—"} · engine: {effective.engine_model || "—"}</p>
+                  <p className="text-muted-foreground">base_url: {effective.base_url || "—"}</p>
+                </>
+              ) : (
+                <p className="text-muted-foreground">进程生效配置不可用（Provider 未装配）。</p>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button type="button" variant="outline" size="sm" disabled={testing || saving} onClick={handleTestProvider}>
+                {testing ? "测试中…" : "测试连通性"}
+              </Button>
               <Button type="submit" size="sm" disabled={saving}>
                 {saving ? "正在保存..." : "保存配置"}
               </Button>

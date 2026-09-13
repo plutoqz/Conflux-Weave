@@ -28,14 +28,20 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     let errorMsg = `HTTP ${res.status} ${res.statusText}`;
+    let payload: any = null;
     try {
       const errJson = await res.json();
+      payload = errJson;
       if (errJson.message) errorMsg = errJson.message;
       else if (errJson.detail) errorMsg = typeof errJson.detail === "string" ? errJson.detail : JSON.stringify(errJson.detail);
     } catch {
       // ignore
     }
-    throw new Error(errorMsg);
+    // A5：携带状态码与原始错误体，调用方可识别 409 冲突等结构化响应。
+    const err = new Error(errorMsg) as Error & { status?: number; payload?: any };
+    err.status = res.status;
+    err.payload = payload;
+    throw err;
   }
   return res.json();
 }
@@ -72,8 +78,34 @@ export const api = {
   // Health & Config
   getHealthReady: () => request<HealthReady>("/api/v1/health/ready"),
   getConfig: () => request<any>("/api/v1/config"),
-  updateProviderConfig: (data: { provider: string; base_url?: string; api_key?: string; model?: string }) =>
-    request<any>("/api/v1/config/provider", { method: "POST", body: JSON.stringify(data) }),
+  // A5：后端合同为 PUT /api/v1/config/provider（字段与 ProviderConfigUpdateRequest 对齐，
+  // extra="forbid"，不得携带多余字段）。
+  updateProviderConfig: (data: {
+    base_url: string;
+    api_key?: string;
+    model: string;
+    embedding_model?: string;
+    reranker_model?: string;
+    engine_model?: string;
+  }) =>
+    request<{ requires_restart: boolean; message: string; provider: any }>("/api/v1/config/provider", {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+  testProviderConfig: (data: { base_url?: string; api_key?: string; model?: string; embedding_model?: string }) =>
+    request<{
+      ok: boolean;
+      message: string;
+      latency_ms?: number | null;
+      embedding?: {
+        attempted: boolean;
+        ok?: boolean | null;
+        message: string;
+        latency_ms?: number | null;
+        dimensions?: number | null;
+        input_tokens?: number | null;
+      } | null;
+    }>("/api/v1/config/provider/test", { method: "POST", body: JSON.stringify(data) }),
 
   // Runs / Research
   getRuns: (limit = 50, lifecycle = "active") =>

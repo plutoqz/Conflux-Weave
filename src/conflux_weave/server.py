@@ -122,6 +122,7 @@ from conflux_weave.api_contracts import (
     ProviderConfigTestResponse,
     ProviderConfigUpdateRequest,
     ProviderConfigUpdateResponse,
+    ProviderEmbeddingProbe,
     ResearchTaskAcceptedResponse,
     ResearchTaskRequest,
     RunDetailResponse,
@@ -347,6 +348,7 @@ def create_app(
     chat_service: ChatService | None = None,
     retrieval_pipeline: Any | None = None,
     enable_worker: bool = True,
+    provider_effective: Any | None = None,
 ) -> FastAPI:
     """Build the one ASGI application around injected authoritative components."""
 
@@ -2874,6 +2876,22 @@ def create_app(
             api_key_hint=view.api_key_hint,
         )
 
+    def _effective_provider_view() -> ProviderConfigResponse | None:
+        """A5：当前进程实际生效的 Provider 配置（来自启动时装配的适配器）。"""
+        if provider_effective is None:
+            return None
+        return ProviderConfigResponse(
+            base_url=getattr(provider_effective, "base_url", ""),
+            model=getattr(provider_effective, "model", ""),
+            embedding_model=getattr(provider_effective, "embedding_model", "") or "",
+            reranker_model=getattr(provider_effective, "reranker_model", "") or "",
+            engine_model=getattr(provider_effective, "engine_model", "") or "",
+            image_embedding_model=getattr(provider_effective, "image_embedding_model", "") or "",
+            contact_email="",
+            api_key_configured=bool(getattr(provider_effective, "api_key", "")),
+            api_key_hint=None,
+        )
+
     @app.get("/api/v1/config", response_model=WorkbenchConfigResponse)
     async def get_config():
         try:
@@ -2881,6 +2899,7 @@ def create_app(
                 provider=_provider_view(),
                 provider_active=provider_configured,
                 paths=config_paths or {},
+                provider_effective=_effective_provider_view(),
             )
         except Exception as exc:
             return error_response(exc)
@@ -2931,6 +2950,10 @@ def create_app(
         base_url = request.base_url or stored.get("CONFLUX_WEAVE_PROVIDER_BASE_URL", "")
         api_key = request.api_key or stored.get("CONFLUX_WEAVE_PROVIDER_API_KEY", "")
         model = request.model or stored.get("CONFLUX_WEAVE_PROVIDER_MODEL", "")
+        embedding_model = (
+            request.embedding_model
+            or stored.get("CONFLUX_WEAVE_PROVIDER_EMBEDDING_MODEL", "")
+        ).strip()
         missing = [
             name for name, value in (
                 ("服务地址", base_url), ("API Key", api_key), ("Chat 模型", model),
@@ -2941,6 +2964,47 @@ def create_app(
                 ok=False,
                 message="请先完整填写：" + "、".join(missing) + "。",
             )
+        embedding_probe: ProviderEmbeddingProbe | None = None
+        if embedding_model:
+            # B1：配置了 embedding 模型时同步探测 /embeddings 连通性；
+            # 探测失败不影响 chat 探测结论，只如实报告给设置页。
+            embedding_probe = ProviderEmbeddingProbe(attempted=True, ok=None, message="")
+            try:
+                from conflux_weave.provider import (
+                    OpenAICompatibleEmbeddingAdapter,
+                    ProviderConfig,
+                )
+
+                embedding_adapter = OpenAICompatibleEmbeddingAdapter(
+                    repository.artifact_store,
+                    ProviderConfig(
+                        base_url=base_url.strip().rstrip("/"),
+                        api_key=api_key.strip(),
+                        model=model.strip(),
+                        embedding_model=embedding_model,
+                    ),
+                    timeout_seconds=20.0,
+                )
+                started = time.monotonic()
+                result = await asyncio.to_thread(
+                    embedding_adapter.embed,
+                    ["Conflux-Weave 连通性探测"],
+                    producer_step_id="step-provider-config-embedding-test",
+                )
+                embedding_probe = ProviderEmbeddingProbe(
+                    attempted=True,
+                    ok=True,
+                    message=f"Embedding 服务可连通（模型 {result.model}）。",
+                    latency_ms=int((time.monotonic() - started) * 1000),
+                    dimensions=len(result.vectors[0]) if result.vectors else None,
+                    input_tokens=result.input_tokens,
+                )
+            except Exception as exc:
+                embedding_probe = ProviderEmbeddingProbe(
+                    attempted=True,
+                    ok=False,
+                    message=str(exc) or "Embedding 连接失败。",
+                )
         try:
             from conflux_weave.provider import OpenAICompatibleChatAdapter, ProviderConfig
 
@@ -2969,9 +3033,10 @@ def create_app(
                 ok=True,
                 message="模型服务可连通。",
                 latency_ms=latency_ms,
+                embedding=embedding_probe,
             )
         except Exception as exc:
-            return ProviderConfigTestResponse(ok=False, message=str(exc) or "连接失败。")
+            return ProviderConfigTestResponse(ok=False, message=str(exc) or "连接失败。", embedding=embedding_probe)
 
     def _get_notes_registry_path() -> Path | None:
         db_path = getattr(repository, "database_path", None)
@@ -3245,6 +3310,8 @@ def create_app(
                     content={
                         "code": "version_conflict",
                         "message": f"目标版本 {request.target_version} 与当前笔记版本 {note_obj.version} 不一致。",
+                        # A5：附最新版本号，前端可据此刷新基线并自动重应用一次。
+                        "latest_version": note_obj.version,
                     },
                 )
 
@@ -3853,6 +3920,7 @@ class LocalRuntimeStack:
         chat_service: ChatService | None,
         retrieval_pipeline: Any | None,
         provider_configured: bool,
+        provider_effective: Any | None = None,
     ) -> None:
         self.orchestrator = orchestrator
         self.repository = repository
@@ -3860,6 +3928,8 @@ class LocalRuntimeStack:
         self.chat_service = chat_service
         self.retrieval_pipeline = retrieval_pipeline
         self.provider_configured = provider_configured
+        # A5：启动时装配的 Provider 配置快照（进程生效值），供 /api/v1/config 展示。
+        self.provider_effective = provider_effective
 
 
 def build_research_runtimes(
@@ -3882,6 +3952,7 @@ def build_research_runtimes(
     )
     retrieval_pipeline = None
     fixture_runtime = ResearchFixtureRuntime(repository, store, workspace)
+    provider_effective = None
     try:
         config = ProviderConfig.from_environment(dotenv_path)
     except Exception:
@@ -4023,6 +4094,7 @@ def build_research_runtimes(
             retrieval=retrieval_pipeline,
             artifact_store=store,
         )
+        provider_effective = config
     orchestrator = CompositeOrchestrator(
         repository,
         (fixture_runtime, paper_runtime, research_runtime),
@@ -4034,6 +4106,7 @@ def build_research_runtimes(
         chat_service=chat_service,
         retrieval_pipeline=retrieval_pipeline,
         provider_configured=provider_configured,
+        provider_effective=provider_effective,
     )
 
 
@@ -4072,6 +4145,7 @@ def build_local_app(
         chat_service=stack.chat_service,
         retrieval_pipeline=stack.retrieval_pipeline,
         enable_worker=enable_worker,
+        provider_effective=stack.provider_effective,
     )
 
 

@@ -285,13 +285,14 @@ async def test_document_notes_api_endpoints(tmp_path: Path) -> None:
         assert patched_data["parent_note_id"] == note_id
         assert len(patched_data["sections"]) == len(data["sections"]) + 1
 
-        # 5. Version conflict rejection on API
+        # 5. Version conflict rejection on API（A5：响应携带最新版本号供前端刷新基线）
         conflict_res = await client.post(
             f"/api/v1/notes/{note_id}/patch",
             json={"instruction": "并发覆盖冲突测试", "target_version": 99},
         )
         assert conflict_res.status_code == 409
         assert conflict_res.json()["code"] == "version_conflict"
+        assert conflict_res.json()["latest_version"] == 1
 
         # 6. GET /api/v1/notes/{new_note_id}/revisions
         rev_res = await client.get(f"/api/v1/notes/{new_note_id}/revisions")

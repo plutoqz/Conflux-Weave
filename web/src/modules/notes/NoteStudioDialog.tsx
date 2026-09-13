@@ -30,6 +30,7 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
   const [patching, setPatching] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [conflictMsg, setConflictMsg] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [revisions, setRevisions] = useState<any[]>([]);
   const [savingToResearch, setSavingToResearch] = useState(false);
@@ -52,12 +53,14 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
     if (!open || !documentId) {
       setNote(null);
       setError(null);
+      setConflictMsg(null);
       setRevisions([]);
       setSavedResearchRunId(null);
       return;
     }
     setLoading(true);
     setError(null);
+    setConflictMsg(null);
     setSavedResearchRunId(null);
 
     // Call analyzeDocument (which gets existing or builds new)
@@ -98,15 +101,43 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
     if (!patchPrompt.trim() || !note) return;
 
     setPatching(true);
-    try {
-      const updated = await api.patchDocumentNote(note.note_id, patchPrompt.trim(), note.version);
+    setConflictMsg(null);
+    const finish = (updated: DocumentNote) => {
       setNote(updated);
       setPatchPrompt("");
       // Refresh revisions
-      const revRes = await api.getDocumentNoteRevisions(updated.note_id);
-      setRevisions(revRes.revisions || []);
+      return api.getDocumentNoteRevisions(updated.note_id).then((revRes) => setRevisions(revRes.revisions || [])).catch(() => {});
+    };
+
+    try {
+      await finish(await api.patchDocumentNote(note.note_id, patchPrompt.trim(), note.version));
     } catch (err: any) {
-      alert(`修订失败: ${err.message}`);
+      // A5：409 版本冲突 → 基线自动刷新并重应用一次；再次冲突转人工，不循环重试。
+      if (err?.status === 409) {
+        const latest: number | null =
+          typeof err?.payload?.latest_version === "number"
+            ? err.payload.latest_version
+            : await api
+                .getDocumentNote(note.note_id)
+                .then((n) => (typeof n?.version === "number" ? n.version : null))
+                .catch(() => null);
+        if (latest != null && latest !== note.version) {
+          setConflictMsg(`检测到版本冲突（目标 v${note.version}，服务端已到 v${latest}），已基于最新版本自动重应用一次…`);
+          try {
+            await finish(await api.patchDocumentNote(note.note_id, patchPrompt.trim(), latest));
+          } catch (retryErr: any) {
+            setConflictMsg(
+              retryErr?.status === 409
+                ? `自动重应用后仍冲突（服务端已到更高版本），请刷新笔记后手动重试。`
+                : `自动重应用失败: ${retryErr?.message || retryErr}`
+            );
+          }
+        } else {
+          setConflictMsg("检测到版本冲突且无法确定最新版本，请关闭后重新打开笔记再试。");
+        }
+      } else {
+        alert(`修订失败: ${err?.message || err}`);
+      }
     } finally {
       setPatching(false);
     }
@@ -342,9 +373,16 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
         </div>
 
         {/* Patch Studio Footer */}
-        <div className="p-3 border-t border-border/70 bg-card/60 flex items-center space-x-2">
-          <Sparkles className="h-4 w-4 text-emerald-800 dark:text-emerald-400 shrink-0" />
-          <form onSubmit={handleApplyPatch} className="flex-1 flex gap-2">
+        <div className="p-3 border-t border-border/70 bg-card/60 space-y-2">
+          {conflictMsg && (
+            <div className="flex items-start gap-2 p-2 rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-400 text-xs">
+              <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+              <span>{conflictMsg}</span>
+            </div>
+          )}
+          <div className="flex items-center space-x-2">
+            <Sparkles className="h-4 w-4 text-emerald-800 dark:text-emerald-400 shrink-0" />
+            <form onSubmit={handleApplyPatch} className="flex-1 flex gap-2">
             <Input
               value={patchPrompt}
               onChange={(e) => setPatchPrompt(e.target.value)}
@@ -361,6 +399,7 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
               {patching ? "正在演进修订..." : "应用修订"}
             </Button>
           </form>
+          </div>
         </div>
       </DialogContent>
     </Dialog>

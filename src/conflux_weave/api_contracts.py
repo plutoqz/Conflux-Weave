@@ -922,18 +922,34 @@ class ProviderConfigTestRequest(_ApiModel):
     base_url: str | None = Field(default=None, min_length=1, max_length=2_000)
     api_key: str | None = Field(default=None, min_length=1, max_length=1_000)
     model: str | None = Field(default=None, min_length=1, max_length=200)
+    embedding_model: str | None = Field(default=None, max_length=200)
+
+
+class ProviderEmbeddingProbe(_ApiModel):
+    """B1 连通性探测的 embedding 子结果；未配置 embedding 模型时 attempted=False。"""
+
+    attempted: bool
+    ok: bool | None = None
+    message: str = ""
+    latency_ms: int | None = None
+    dimensions: int | None = None
+    input_tokens: int | None = None
 
 
 class ProviderConfigTestResponse(_ApiModel):
     ok: bool
     message: str
     latency_ms: int | None = None
+    embedding: ProviderEmbeddingProbe | None = None
 
 
 class WorkbenchConfigResponse(_ApiModel):
     provider: ProviderConfigResponse
     provider_active: bool
     paths: dict[str, str]
+    # A5：当前进程实际生效的 Provider 配置（启动时装配）；保存 dotenv 后、
+    # 重启前，它与 provider（持久值）不同，用于“重启后生效”反馈。
+    provider_effective: ProviderConfigResponse | None = None
 
 
 class _RunCursorPayload(_ApiModel):
