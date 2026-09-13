@@ -330,6 +330,9 @@ class NotePatchRequest(_ApiModel):
     instruction: str = Field(min_length=1, max_length=2_000)
     target_version: int = Field(ge=1)
     operations: tuple[dict[str, Any], ...] = ()
+    # A2 研读联动：选中文本的原文锚点，随修订持久化进 note.metadata。
+    # {document_id, page?, segment_id?, quote, asset_id?, unanchored?}
+    quote_anchor: dict[str, Any] | None = None
 
 
 class NoteRevisionItem(_ApiModel):

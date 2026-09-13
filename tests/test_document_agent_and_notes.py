@@ -327,6 +327,52 @@ async def test_document_notes_api_endpoints(tmp_path: Path) -> None:
         not_found_res = await client.get("/api/v1/notes/note-non-existent")
         assert not_found_res.status_code == 404
 
+
+        # 8b. A2 研读联动：quote_anchor 随修订持久化；非法锚点 422；无定位显式 unanchored
+        # 先回 tip（上面 5b/5c 之后 tip 仍是 v2）
+        anchored = await client.post(
+            f"/api/v1/notes/{new_note_id}/patch",
+            json={
+                "instruction": "基于引用原文补充一段批注",
+                "target_version": 2,
+                "quote_anchor": {
+                    "document_id": "document-sha256-test",
+                    "quote": "严禁引入外部未授权依赖与不可控网络调用。",
+                    "page": 1,
+                    "segment_id": "segment-test-001",
+                },
+            },
+        )
+        assert anchored.status_code == 200, anchored.text
+        anchored_meta = anchored.json().get("metadata") or {}
+        assert anchored_meta.get("quote_anchor", {}).get("segment_id") == "segment-test-001"
+        assert anchored_meta["quote_anchor"]["page"] == 1
+        assert "unanchored" not in anchored_meta["quote_anchor"]
+
+        unanchored_res = await client.post(
+            f"/api/v1/notes/{anchored.json()['note_id']}/patch",
+            json={
+                "instruction": "补一段无定位引用",
+                "target_version": anchored.json()["version"],
+                "quote_anchor": {"document_id": "document-sha256-test", "quote": "某段无法定位的文字"},
+            },
+        )
+        assert unanchored_res.status_code == 200, unanchored_res.text
+        assert (unanchored_res.json().get("metadata") or {}).get("quote_anchor", {}).get("unanchored") is True
+
+        invalid_anchor = await client.post(
+            f"/api/v1/notes/{unanchored_res.json()['note_id']}/patch",
+            json={
+                "instruction": "缺少 quote 的锚点应被拒绝",
+                "target_version": unanchored_res.json()["version"],
+                "quote_anchor": {"document_id": "document-sha256-test"},
+            },
+        )
+        assert invalid_anchor.status_code == 422
+        assert invalid_anchor.json()["code"] == "invalid_quote_anchor"
+
+        # 8c. revise_note 单元：quote_anchor 持久化进新版本 metadata 与产物
+
         # 8. Non-existent document analyze returns 404
         doc_not_found = await client.post(
             "/api/v1/documents/analyze",

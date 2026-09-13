@@ -3464,12 +3464,26 @@ def create_app(
                 doc_context = None
 
             patch_ops = [PatchOperation.from_dict(op) for op in request.operations] if request.operations else None
+            # A2 研读联动：引用锚点校验——document_id + quote 必填；
+            # 无页码/分段/资产定位时显式 unanchored=true（不伪造定位）。
+            quote_anchor = None
+            if request.quote_anchor:
+                anchor = dict(request.quote_anchor)
+                if not anchor.get("document_id") or not str(anchor.get("quote") or "").strip():
+                    return JSONResponse(
+                        status_code=422,
+                        content={"code": "invalid_quote_anchor", "message": "quote_anchor 需要 document_id 与非空 quote。"},
+                    )
+                if not anchor.get("page") and not anchor.get("segment_id") and not anchor.get("asset_id"):
+                    anchor["unanchored"] = True
+                quote_anchor = anchor
             patch, new_note = await asyncio.to_thread(
                 doc_agent.revise_note,
                 note_obj,
                 request.instruction,
                 patch_ops=patch_ops,
                 document_context=doc_context,
+                quote_anchor=quote_anchor,
             )
             save_note_entry(new_note)
             return DocumentNoteResponse(

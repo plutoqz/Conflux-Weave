@@ -518,8 +518,15 @@ class DocumentAgent:
         *,
         patch_ops: list[PatchOperation] | None = None,
         document_context: str | None = None,
+        quote_anchor: dict[str, Any] | None = None,
     ) -> tuple[NotePatch, DocumentNote]:
-        """Generate a NotePatch according to user instruction, apply it, and produce a new note version."""
+        """Generate a NotePatch according to user instruction, apply it, and produce a new note version.
+
+        quote_anchor（A2 研读联动）：选中文本的原文锚点
+        {document_id, page?, segment_id?, quote, unanchored?}；随修订持久化进
+        新版本 note.metadata["quote_anchor"]，笔记因此保留原始引用并可回跳定位。
+        无定位信息时必须显式携带 unanchored=true，不伪造页码。
+        """
         ops: list[PatchOperation] = []
         if patch_ops is not None:
             ops = list(patch_ops)
@@ -549,6 +556,8 @@ class DocumentAgent:
 
         # Apply patch to produce next version
         new_note = apply_patch(note, patch)
+        if quote_anchor:
+            new_note.metadata["quote_anchor"] = dict(quote_anchor)
 
         # Persist both patch and new note artifacts
         save_patch_artifact(patch, self.artifact_store, producer_step_id=self.producer_step_id)

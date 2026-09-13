@@ -336,11 +336,23 @@ export const api = {
     }),
   // A5 修复：后端 NotePatchRequest 契约字段是 instruction（此前发 patch_prompt
   // 会被 extra="forbid" 契约 422 拒绝，UI 修订从未成功过）。
-  patchDocumentNote: (noteId: string, instruction: string, targetVersion = 1) =>
+  patchDocumentNote: (noteId: string, instruction: string, targetVersion = 1, quoteAnchor?: {
+    document_id: string;
+    quote: string;
+    page?: number;
+    segment_id?: string;
+    asset_id?: string;
+    unanchored?: boolean;
+  }) =>
     request<DocumentNote>(`/api/v1/notes/${encodeURIComponent(noteId)}/patch`, {
       method: "POST",
-      body: JSON.stringify({ instruction, target_version: targetVersion }),
+      body: JSON.stringify({ instruction, target_version: targetVersion, quote_anchor: quoteAnchor ?? null }),
     }),
+  // A2 研读联动：文档分段（含页码定位），供阅读窗格与选择引用锚点使用
+  getDocumentSegments: (docId: string) =>
+    request<{ document_id: string; segments: Array<{ segment_id: string; ordinal: number; text: string; locator: Record<string, any> }> }>(
+      `/api/v1/library/documents/${encodeURIComponent(docId)}`
+    ),
   saveNoteToResearch: (noteId: string) =>
     request<{ task_id: string; run_id: string; status: string; report_artifact_id: string; title: string; message: string }>(
       `/api/v1/notes/${encodeURIComponent(noteId)}/save-to-research`,

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   Dialog,
   DialogContent,
@@ -6,12 +6,28 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { FileText, Copy, Sparkles, Check, History, Loader2, AlertCircle, Download } from "lucide-react";
+import { FileText, Copy, Sparkles, Check, History, Loader2, AlertCircle, Download, BookOpen, Quote } from "lucide-react";
 import { marked } from "marked";
 import { renderMarkdownWithMath, cleanDocumentNoteText } from "@/lib/math";
 import { api } from "@/services/api";
 import { cn } from "@/lib/utils";
 import type { DocumentNote } from "@/types/workbench";
+
+interface SegmentRow {
+  segment_id: string;
+  ordinal: number;
+  text: string;
+  locator: Record<string, any>;
+}
+
+interface QuoteAnchor {
+  document_id: string;
+  quote: string;
+  page?: number;
+  segment_id?: string;
+  asset_id?: string;
+  unanchored?: boolean;
+}
 
 interface NoteStudioDialogProps {
   documentId: string | null;
@@ -25,7 +41,7 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
   onOpenChange,
 }) => {
   const [note, setNote] = useState<DocumentNote | null>(null);
-  const [activeTab, setActiveTab] = useState<"html" | "md">("html");
+  const [activeTab, setActiveTab] = useState<"html" | "md" | "source">("html");
   const [patchPrompt, setPatchPrompt] = useState("");
   const [patching, setPatching] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -36,6 +52,11 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
   const [savingToResearch, setSavingToResearch] = useState(false);
   const [savedResearchRunId, setSavedResearchRunId] = useState<string | null>(null);
   const [exporting, setExporting] = useState<string>("");
+  // A2 研读联动：原文分段与选择引用锚点
+  const [segments, setSegments] = useState<SegmentRow[]>([]);
+  const [anchor, setAnchor] = useState<QuoteAnchor | null>(null);
+  const [anchorNote, setAnchorNote] = useState<string | null>(null);
+  const readerRef = useRef<HTMLDivElement | null>(null);
 
   const handleExportNote = async (format: "markdown" | "json") => {
     if (!note?.note_id || exporting) return;
@@ -56,12 +77,20 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
       setConflictMsg(null);
       setRevisions([]);
       setSavedResearchRunId(null);
+      setSegments([]);
+      setAnchor(null);
+      setAnchorNote(null);
       return;
     }
     setLoading(true);
     setError(null);
     setConflictMsg(null);
     setSavedResearchRunId(null);
+    setAnchor(null);
+    setAnchorNote(null);
+
+    // A2：加载原文分段（页码定位），供阅读窗格与选择引用使用
+    api.getDocumentSegments(documentId).then((res) => setSegments(res.segments || [])).catch(() => setSegments([]));
 
     // Call analyzeDocument (which gets existing or builds new)
     api.analyzeDocument(documentId)
@@ -110,7 +139,9 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
     };
 
     try {
-      await finish(await api.patchDocumentNote(note.note_id, patchPrompt.trim(), note.version));
+      await finish(await api.patchDocumentNote(note.note_id, patchPrompt.trim(), note.version, anchor ?? undefined));
+      setAnchor(null); // 锚点随修订成功持久化进新版本；失败时保留供重试
+      setAnchorNote(null);
     } catch (err: any) {
       // A5：409 版本冲突 → 基线自动刷新并重应用一次；再次冲突转人工，不循环重试。
       if (err?.status === 409) {
@@ -124,7 +155,9 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
         if (latest != null && latest !== note.version) {
           setConflictMsg(`检测到版本冲突（目标 v${note.version}，服务端已到 v${latest}），已基于最新版本自动重应用一次…`);
           try {
-            await finish(await api.patchDocumentNote(note.note_id, patchPrompt.trim(), latest));
+            await finish(await api.patchDocumentNote(note.note_id, patchPrompt.trim(), latest, anchor ?? undefined));
+            setAnchor(null);
+            setAnchorNote(null);
           } catch (retryErr: any) {
             setConflictMsg(
               retryErr?.status === 409
@@ -160,6 +193,58 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
   const rawMd = note?.markdown_content || note?.content_markdown || "";
 
   const mdContent = cleanDocumentNoteText(rawMd);
+
+  // A2：分段按页分组（locator.page 缺失时归入"无定位"组并明确标记）
+  const segmentsByPage = useMemo(() => {
+    const groups = new Map<number | "none", SegmentRow[]>();
+    for (const seg of segments) {
+      const page = typeof seg.locator?.page === "number" ? (seg.locator.page as number) : "none";
+      const list = groups.get(page) || [];
+      list.push(seg);
+      groups.set(page, list);
+    }
+    return [...groups.entries()].sort((a, b) => {
+      if (a[0] === "none") return 1;
+      if (b[0] === "none") return -1;
+      return (a[0] as number) - (b[0] as number);
+    });
+  }, [segments]);
+
+  // A2：从阅读窗格的文本选择构造引用锚点；无定位信息时显式 unanchored
+  const captureSelectionAnchor = () => {
+    const selection = window.getSelection();
+    const text = selection?.toString().trim() || "";
+    if (!text || !documentId) return;
+    const node = selection?.anchorNode;
+    const element = (node instanceof Element ? node : node?.parentElement) || null;
+    const segmentEl = element?.closest("[data-segment-id]") as HTMLElement | null;
+    if (segmentEl) {
+      const segmentId = segmentEl.dataset.segmentId || "";
+      const pageRaw = segmentEl.dataset.page;
+      const page = pageRaw != null && pageRaw !== "" ? Number(pageRaw) : undefined;
+      setAnchor({
+        document_id: documentId,
+        quote: text,
+        segment_id: segmentId || undefined,
+        page: Number.isFinite(page as number) ? (page as number) : undefined,
+      });
+    } else {
+      setAnchor({ document_id: documentId, quote: text, unanchored: true });
+    }
+    setAnchorNote(null);
+  };
+
+  const jumpToAnchor = (target: QuoteAnchor | null) => {
+    const segmentId = target?.segment_id;
+    if (!segmentId) return;
+    setActiveTab("source");
+    requestAnimationFrame(() => {
+      const el = readerRef.current?.querySelector(`[data-segment-id="${CSS.escape(segmentId)}"]`);
+      el?.scrollIntoView({ behavior: "smooth", block: "center" });
+      el?.classList.add("ring-2", "ring-emerald-500", "bg-emerald-500/10");
+      setTimeout(() => el?.classList.remove("ring-2", "ring-emerald-500", "bg-emerald-500/10"), 2200);
+    });
+  };
 
   // Prepared HTML for iframe: if htmlContent is present, enhance it; otherwise parse mdContent
   let displayHtml = "";
@@ -228,6 +313,19 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
                     v{note.version}
                   </Badge>
                 )}
+                {(() => {
+                  const retained = (note as any)?.metadata?.quote_anchor as QuoteAnchor | undefined;
+                  if (!retained) return null;
+                  return (
+                    <button
+                      onClick={() => jumpToAnchor(retained)}
+                      title={`本版本修订引用了原文：${retained.quote.slice(0, 60)}`}
+                      className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-emerald-700/40 text-emerald-800 dark:text-emerald-300 hover:bg-emerald-500/10 max-w-[220px] truncate"
+                    >
+                      引用原文{retained.unanchored ? "（无定位）" : retained.page != null ? ` · 第 ${retained.page} 页` : ""}
+                    </button>
+                  );
+                })()}
               </div>
               <p className="text-xs text-foreground/75 font-mono truncate max-w-sm mt-0.5">
                 Doc: {documentId}
@@ -276,6 +374,19 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
                 )}
               >
                 Markdown 原文
+              </button>
+              <button
+                onClick={() => setActiveTab("source")}
+                className={cn(
+                  "px-2.5 py-1 rounded-md transition font-medium gap-1 flex items-center",
+                  activeTab === "source"
+                    ? "bg-background text-foreground shadow-xs font-semibold"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+                title="原文分段阅读：选中文本后可引用到笔记（带页码与分段定位）"
+              >
+                <BookOpen className="h-3 w-3" />
+                原文
               </button>
             </div>
 
@@ -365,6 +476,41 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
               sandbox="allow-same-origin allow-scripts"
               className="w-full h-full border-0 bg-transparent"
             />
+          ) : activeTab === "source" ? (
+            <div className="w-full h-full flex flex-col">
+              <div className="px-4 py-2 border-b border-border/60 bg-muted/30 text-[11px] text-muted-foreground flex items-center justify-between shrink-0">
+                <span>
+                  原文分段阅读（A2 批次一：定位到「页码 + 分段」，非 PDF 版式渲染）
+                  {segments.length === 0 && " · 本文档无可显示分段"}
+                </span>
+                {anchor && <span className="font-mono">已捕获引用：{anchor.unanchored ? "无定位（unanchored）" : `第 ${anchor.page ?? "?"} 页 / ${anchor.segment_id?.slice(-10)}`}</span>}
+              </div>
+              <div
+                ref={readerRef}
+                onMouseUp={captureSelectionAnchor}
+                className="flex-1 overflow-auto p-4 space-y-3 select-text"
+              >
+                {segmentsByPage.map(([page, rows]) => (
+                  <div key={String(page)}>
+                    <div className="sticky top-0 z-10 bg-background/95 backdrop-blur px-2 py-1 text-[11px] font-mono font-semibold text-emerald-800 dark:text-emerald-300 border-b border-border/40">
+                      {page === "none" ? "⚠ 未定位分段（原文本携带页码）" : `第 ${page} 页`}
+                    </div>
+                    <div className="space-y-2 mt-2">
+                      {rows.map((seg) => (
+                        <p
+                          key={seg.segment_id}
+                          data-segment-id={seg.segment_id}
+                          data-page={typeof seg.locator?.page === "number" ? seg.locator.page : ""}
+                          className="text-xs sm:text-sm leading-relaxed text-foreground/90 rounded-md p-2 transition cursor-text hover:bg-muted/50"
+                        >
+                          {seg.text}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           ) : (
             <div className="p-6 overflow-auto h-full font-mono text-xs sm:text-sm text-foreground whitespace-pre-wrap leading-relaxed bg-muted/10 selection:bg-emerald-800/20">
               {mdContent || "暂无 Markdown 原文"}
@@ -374,6 +520,33 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
 
         {/* Patch Studio Footer */}
         <div className="p-3 border-t border-border/70 bg-card/60 space-y-2">
+          {anchor && (
+            <div className="flex items-start gap-2 p-2 rounded-md bg-emerald-500/10 border border-emerald-600/30 text-xs">
+              <Quote className="h-3.5 w-3.5 shrink-0 mt-0.5 text-emerald-700 dark:text-emerald-400" />
+              <div className="min-w-0 flex-1">
+                <p className="line-clamp-2 text-foreground/90">“{anchor.quote.slice(0, 180)}{anchor.quote.length > 180 ? "…" : ""}”</p>
+                <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+                  {anchor.unanchored
+                    ? "⚠ 无定位信息（unanchored，不伪造页码）"
+                    : `引用锚点：第 ${anchor.page ?? "?"} 页${anchor.segment_id ? ` · ${anchor.segment_id.slice(0, 26)}` : ""}`}
+                </p>
+              </div>
+              {anchor.segment_id && (
+                <Button variant="ghost" size="sm" className="h-6 px-2 text-[10px]" onClick={() => jumpToAnchor(anchor)}>
+                  回到原文
+                </Button>
+              )}
+              <Button variant="ghost" size="sm" className="h-6 px-2 text-[10px]" onClick={() => { setAnchor(null); setAnchorNote(null); }}>
+                移除
+              </Button>
+            </div>
+          )}
+          {anchorNote && (
+            <div className="flex items-start gap-2 p-2 rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-400 text-xs">
+              <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+              <span>{anchorNote}</span>
+            </div>
+          )}
           {conflictMsg && (
             <div className="flex items-start gap-2 p-2 rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-400 text-xs">
               <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
