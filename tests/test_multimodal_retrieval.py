@@ -640,3 +640,120 @@ def test_api_contracts_serialization():
     assert res_dict["query"] == "test query"
     assert len(res_dict["fused_hits"]) == 1
     assert res_dict["fused_hits"][0]["asset_id"] == "asset-1"
+
+
+def _build_dimension_mismatch_pipeline(tmp_path):
+    """复刻 P7-V 现网故障形态：1024 维真实模型建库 + 128 维确定性查询 embedder。
+
+    现网 image_assets_v1 由 text-embedding-v4（1024 维）建库；未配置图像模型时
+    build_local_app 回落 DeterministicImageEmbeddingAdapter（默认 128 维）。
+    """
+    store = LocalArtifactStore(tmp_path / "artifacts")
+    config = ProviderConfig("https://provider.example/v1", "secret", "chat")
+
+    img1_art = store.put_bytes(
+        b"\x89PNG\r\n\x1a\n\x00img1", media_type="image/png", producer_step_id="test", schema_version="raw-binary.v1"
+    )
+    asset1 = DocumentAsset(
+        asset_id="asset-transformer-fig1",
+        document_id="paper-attn",
+        source_snapshot_id="snapshot-paper-attn",
+        page=3,
+        asset_kind="embedded_image",
+        media_type="image/png",
+        content_hash=img1_art.content_hash,
+        width_px=600,
+        height_px=400,
+        bbox={"x": 72.0, "y": 144.0, "width": 450.0, "height": 300.0},
+        coordinate_space="pdf_page_points_top_left",
+        page_width=612.0,
+        page_height=792.0,
+        page_rotation=0,
+        caption="Figure 1: The Transformer model architecture.",
+        parent_segment_ids=("chunk-attn-1",),
+        extraction_method="pdf_image_xobject",
+        extraction_status="extracted",
+        artifact_ref=img1_art.artifact_id,
+    )
+
+    # 索引发布侧：1024 维（模拟真实多模态模型建库）
+    index_adapter = DeterministicImageEmbeddingAdapter(store, model="text-embedding-v4", dimensions=1024)
+    image_index = LanceDBImageIndex(tmp_path / "img_db", artifact_store=store)
+    build_image_index([asset1], index_adapter, store, image_index)
+
+    documents = (
+        RetrievalDocument(
+            "chunk-attn-1",
+            "The Transformer uses stacked self-attention and point-wise fully connected layers.",
+            "snapshot-paper-attn",
+            {"page": 3},
+        ),
+    )
+    text_index = LanceDBDenseIndex(tmp_path / "text_db")
+    text_vec = [0.01 * (i % 7) for i in range(128)]
+    text_index.publish(documents, (tuple(text_vec),))
+
+    text_pipeline = HybridRetrievalPipeline(
+        documents,
+        text_index,
+        OpenAICompatibleEmbeddingAdapter(
+            store,
+            config,
+            transport=SequenceTransport([{"data": [{"index": 0, "embedding": list(text_vec)}]} for _ in range(20)]),
+        ),
+        OpenAICompatibleRerankerAdapter(
+            store,
+            config,
+            transport=SequenceTransport([{"results": [{"index": 0, "relevance_score": 0.95}]} for _ in range(20)]),
+        ),
+    )
+
+    # 查询侧：128 维确定性 adapter（build_local_app 未配置图像模型时的回落）
+    query_adapter = DeterministicImageEmbeddingAdapter(store, dimensions=128)
+    pipeline = MultimodalRetrievalPipeline(
+        text_pipeline,
+        image_index=image_index,
+        image_embedding=query_adapter,
+        artifact_store=store,
+        enabled=True,
+    )
+    return pipeline, image_index
+
+
+def test_image_dimension_mismatch_degrades_to_text_only(tmp_path):
+    """P7-V 回归：维度不兼容时图文分支显式降级，不再冻结整个检索批次。"""
+    pipeline, image_index = _build_dimension_mismatch_pipeline(tmp_path)
+
+    conflict = pipeline._image_dimension_conflict()
+    assert conflict is not None
+    assert "index=1024" in conflict and "embedder=128" in conflict
+
+    run = pipeline.search("transformer self-attention architecture")
+    assert len(run.final.hits) >= 1, "text branch must still deliver hits"
+    assert run.image_hits == ()
+    assert run.image_degradation is not None
+    assert run.image_degradation.startswith("image_dimension_mismatch(index=1024, embedder=128)")
+
+
+def test_search_images_by_text_dimension_conflict_returns_empty(tmp_path):
+    pipeline, _ = _build_dimension_mismatch_pipeline(tmp_path)
+    assert pipeline.search_images_by_text("transformer architecture") == ()
+
+
+def test_search_vector_dimension_mismatch_raises_typed_error(tmp_path):
+    """直查时抛类型化异常（替代 lancedb 的误导性 'no vector column' 消息）。"""
+    from conflux_weave.multimodal_indexing import ImageVectorDimensionMismatch
+
+    _, image_index = _build_dimension_mismatch_pipeline(tmp_path)
+    assert image_index.vector_dimensions() == 1024
+    with pytest.raises(ImageVectorDimensionMismatch) as exc_info:
+        image_index.search_vector([0.0] * 128, top_k=3)
+    assert exc_info.value.index_dimensions == 1024
+    assert exc_info.value.query_dimensions == 128
+    assert "1024" in str(exc_info.value) and "128" in str(exc_info.value)
+
+
+def test_vector_dimensions_absent_table_returns_none(tmp_path):
+    store = LocalArtifactStore(tmp_path / "artifacts")
+    empty_index = LanceDBImageIndex(tmp_path / "empty_db", artifact_store=store)
+    assert empty_index.vector_dimensions() is None

@@ -34,6 +34,23 @@ MULTIMODAL_INDEX_MANIFEST_SCHEMA_VERSION = "conflux-weave.multimodal-index-manif
 MULTIMODAL_INDEX_UPDATE_SCHEMA_VERSION = "conflux-weave.multimodal-index-update.v1"
 
 
+class ImageVectorDimensionMismatch(ValueError):
+    """Query vector dimension differs from the physical image index vector column.
+
+    lancedb reports this condition as a misleading "There is no vector column in
+    the data" error because it filters candidate columns by dimension; callers
+    must catch this typed error and degrade the image branch explicitly instead
+    of freezing a whole retrieval or research batch.
+    """
+
+    def __init__(self, index_dimensions: int, query_dimensions: int) -> None:
+        self.index_dimensions = index_dimensions
+        self.query_dimensions = query_dimensions
+        super().__init__(
+            f"image index vector dimension mismatch: index={index_dimensions}, query={query_dimensions}"
+        )
+
+
 def cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
     """Compute cosine similarity between two non-empty vectors with identical dimensions."""
     if len(left) != len(right) or not left:
@@ -505,6 +522,16 @@ class LanceDBImageIndex:
         listing = self.db.list_tables()
         return list(getattr(listing, "tables", listing))
 
+    def vector_dimensions(self) -> int | None:
+        """Physical vector column size of the published table (None when absent)."""
+        if self.table is None:
+            return None
+        try:
+            vector_field = self.table.schema.field("vector")
+        except KeyError:
+            return None
+        return getattr(vector_field.type, "list_size", None)
+
     def _drop_table_if_exists(self, name: str) -> None:
         if name in self._table_names():
             try:
@@ -736,6 +763,10 @@ class LanceDBImageIndex:
             raise RuntimeError("LanceDB image table is not published")
         if top_k <= 0:
             raise ValueError("top_k must be positive")
+
+        index_dimensions = self.vector_dimensions()
+        if index_dimensions is not None and len(query_vector) != index_dimensions:
+            raise ImageVectorDimensionMismatch(index_dimensions, len(query_vector))
 
         request = self.table.search(list(query_vector)).limit(top_k)
         if where:

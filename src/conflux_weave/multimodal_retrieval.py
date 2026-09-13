@@ -20,6 +20,7 @@ from conflux_weave.hybrid_retrieval import HybridRetrievalPipeline, HybridRetrie
 from conflux_weave.multimodal_indexing import (
     ImageEmbeddingPort,
     ImageEmbeddingRequest,
+    ImageVectorDimensionMismatch,
     LanceDBImageIndex,
     MultimodalRetrievalHit,
 )
@@ -55,6 +56,9 @@ class MultimodalRetrievalRun:
     fusion_strategy: str
     query_image_embedding_request_artifact: str | None = None
     query_image_embedding_response_artifact: str | None = None
+    # P7-V 实证修复：图片索引与查询向量维度不兼容时图文分支显式降级，
+    # 而不是让 lancedb 的 "no vector column" 误报冻结整个检索/研究批次。
+    image_degradation: str | None = None
 
 
 class MultimodalRetrievalPipeline:
@@ -87,6 +91,26 @@ class MultimodalRetrievalPipeline:
             and self.image_embedding is not None
             and self.image_index.table is not None
         )
+
+    def _image_dimension_conflict(self) -> str | None:
+        """Return a degradation reason when the embedder and index dimensions are known and incompatible.
+
+        Both adapters advertise ``dimensions``; the physical index dimension is read
+        from the LanceDB schema. Unknown values (custom ports) return None so the
+        embed-time typed check in ``search_vector`` remains the safety net.
+        """
+        embedder_dimensions = getattr(self.image_embedding, "dimensions", None)
+        index_dimensions = self.image_index.vector_dimensions() if self.image_index else None
+        if (
+            embedder_dimensions is not None
+            and index_dimensions is not None
+            and embedder_dimensions != index_dimensions
+        ):
+            return (
+                f"image_dimension_mismatch(index={index_dimensions}, "
+                f"embedder={embedder_dimensions}); degraded to text-only retrieval"
+            )
+        return None
 
     def is_joint_space_active(self) -> bool:
         """Check if image embedding and text embedding share a verified joint multimodal vector space."""
@@ -144,6 +168,9 @@ class MultimodalRetrievalPipeline:
             raise ValueError("top_k must be positive")
         if not self.is_multimodal_active():
             return ()
+        conflict = self._image_dimension_conflict()
+        if conflict is not None:
+            return ()
 
         assert self.image_embedding is not None
         assert self.image_index is not None
@@ -154,7 +181,10 @@ class MultimodalRetrievalPipeline:
         if not embedded.vectors:
             return ()
         query_vector = embedded.vectors[0]
-        return self.image_index.search_vector(query_vector, top_k=top_k, where=where)
+        try:
+            return self.image_index.search_vector(query_vector, top_k=top_k, where=where)
+        except ImageVectorDimensionMismatch:
+            return ()
 
     def search_text_by_image(
         self,
@@ -256,18 +286,29 @@ class MultimodalRetrievalPipeline:
         image_hits: tuple[MultimodalRetrievalHit, ...] = ()
         req_art = None
         resp_art = None
+        image_degradation = None
         if self.is_multimodal_active():
-            assert self.image_embedding is not None
-            assert self.image_index is not None
-            embedded = self.image_embedding.embed_query_text(
-                query, producer_step_id="step-image-retrieval"
-            )
-            req_art = embedded.request_artifact.artifact_id
-            resp_art = embedded.response_artifact.artifact_id
-            if embedded.vectors:
-                image_hits = self.image_index.search_vector(
-                    embedded.vectors[0], top_k=image_k
+            conflict = self._image_dimension_conflict()
+            if conflict is None:
+                assert self.image_embedding is not None
+                assert self.image_index is not None
+                embedded = self.image_embedding.embed_query_text(
+                    query, producer_step_id="step-image-retrieval"
                 )
+                req_art = embedded.request_artifact.artifact_id
+                resp_art = embedded.response_artifact.artifact_id
+                if embedded.vectors:
+                    try:
+                        image_hits = self.image_index.search_vector(
+                            embedded.vectors[0], top_k=image_k
+                        )
+                    except ImageVectorDimensionMismatch as mismatch:
+                        image_degradation = (
+                            f"image_dimension_mismatch(index={mismatch.index_dimensions}, "
+                            f"embedder={mismatch.query_dimensions}); degraded to text-only retrieval"
+                        )
+            else:
+                image_degradation = conflict
 
         text_by_id = {doc.document_id: doc.text for doc in self.documents}
         fused_hits = multimodal_reciprocal_rank_fusion(
@@ -297,6 +338,7 @@ class MultimodalRetrievalPipeline:
             fusion_strategy="reciprocal_rank_fusion",
             query_image_embedding_request_artifact=req_art,
             query_image_embedding_response_artifact=resp_art,
+            image_degradation=image_degradation,
         )
 
     def to_evidence_refs(
