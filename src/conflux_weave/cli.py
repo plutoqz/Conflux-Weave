@@ -232,6 +232,23 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="isolated output root; defaults to a temporary directory",
     )
+    backup = subparsers.add_parser(
+        "backup", help="A3: create a consistent backup bundle (SQLite + LanceDB + artifacts + redacted config)"
+    )
+    backup.add_argument("--output", type=Path, required=True, help="backup bundle output directory (must be empty/new)")
+    backup.add_argument("--database", type=Path, default=Path("var") / "db" / "conflux-weave.sqlite3")
+    backup.add_argument("--artifact-root", type=Path, default=Path("var") / "artifacts" / "sha256")
+    backup.add_argument("--dotenv", type=Path, default=Path(".env"))
+    backup.add_argument(
+        "--lancedb-root", type=Path, action="append", default=None,
+        help="additional LanceDB root to include (repeatable); the database-sibling lancedb-memory is included automatically",
+    )
+    restore = subparsers.add_parser(
+        "restore", help="A3: restore a verified backup bundle into an empty target root (staged, never overwrites)"
+    )
+    restore.add_argument("--backup", type=Path, required=True, help="backup bundle directory")
+    restore.add_argument("--target-root", type=Path, required=True, help="empty target workspace root to restore into")
+    restore.add_argument("--sample-size", type=int, default=5, help="random artifact readability sample size")
     return parser
 
 
@@ -297,6 +314,33 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         smoke_args = [] if args.data_root is None else ["--data-root", str(args.data_root)]
         return run_offline_smoke(smoke_args)
+    if args.command == "backup":
+        from conflux_weave.backup_restore import BackupPaths, create_backup
+
+        database = args.database
+        lancedb_roots = list(args.lancedb_root or [])
+        sibling = database.parent / "lancedb-memory"
+        if sibling.is_dir() and sibling not in lancedb_roots:
+            lancedb_roots.insert(0, sibling)
+        source_cache = Path("var") / "artifacts" / "source-cache"
+        manifest = create_backup(
+            BackupPaths(
+                database=database,
+                artifact_root=args.artifact_root,
+                lancedb_roots=tuple(lancedb_roots),
+                dotenv=args.dotenv,
+                extra_dirs=(source_cache,) if source_cache.is_dir() else (),
+            ),
+            args.output,
+        )
+        _print_json({"status": "created", "output": str(args.output), "manifest": manifest})
+        return 0
+    if args.command == "restore":
+        from conflux_weave.backup_restore import restore_backup
+
+        result = restore_backup(args.backup, args.target_root, sample_size=args.sample_size)
+        _print_json({"status": "restored", **result})
+        return 0
     if args.command in _LIVE_RESEARCH_COMMANDS:
         return run_live_research(args, _print_json)
     if args.command in _SOURCE_INGESTION_COMMANDS:
