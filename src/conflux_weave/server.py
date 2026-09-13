@@ -3321,6 +3321,28 @@ def create_app(
             if note_obj is None:
                 return JSONResponse(status_code=404, content={"code": "note_not_found", "message": f"目标笔记 {note_id} 不存在。"})
 
+            # P7-V 真实验证修复：链式不可变笔记的 note_id 按文档+版本确定性生成，
+            # 对旧修订（非 tip）发起 patch 会通过版本校验并以同 ID 新产物静默覆盖
+            # 较新修订，409 永不可达。此处将"非 tip 修订"显式判为版本冲突，
+            # latest_version 指向真实 tip，前端据此刷新基线后重应用。
+            tip_version = max(
+                (
+                    int(item.get("version") or 0)
+                    for item in load_notes_registry()
+                    if item.get("document_id") == note_obj.document_id
+                ),
+                default=note_obj.version,
+            )
+            if note_obj.version < tip_version:
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "code": "version_conflict",
+                        "message": f"笔记 {note_obj.note_id} 已不是最新修订（当前最新版本 {tip_version}），已拒绝以避免静默覆盖。",
+                        "latest_version": tip_version,
+                    },
+                )
+
             if request.target_version != note_obj.version:
                 return JSONResponse(
                     status_code=409,

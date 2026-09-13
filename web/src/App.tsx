@@ -25,10 +25,19 @@ export const App: React.FC = () => {
     const handleHash = () => {
       const rawHash = window.location.hash.replace(/^#\/?/, "");
       const [sectionPart, queryPart] = rawHash.split("?");
+      // UX-1 深链契约：#/<section>/<run_id> 路径形式与 #/<section>?run_id= 查询
+      // 形式都必须恢复运行视图（P7-V 真实验证发现 React 版丢失了路径形式）。
+      let base = sectionPart;
+      let pathRunId: string | null = null;
+      if (base && base.includes("/")) {
+        const [b, sub] = base.split("/");
+        base = b;
+        pathRunId = sub || null;
+      }
       if (
-        ["overview", "chat", "research", "library", "projects", "skills", "settings"].includes(sectionPart)
+        ["overview", "chat", "research", "library", "projects", "skills", "settings"].includes(base)
       ) {
-        setSection(sectionPart as SectionType);
+        setSection(base as SectionType);
       }
       if (queryPart) {
         const params = new URLSearchParams(queryPart);
@@ -36,6 +45,9 @@ export const App: React.FC = () => {
         if (runId) {
           setActiveRunId(runId);
         }
+      }
+      if (pathRunId && base === "research") {
+        setActiveRunId(pathRunId);
       }
     };
     handleHash();

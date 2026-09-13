@@ -286,13 +286,34 @@ async def test_document_notes_api_endpoints(tmp_path: Path) -> None:
         assert len(patched_data["sections"]) == len(data["sections"]) + 1
 
         # 5. Version conflict rejection on API（A5：响应携带最新版本号供前端刷新基线）
+        # P7-V 语义修正：v1 已非 tip（tip=2），无论 target_version 是否等于 v1 自身
+        # 版本，都必须 409 且 latest_version 指向真实 tip=2，防止确定性同 ID 覆盖。
         conflict_res = await client.post(
             f"/api/v1/notes/{note_id}/patch",
             json={"instruction": "并发覆盖冲突测试", "target_version": 99},
         )
         assert conflict_res.status_code == 409
         assert conflict_res.json()["code"] == "version_conflict"
-        assert conflict_res.json()["latest_version"] == 1
+        assert conflict_res.json()["latest_version"] == 2
+
+        # 5b. Stale-base overwrite regression：对旧修订以"自身匹配版本"提交
+        # 曾会静默覆盖 tip 修订（P7-V 真实验证发现），现在必须 409。
+        stale_res = await client.post(
+            f"/api/v1/notes/{note_id}/patch",
+            json={"instruction": "旧基线静默覆盖回归", "target_version": 1},
+        )
+        assert stale_res.status_code == 409
+        assert stale_res.json()["code"] == "version_conflict"
+        assert stale_res.json()["latest_version"] == 2
+
+        # 5c. Tip 上的版本错配仍走 409：对 v2（tip）用过期 target_version 提交。
+        tip_conflict_res = await client.post(
+            f"/api/v1/notes/{new_note_id}/patch",
+            json={"instruction": "tip 版本错配测试", "target_version": 1},
+        )
+        assert tip_conflict_res.status_code == 409
+        assert tip_conflict_res.json()["code"] == "version_conflict"
+        assert tip_conflict_res.json()["latest_version"] == 2
 
         # 6. GET /api/v1/notes/{new_note_id}/revisions
         rev_res = await client.get(f"/api/v1/notes/{new_note_id}/revisions")
