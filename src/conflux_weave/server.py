@@ -373,11 +373,25 @@ def create_app(
     memory_store = HierarchicalMemoryStore(db_path if db_path else ":memory:")
     chat_adapter = getattr(chat_service, "_chat", None) if chat_service else None
     # P6-B1：语义记忆召回（embedder/索引不可用时内部退回确定性路径）
+    # 注意 retrieval_pipeline 现为 MultimodalRetrievalPipeline 包装层（P2.3），
+    # embedding 适配器在其 text_pipeline 上；直接 getattr 会得到 None 并使
+    # 记忆语义召回静默断裂——两种管线形态都要解析。
     _memory_embedder = None
     _pipeline_embedding = getattr(retrieval_pipeline, "embedding", None)
+    if _pipeline_embedding is None and retrieval_pipeline is not None:
+        _pipeline_embedding = getattr(
+            getattr(retrieval_pipeline, "text_pipeline", retrieval_pipeline), "embedding", None
+        )
     if _pipeline_embedding is not None:
-        def _memory_embedder(texts):
-            return [list(v) for v in _pipeline_embedding.embed(texts, producer_step_id="memory-recall").vectors]
+        # B1 验收发现：embedding 适配器缺省模型会静默回退（text-embedding-v4），
+        # 导致未配置 embedding_model 的部署在每次召回时仍发起真实付费嵌入调用。
+        # 生产路径（provider_effective 已传入）按配置判定；测试路径未传时维持原行为。
+        _embedding_model_configured = True
+        if provider_effective is not None:
+            _embedding_model_configured = bool(getattr(provider_effective, "embedding_model", None))
+        if _embedding_model_configured:
+            def _memory_embedder(texts):
+                return [list(v) for v in _pipeline_embedding.embed(texts, producer_step_id="memory-recall").vectors]
     memory_recall_service = MemoryRecallService(
         memory_store,
         _memory_embedder,
@@ -925,6 +939,9 @@ def create_app(
                 "query": query,
                 "items": [record.to_dict() for record in records],
                 "semantic_available": memory_recall_service.semantic_available,
+                # B1 验收可观测性：语义路径未就绪时给出最后一跳的真实原因
+                # （embedder unavailable / embed failed / lancedb unavailable）。
+                "index_error": memory_recall_service.last_index_error,
             }
         except Exception as exc:
             return error_response(exc)

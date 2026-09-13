@@ -150,10 +150,12 @@ class MemoryRecallService:
                 import lancedb
 
                 db = lancedb.connect(str(self._lancedb_root))
-                names = [str(t) for t in db.list_tables()]
-                if self._table_name in names:
+                try:
                     self._table = db.open_table(self._table_name)
-                else:
+                except Exception:
+                    # lancedb>=0.35 的 list_tables() 返回分页结构而非表名列表，
+                    # 不能用于存在性判定（误判会导致重启后永久 create 冲突降级）；
+                    # 一律先 open，失败（含首次运行）再建空表。
                     sample = next(iter(self._embedding_cache.values()))
                     self._table = db.create_table(self._table_name, data=[{"memory_id": "", "text": "", "vector": sample}])
                     self._table.delete("memory_id = ''")

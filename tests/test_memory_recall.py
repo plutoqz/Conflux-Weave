@@ -217,3 +217,156 @@ def test_canonical_text_and_recall_api_contract(tmp_path) -> None:
         "score", "reason", "semantic_score", "lexical_score", "recency_score",
     }
     assert json.dumps(payload, ensure_ascii=False)
+
+
+def test_server_wiring_resolves_embedder_through_multimodal_pipeline(tmp_path) -> None:
+    """回归（B1 真实验证暴露）：P2.3 起 retrieval_pipeline 是 MultimodalRetrievalPipeline
+    包装层，server 接线必须能经 text_pipeline 解析出 embedding 适配器，
+    否则记忆语义召回在真实服务中静默断裂、永远走 recency 兜底。"""
+    import asyncio
+
+    import pytest
+
+    httpx = pytest.importorskip("httpx")
+    from types import SimpleNamespace
+
+    from conflux_weave.runtime import LocalArtifactStore, SQLiteRuntimeRepository
+    from conflux_weave.server import create_app
+
+    class PassiveRuntime:
+        executor_id = "passive-memory-wiring@v1"
+        task_kinds = ()
+
+        def work_once(self, *, now=None):
+            return None
+
+    class FakeEmbedding:
+        model = "fake-embedding"
+
+        def embed(self, texts, *, producer_step_id="x"):
+            vectors = []
+            for text in texts:
+                raw = str(text).encode("utf-8")[:16].ljust(16, b"")
+                vectors.append(tuple(((byte * 7) % 13) / 13 for byte in raw))
+            return SimpleNamespace(
+                vectors=tuple(vectors),
+                input_tokens=None,
+                model=self.model,
+                request_artifact=None,
+                response_artifact=None,
+            )
+
+    class FakeTextPipeline:
+        embedding = FakeEmbedding()
+
+    class FakeMultimodalPipeline:
+        text_pipeline = FakeTextPipeline()
+
+    store = LocalArtifactStore(tmp_path / "artifacts")
+    repository = SQLiteRuntimeRepository(tmp_path / "db" / "runtime.sqlite3", store)
+    app = create_app(repository, PassiveRuntime(), retrieval_pipeline=FakeMultimodalPipeline())
+
+    async def scenario() -> dict:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/v1/memories",
+                json={
+                    "scope": "user",
+                    "target_id": "user_default",
+                    "category": "constraint",
+                    "statement": "独特标识词组禁止上传原始数据",
+                },
+            )
+            assert created.status_code == 200, created.text
+            recalled = await client.get(
+                "/api/v1/memories/recall",
+                params={"query": "独特标识词组禁止上传原始数据"},
+            )
+            assert recalled.status_code == 200, recalled.text
+            return recalled.json()
+
+    payload = asyncio.run(scenario())
+
+    assert payload["semantic_available"] is True, payload.get("index_error")
+    assert payload["index_error"] is None
+    assert payload["items"], "完全相同的文本必须召回种子记忆"
+    assert payload["items"][0]["semantic_score"] > 0.35
+
+
+def test_unconfigured_embedding_model_wires_no_embedder_and_makes_no_calls(tmp_path) -> None:
+    """回归（B1 验收发现）：provider_effective 未配置 embedding_model 时，
+    适配器缺省模型会静默回退并发起真实付费嵌入调用——此时必须不接线
+    embedder，召回走 recency 确定性兜底且零嵌入调用。"""
+    import asyncio
+
+    import pytest
+
+    httpx = pytest.importorskip("httpx")
+    from conflux_weave.provider import ProviderConfig
+    from conflux_weave.runtime import LocalArtifactStore, SQLiteRuntimeRepository
+    from conflux_weave.server import create_app
+
+    class PassiveRuntime:
+        executor_id = "passive-memory-wiring@v1"
+        task_kinds = ()
+
+        def work_once(self, *, now=None):
+            return None
+
+    embed_calls: list[list[str]] = []
+
+    class RecordingEmbedding:
+        model = "should-never-be-used"
+
+        def embed(self, texts, *, producer_step_id="x"):
+            embed_calls.append(list(texts))
+            raise AssertionError("未配置 embedding_model 时不得发起嵌入调用")
+
+    class FakeTextPipeline:
+        embedding = RecordingEmbedding()
+
+    class FakeMultimodalPipeline:
+        text_pipeline = FakeTextPipeline()
+
+    store = LocalArtifactStore(tmp_path / "artifacts")
+    repository = SQLiteRuntimeRepository(tmp_path / "db" / "runtime.sqlite3", store)
+    app = create_app(
+        repository,
+        PassiveRuntime(),
+        retrieval_pipeline=FakeMultimodalPipeline(),
+        provider_effective=ProviderConfig(
+            base_url="https://provider.example/v1",
+            api_key="sk-test",
+            model="chat-model",
+            embedding_model=None,
+        ),
+    )
+
+    async def scenario() -> dict:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/v1/memories",
+                json={
+                    "scope": "user",
+                    "target_id": "user_default",
+                    "category": "constraint",
+                    "statement": "记忆种子语句",
+                },
+            )
+            assert created.status_code == 200, created.text
+            recalled = await client.get(
+                "/api/v1/memories/recall",
+                params={"query": "任意查询"},
+            )
+            assert recalled.status_code == 200, recalled.text
+            return recalled.json()
+
+    payload = asyncio.run(scenario())
+
+    assert embed_calls == [], "未配置 embedding_model 时不得发起嵌入调用"
+    assert payload["semantic_available"] is False
+    assert payload["index_error"] is None
+    assert payload["items"], "降级路径仍必须返回确定性（recency）结果"
+    assert any("兜底" in (item.get("reason") or "") for item in payload["items"])
