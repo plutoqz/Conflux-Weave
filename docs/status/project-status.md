@@ -605,3 +605,19 @@ P2.3 冻结基准（`p2-multimodal-retrieval-v1`，40 篇论文）当时的裁�
 | C2 Step checkpoint | migration 11 step_checkpoints 台账（七阶段/input_digest/产物/attempt/错误/时间/resumable）；retrieve 复用不重跑付费批次（零新增消耗、报告产物一致）；可重放只读失败自动重试 ≤3；unknown_outcome 标记；`GET /runs/{id}/checkpoints` | 第一批覆盖 retrieve/deliver 外层步骤；plan/claim/verify/synthesize 内部阶段沿用 W3 检查点产物，逐段入账待后续 |
 
 回归：`uv run pytest -q` → **670 passed**（基线 599）。服务经 `serve --no-worker` + 独立 `worker` 双进程与默认单进程两种拓扑真实验证。
+
+## P7 首批：真实能力验证（P7-V）+ 全局搜索（A1）+ 研读联动（A2）+ 备份恢复（A3）（2026-09-13，已合入）
+
+依据 `docs/plans/current/v0.3-P7-后续迭代路线与验收方案.md`；逐项证据、失败案例与诚实边界见 `docs/plans/current/v0.3-P7-V-真实验证记录.md`。
+
+| 主题 | 内容 | 边界 |
+| --- | --- | --- |
+| V1/V2 真实验证 | A5 设置（重启前后持久值=生效值、双探针）与 NotePatch 三场景 409 复验；B1 真实 embedding 召回复验（配对命中 0.70/0.62、无关零注入、跨项目零泄漏） | 记忆删除的向量行残留（SQLite 为权威，召回不受影响）归 P7-B1 |
+| V3 C1/C2 真实恢复 | 付费批次中硬杀 worker：API 重启存活；**lease 精确过期接管（900s 无心跳）→ 诚实冻结不重放**；run1 冻结→显式 retry→完整交付（retrieve/deliver checkpoint 台账） | 未知结果触发 budget.state=stopped，已付费预留场景下 `retry_unknown_external` 实际不可达（恢复=终态失败+新建 Run）——C2 第二批设计输入 |
+| V4 深度研究验收 | run1 报告人工检查（引用支撑/数字无漂移/边界如实）；四格式导出；刷新恢复真实验证 | "来源不可用型"部分失败未单独构造；报告"进一步探索"模板化弱点登记 |
+| P7-V 缺陷修复 | ① P1 图文维度不匹配冻结深度研究（现网 1024 维索引 × 128 维回落 embedder，lancedb 误报"无向量列"）→ 图文分支显式降级；② P1 NotePatch 旧基线静默覆盖（409 真实不可达）→ 非 tip 修订 409+latest_version=tip；③ P2 React 深链路径形式失效 → handleHash 双形式兼容 | 均带回归测试；② 使 A5"刷新基线重应用"契约在真实链路成立 |
+| A1 全局搜索 | migration 12 FTS5(trigram)；`GlobalSearchService`（BM25+结构化过滤+定位）；chat/note/delivery 三写入点钩子；`GET /search`、`/search/{id}/locate`、`POST /search/reindex`；Topbar 即时下拉（类型徽标+匹配原因+片段跳转） | 项目过滤第一批零匹配（不伪造归属）；多语义召回留后续；Edge 回归 `verify_p7_a1_search.mjs` |
+| A2 研读联动 | NotePatch 新增 `quote_anchor`（页码/分段/资产定位，无定位显式 unanchored 不伪造页码）；Note Studio 新增原文阅读窗格（分段按页分组、选择引用 chip、回跳高亮、失败保留选中文本） | 批次一为「页码+分段」定位，非 PDF 版式渲染（pdf.js 留后续）；Edge 回归 `verify_p7_a2_note_anchor.mjs` |
+| A3 备份恢复 | `conflux-weave backup`（备份前 integrity/quick/foreign_key 预检、SQLite backup API 在线快照、LanceDB/Artifact/[source-cache]、config-template.env 密钥红acted+写入断言）；`conflux-weave restore`（清单/哈希/版本预检 → 暂存区计数一致+抽样逐字节可读 → 才切换目录；失败绝不覆盖既有数据） | 恢复目标必须为空目录；增量/PITR 备份不在第一批 |
+
+回归：`uv run pytest -q` → **692 passed**（P6 完善轮 677 → P7 首批 +15：图文降级 4、全局搜索 7、A2 锚点、A3 备份 4，扣除迁移守卫断言更新）。
