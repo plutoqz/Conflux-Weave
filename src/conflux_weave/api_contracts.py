@@ -517,6 +517,43 @@ class MemoryListResponse(_ApiModel):
     total: int = 0
 
 
+class SearchHitResponse(_ApiModel):
+    """A1 全局搜索命中项：带类型、标题、匹配原因与原文定位。"""
+
+    result_id: str
+    object_type: Literal[
+        "chat_message", "run", "note", "document", "paper", "evidence"
+    ]
+    object_id: str
+    type_label: str
+    title: str
+    snippet: str
+    match_reason: str
+    updated_at: str
+    locator: dict[str, Any] = Field(default_factory=dict)
+    deep_link: str
+    score: float = 0.0
+
+
+class SearchResponse(_ApiModel):
+    query: str
+    total: int
+    items: tuple[SearchHitResponse, ...] = ()
+
+
+class SearchLocateResponse(_ApiModel):
+    result_id: str
+    object_type: str
+    object_id: str
+    type_label: str
+    locator: dict[str, Any] = Field(default_factory=dict)
+    deep_link: str
+
+
+class SearchReindexResponse(_ApiModel):
+    indexed: dict[str, int] = Field(default_factory=dict)
+
+
 class MemoryCandidateResponse(_ApiModel):
     candidate_id: str
     scope: Literal["session", "project", "user"]

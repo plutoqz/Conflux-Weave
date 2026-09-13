@@ -564,5 +564,33 @@ _MIGRATIONS = (
             """,
         ),
     ),
+    _Migration(
+        version=12,
+        name="v03_p7_a1_global_search_fts",
+        statements=(
+            # A1 全局搜索：SQLite FTS5 是元数据与全文搜索权威。
+            # trigram 分词器支持中文子串匹配（unicode61 会把连续 CJK 当单 token）；
+            # 不复制对象生命周期列——归档/软删除仍以各权威表为准，查询期过滤。
+            """
+            CREATE VIRTUAL TABLE search_index USING fts5(
+                object_id UNINDEXED,
+                object_type UNINDEXED,
+                title,
+                body,
+                metadata_json UNINDEXED,
+                updated_at UNINDEXED,
+                tokenize='trigram'
+            )
+            """,
+            """
+            CREATE TABLE search_sequence (
+                object_type TEXT NOT NULL,
+                object_id TEXT NOT NULL,
+                fts_rowid INTEGER NOT NULL,
+                PRIMARY KEY (object_type, object_id)
+            )
+            """,
+        ),
+    ),
 )
 

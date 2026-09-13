@@ -730,3 +730,10 @@ class ChatService:
             conn.commit()
         finally:
             conn.close()
+        # A1 全局搜索：消息落库即入索引。钩子失败不得影响业务写入。
+        hook = getattr(self, "on_message_persisted", None)
+        if hook is not None:
+            try:
+                hook(message)
+            except Exception:
+                pass

@@ -233,10 +233,12 @@ class DurableResearchRuntime:
         clock: Callable[[], str] | None = None,
         id_factory: Callable[[str], str] | None = None,
         code_revision: str = "unknown",
+        search_indexer: Any | None = None,
     ) -> None:
         self.repository = repository
         self.artifact_store = artifact_store
         self.executor = executor
+        self.search_indexer = search_indexer
         self.worker = SQLiteStepWorker(
             repository,
             worker_id,
@@ -676,6 +678,28 @@ class DurableResearchRuntime:
             finished_at=now or self.clock(),
             resumable=False,
         )
+        # A1 全局搜索钩子：报告与证据发布即入索引（尽力而为，失败不影响交付）。
+        if self.search_indexer is not None:
+            try:
+                title = ""
+                try:
+                    text = self.artifact_store.read_bytes(report)
+                    title = next(
+                        (line.lstrip("# ").strip() for line in text.decode("utf-8", errors="replace").splitlines() if line.strip().startswith("#")),
+                        "",
+                    )[:160]
+                except Exception:
+                    title = ""
+                self.search_indexer.index_delivery(
+                    run_id=claim.run_id,
+                    objective=title,
+                    report_artifact_id=report.artifact_id,
+                    evidence_artifact_id=evidence.artifact_id,
+                    artifact_store=self.artifact_store,
+                    updated_at=now or self.clock(),
+                )
+            except Exception:
+                pass
 
     def _copy_artifact(
         self,

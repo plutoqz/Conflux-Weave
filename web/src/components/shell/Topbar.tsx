@@ -2,6 +2,7 @@ import React from "react";
 import { Sun, Moon, Sparkles, Activity } from "lucide-react";
 import { useWorkbenchStore } from "@/stores/useWorkbenchStore";
 import { Button } from "@/components/ui/button";
+import { GlobalSearch } from "@/components/shell/GlobalSearch";
 import type { SectionType } from "@/types/workbench";
 
 const navItems: Array<{ id: SectionType; label: string }> = [
@@ -68,6 +69,8 @@ export const Topbar: React.FC = () => {
 
       {/* Right Actions */}
       <div className="flex items-center space-x-3">
+        {/* A1 全局搜索 */}
+        <GlobalSearch />
         {/* Health Dot */}
         <div
           className="flex items-center space-x-2 rounded-full border border-border/80 bg-muted/40 px-3 py-1 text-xs text-foreground/80 font-medium"

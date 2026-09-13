@@ -96,6 +96,10 @@ from conflux_weave.api_contracts import (
     MemoryCandidateListResponse,
     CreateMemoryRequest,
     MemoryCandidateActionRequest,
+    SearchHitResponse,
+    SearchResponse,
+    SearchLocateResponse,
+    SearchReindexResponse,
     SkillBudgetResponse,
     SkillSummaryResponse,
     SkillDetailResponse,
@@ -173,6 +177,7 @@ from conflux_weave.document_notes import (
     load_note_artifact,
 )
 from conflux_weave.documents import LocalDocumentImporter
+from conflux_weave.global_search import GlobalSearchService
 from conflux_weave.config_store import (
     ConfigValidationError,
     ProviderConfigView,
@@ -349,6 +354,7 @@ def create_app(
     retrieval_pipeline: Any | None = None,
     enable_worker: bool = True,
     provider_effective: Any | None = None,
+    search_service: Any | None = None,
 ) -> FastAPI:
     """Build the one ASGI application around injected authoritative components."""
 
@@ -943,6 +949,87 @@ def create_app(
                 # （embedder unavailable / embed failed / lancedb unavailable）。
                 "index_error": memory_recall_service.last_index_error,
             }
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.get("/api/v1/search", response_model=SearchResponse)
+    async def global_search(
+        q: str = Query(..., min_length=1, max_length=400),
+        types: str | None = None,
+        project_id: str | None = None,
+        from_at: str | None = Query(default=None, alias="from"),
+        to_at: str | None = Query(default=None, alias="to"),
+        limit: int = Query(default=20, ge=1, le=100),
+        include_archived: bool = False,
+    ):
+        """A1 全局搜索：跨对话/报告/笔记/文档/论文/Evidence 的 FTS5 检索。
+
+        纯检索路径，无结果时返回空集、不调用任何生成模型；
+        归档与软删除对象默认排除，include_archived=true 时归档可见、软删除恒不可见。
+        """
+        if search_service is None:
+            return JSONResponse(status_code=503, content={"code": "search_unavailable", "message": "全局搜索服务未配置。"})
+        try:
+            type_list = [t.strip() for t in types.split(",") if t.strip()] if types else None
+            hits = search_service.search(
+                q,
+                types=type_list,
+                from_at=from_at,
+                to_at=to_at,
+                project_id=project_id,
+                limit=limit,
+                include_archived=include_archived,
+            )
+            items = tuple(
+                SearchHitResponse(
+                    result_id=hit.result_id,
+                    object_type=hit.object_type,
+                    object_id=hit.object_id,
+                    type_label=hit.type_label,
+                    title=hit.title,
+                    snippet=hit.snippet,
+                    match_reason=hit.match_reason,
+                    updated_at=hit.updated_at,
+                    locator=hit.locator,
+                    deep_link=hit.deep_link,
+                    score=hit.score,
+                )
+                for hit in hits
+            )
+            return SearchResponse(query=q, total=len(items), items=items)
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.get("/api/v1/search/{result_id}/locate", response_model=SearchLocateResponse)
+    async def search_locate(result_id: str):
+        """A1 原文定位：result_id → 深链与 locator（消息/笔记段落/Run/证据）。"""
+        if search_service is None:
+            return JSONResponse(status_code=503, content={"code": "search_unavailable", "message": "全局搜索服务未配置。"})
+        located = search_service.locate(result_id)
+        if located is None:
+            return JSONResponse(status_code=404, content={"code": "search_result_not_found", "message": f"搜索结果 {result_id} 不在索引中。"})
+        return SearchLocateResponse(**located)
+
+    @app.post("/api/v1/search/reindex", response_model=SearchReindexResponse)
+    async def search_reindex():
+        """A1 索引重建：从 SQLite + 注册表 + 产物库全量回填（零 Provider 调用）。"""
+        if search_service is None:
+            return JSONResponse(status_code=503, content={"code": "search_unavailable", "message": "全局搜索服务未配置。"})
+        try:
+            notes_registry = load_notes_registry()
+            library_path = repository.database_path.with_name("library-registry.json")
+            library_registry: list[dict[str, Any]] = []
+            if library_path.is_file():
+                try:
+                    library_registry = json.loads(library_path.read_text(encoding="utf-8"))
+                except ValueError:
+                    library_registry = []
+            indexed = search_service.reindex(
+                notes_registry=notes_registry,
+                library_registry=library_registry,
+                artifact_store=getattr(repository, "artifact_store", None),
+            )
+            return SearchReindexResponse(indexed=indexed)
         except Exception as exc:
             return error_response(exc)
 
@@ -3101,6 +3188,12 @@ def create_app(
             notes.append(entry)
         reg_path.parent.mkdir(parents=True, exist_ok=True)
         reg_path.write_text(json.dumps(notes, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        # A1 全局搜索：笔记保存即入索引（尽力而为，失败不影响笔记落盘）。
+        if search_service is not None:
+            try:
+                search_service.index_note(note)
+            except Exception:
+                pass
 
     @app.post("/api/v1/documents/analyze", response_model=DocumentNoteResponse)
     async def analyze_document_endpoint(request: DocumentAnalyzeRequest):
@@ -3960,6 +4053,7 @@ class LocalRuntimeStack:
         retrieval_pipeline: Any | None,
         provider_configured: bool,
         provider_effective: Any | None = None,
+        search_service: Any | None = None,
     ) -> None:
         self.orchestrator = orchestrator
         self.repository = repository
@@ -3969,6 +4063,8 @@ class LocalRuntimeStack:
         self.provider_configured = provider_configured
         # A5：启动时装配的 Provider 配置快照（进程生效值），供 /api/v1/config 展示。
         self.provider_effective = provider_effective
+        # A1：SQLite FTS5 全局搜索服务（API 路由与写入点钩子共用）。
+        self.search_service = search_service
 
 
 def build_research_runtimes(
@@ -3983,6 +4079,7 @@ def build_research_runtimes(
     """构造 API/Worker 共用的执行平面（无 HTTP 依赖，可独立进程使用）。"""
     store = LocalArtifactStore(artifact_root)
     repository = SQLiteRuntimeRepository(database, store)
+    search_service = GlobalSearchService(database)
     _inject_third_party_keys(dotenv_path)
     workspace = LocalWorkspaceAdapter(
         workspace_root,
@@ -4117,6 +4214,7 @@ def build_research_runtimes(
                     # 可超过 15 分钟；本地单 worker 下放宽租约，避免长批次
                     # 被判为 worker 失联进入 needs_attention。
                     lease_seconds=3600,
+                    search_indexer=search_service,
                 ),
                 deep_research_enabled=deep_enabled,
             )
@@ -4133,6 +4231,13 @@ def build_research_runtimes(
             retrieval=retrieval_pipeline,
             artifact_store=store,
         )
+        chat_service.on_message_persisted = lambda message: search_service.index_chat_message(
+            message_id=message.message_id,
+            conversation_id=message.conversation_id,
+            content=message.content,
+            created_at=message.created_at,
+            run_id=message.run_id,
+        )
         provider_effective = config
     orchestrator = CompositeOrchestrator(
         repository,
@@ -4146,6 +4251,7 @@ def build_research_runtimes(
         retrieval_pipeline=retrieval_pipeline,
         provider_configured=provider_configured,
         provider_effective=provider_effective,
+        search_service=search_service,
     )
 
 
@@ -4185,6 +4291,7 @@ def build_local_app(
         retrieval_pipeline=stack.retrieval_pipeline,
         enable_worker=enable_worker,
         provider_effective=stack.provider_effective,
+        search_service=stack.search_service,
     )
 
 

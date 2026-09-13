@@ -78,6 +78,42 @@ export const api = {
   // Health & Config
   getHealthReady: () => request<HealthReady>("/api/v1/health/ready"),
   getConfig: () => request<any>("/api/v1/config"),
+  // A1 全局搜索：跨类型 FTS5 检索与原文定位
+  globalSearch: (
+    q: string,
+    opts?: { types?: string; limit?: number; includeArchived?: boolean },
+  ) => {
+    const params = new URLSearchParams({ q });
+    if (opts?.types) params.set("types", opts.types);
+    if (opts?.limit) params.set("limit", String(opts.limit));
+    if (opts?.includeArchived) params.set("include_archived", "true");
+    return request<{
+      query: string;
+      total: number;
+      items: Array<{
+        result_id: string;
+        object_type: string;
+        object_id: string;
+        type_label: string;
+        title: string;
+        snippet: string;
+        match_reason: string;
+        updated_at: string;
+        locator: Record<string, any>;
+        deep_link: string;
+        score: number;
+      }>;
+    }>(`/api/v1/search?${params.toString()}`);
+  },
+  searchLocate: (resultId: string) =>
+    request<{
+      result_id: string;
+      object_type: string;
+      object_id: string;
+      type_label: string;
+      locator: Record<string, any>;
+      deep_link: string;
+    }>(`/api/v1/search/${encodeURIComponent(resultId)}/locate`),
   // A5：后端合同为 PUT /api/v1/config/provider（字段与 ProviderConfigUpdateRequest 对齐，
   // extra="forbid"，不得携带多余字段）。
   updateProviderConfig: (data: {
