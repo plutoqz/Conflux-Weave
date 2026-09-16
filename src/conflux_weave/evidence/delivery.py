@@ -184,6 +184,8 @@ def render_evidence_report(
     citations: tuple[Citation, ...],
     evidence_trust: Mapping[str, SourceTrustLevel],
     limitations: tuple[str, ...] = (),
+    overall_summary: str | None = None,
+    unified_claims_summary: tuple[str, ...] = (),
 ) -> str:
     """Render block-level markers and keep exact citations in one summary."""
 
@@ -212,7 +214,7 @@ def render_evidence_report(
             "> 图例：● 有声明级证据；◐ 部分支持；○ 一般背景；! 证据冲突；? 待核验。",
             "> 来源：A 官方/一手；C 可信二手；G 一般来源；? 来源身份未核验。",
             "",
-            "## 回答",
+            "## 回答：各核心子专题有序论述",
             "",
         )
     )
@@ -229,6 +231,9 @@ def render_evidence_report(
         suffix = f" {trust_text}" if trust_text else ""
         lines.extend((f"### {marker}{suffix} {block.heading}", "", block.body, ""))
 
+    if overall_summary:
+        lines.extend(("## 综合研判与全景总结", "", overall_summary, ""))
+
     if limitations:
         lines.extend(("## 限制", ""))
         lines.extend(f"- {item}" for item in limitations)
@@ -236,6 +241,25 @@ def render_evidence_report(
 
     evidence_by_id = {item.evidence_id: item for item in evidence}
     claim_by_id = {claim.claim_id: claim for claim in claims}
+
+    if unified_claims_summary:
+        lines.extend(("## 专题核验论点溯源清单", ""))
+        lines.extend(unified_claims_summary)
+        lines.append("")
+
+    image_items = [item for item in evidence if (item.modality == "image" or item.asset_id) and item.asset_id]
+    if image_items:
+        lines.extend(("## 🖼 视觉图表实证画廊 (Visual Evidence)", ""))
+        seen_assets = set()
+        for item in image_items:
+            if item.asset_id not in seen_assets:
+                seen_assets.add(item.asset_id)
+                cap = item.quote or "学术实证图表"
+                url = f"/api/v1/library/assets/{item.asset_id}/content"
+                lines.append(f"### 图表资产 `{item.asset_id}`")
+                lines.append(f"![{cap}]({url})\n")
+                lines.append(f"*{cap}*\n")
+
     lines.extend(("## Evidence 汇总", ""))
     lines.extend(_evidence_summary_lines(citations, evidence_by_id, claim_by_id, evidence_trust))
     return "\n".join(lines).rstrip() + "\n"
@@ -252,12 +276,18 @@ def _evidence_summary_lines(
         item = evidence_by_id[citation.evidence_id]
         trust = evidence_trust[item.evidence_id]
         locator = json.dumps(item.locator, ensure_ascii=False, sort_keys=True)
-        extra = f"；图片资产 `{item.asset_id}`" if (item.modality == "image" or item.asset_id) else ""
+        is_image = item.modality == "image" or bool(item.asset_id)
+        extra = f"；图片资产 `{item.asset_id}`" if is_image else ""
         lines.append(
             f"[{citation.display_index}] `{claim_by_id[citation.claim_id].claim_id}` -> "
             f"`{item.evidence_id}`；来源 {TRUST_MARKERS[trust]}；SourceSnapshot "
             f"`{item.source_snapshot_id}`{extra}；locator `{locator}`。"
         )
+        if is_image and item.asset_id:
+            caption_text = item.quote or "学术实证图表"
+            lines.append(
+                f"\n> ![{caption_text}](/api/v1/library/assets/{item.asset_id}/content)\n> *图表：{caption_text}*\n"
+            )
     return lines
 
 
@@ -599,6 +629,18 @@ def render_fused_report(
             if text:
                 lines.append(f"- 待进一步回答：{text}。")
         lines.append("")
+    image_items = [item for item in evidence if (item.modality == "image" or item.asset_id) and item.asset_id]
+    if image_items:
+        lines.extend(("## 🖼 视觉图表实证画廊 (Visual Evidence)", ""))
+        seen_assets = set()
+        for item in image_items:
+            if item.asset_id not in seen_assets:
+                seen_assets.add(item.asset_id)
+                cap = item.quote or "学术实证图表"
+                url = f"/api/v1/library/assets/{item.asset_id}/content"
+                lines.append(f"### 图表资产 `{item.asset_id}`")
+                lines.append(f"![{cap}]({url})\n")
+                lines.append(f"*{cap}*\n")
     lines.extend(("## 来源引用", ""))
     for key in ordered_keys:
         entry = reference_entry(key)

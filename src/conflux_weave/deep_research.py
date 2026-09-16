@@ -680,11 +680,33 @@ class DeepResearchWorkflow:
             )
             for offset, chunk in enumerate(local_chunks, 1)
         )
-        evidence = tuple(web_evidence) + local_evidence
+
+        visual_evidence: list[EvidenceRef] = []
+        if self.bridge._retrieval is not None and hasattr(self.bridge._retrieval, "search_images_by_text"):
+            try:
+                image_hits = self.bridge._retrieval.search_images_by_text(objective, top_k=4)
+                for img_hit in image_hits:
+                    cap = getattr(img_hit, "caption", "") or ""
+                    v_ev_id = f"evidence-visual-{len(visual_evidence) + 1:03d}"
+                    visual_evidence.append(
+                        EvidenceRef(
+                            evidence_id=v_ev_id,
+                            source_snapshot_id=getattr(img_hit, "source_snapshot_id", "") or getattr(img_hit, "document_id", ""),
+                            locator=dict(getattr(img_hit, "locator", {}) or {}),
+                            quote=cap or "学术研究关联图表/架构图",
+                            extraction_method="deep-research-multimodal-retrieval-v1",
+                            modality="image",
+                            asset_id=getattr(img_hit, "asset_id", None),
+                            artifact_ref=getattr(img_hit, "artifact_ref", None),
+                        )
+                    )
+            except Exception:
+                pass
+
+        evidence = tuple(web_evidence) + local_evidence + tuple(visual_evidence)
 
         evidence_ms = int((time.monotonic() - bridge_started) * 1000) - bridge_ms
         local_call_count = max(1, len(result.planned_queries)) if local_chunks else 0
-        provider_call_count = len(snapshot_records) + local_call_count + 1
         usage = {
             "input_tokens": int(result.token_usage.get("input_tokens", 0)),
             "output_tokens": int(result.token_usage.get("output_tokens", 0)),
@@ -910,6 +932,18 @@ class DeepResearchWorkflow:
                 delivery_shape = "flat"
                 engine_view = "appended-unverified" if engine_body and not (merge is not None and merge.status == "degraded") else "omitted"
             write_ms = int((time.monotonic() - write_started) * 1000)
+
+        if visual_evidence:
+            valid_visuals = [item for item in visual_evidence if item.asset_id]
+            if valid_visuals:
+                report += "\n\n---\n\n## 核心学术图表与实验可视化 (Visual Evidence)\n\n"
+                report += "> 本次深度研究检索到与研究目标相关的文献图表与技术架构图，供比对与实证参考：\n\n"
+                for item in valid_visuals:
+                    cap = item.quote or "文献关联图表"
+                    page_str = f"（第 {item.locator.get('page', 1)} 页）" if item.locator and item.locator.get("page") else ""
+                    report += f"![{cap}](/api/v1/library/assets/{item.asset_id}/content)\n\n"
+                    report += f"*{cap} {page_str}*\n\n"
+
         report_ref = self.store.put_bytes(
             report.encode("utf-8"),
             media_type="text/markdown; charset=utf-8",
@@ -988,7 +1022,7 @@ class DeepResearchWorkflow:
             report_artifact_id=report_ref.artifact_id,
             manifest_artifact_id=manifest_ref.artifact_id,
             claims=accepted_claims,
-            evidence=accepted_evidence,
+            evidence=accepted_evidence + tuple(visual_evidence),
             citations=citations,
             usage=usage,
             provider_call_count=provider_call_count,

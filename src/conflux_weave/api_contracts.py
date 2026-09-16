@@ -83,6 +83,8 @@ class ChatMessageRequest(_ApiModel):
     question: str = Field(min_length=1, max_length=8_000)
     conversation_id: str | None = Field(default=None, max_length=64)
     mode: Literal["auto", "direct", "rag", "deep", "document", "project"] = "direct"
+    web_search: bool = False
+    thinking_depth: Literal["quick", "deep", "rigorous"] = "deep"
 
 
 class RouterRequest(_ApiModel):
@@ -181,6 +183,7 @@ class ChatAnswerResponse(ChatMessageRecord):
     intent_summary: str | None = None
     run_id: str | None = None
     memory_candidates: tuple[dict[str, Any], ...] = ()
+    image_assets: tuple[dict[str, Any], ...] = ()
 
 
 class ChatHistoryResponse(_ApiModel):
@@ -190,7 +193,7 @@ class ChatHistoryResponse(_ApiModel):
 class VerifiedResearchTaskRequest(_ApiModel):
     objective: str = Field(min_length=1, max_length=4_000)
     mode: Literal["single", "managed"] = "single"
-    max_subquestions: int = Field(default=4, ge=2, le=4)
+    max_subquestions: int = Field(default=4, ge=2, le=6)
 
 
 class DeepResearchTaskRequest(_ApiModel):
@@ -256,7 +259,7 @@ class ResearchRunContextResponse(_ApiModel):
     conversation_id: str | None = None
     mode: Literal["discovery", "single", "managed", "fixture", "deep"]
     corpus_scope: str
-    max_subquestions: int | None = Field(default=None, ge=2, le=4)
+    max_subquestions: int | None = Field(default=None, ge=2, le=6)
     parent_run_id: str | None = None
     follow_up_question: str | None = None
 
@@ -404,8 +407,9 @@ class ProjectAskResponse(_ApiModel):
 
 
 class CodingProposalRequest(_ApiModel):
-    instruction: str = Field(min_length=1, max_length=2_000)
-    target_file: str = Field(min_length=1)
+    prompt: str | None = None
+    instruction: str | None = None
+    target_file: str | None = None
     custom_replacement: str | None = None
 
 
@@ -426,9 +430,9 @@ class CodingProposalResponse(_ApiModel):
 
 class CodingApplyRequest(_ApiModel):
     proposal_id: str
-    target_file: str
-    expected_hash: str
-    proposed_content: str
+    target_file: str | None = None
+    expected_hash: str | None = None
+    proposed_content: str | None = None
 
 
 class CodingApplyResponse(_ApiModel):

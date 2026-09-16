@@ -266,8 +266,8 @@ class DurableResearchRuntime:
             raise ValueError("objective must not be empty")
         if task_kind not in RESEARCH_TASK_KINDS:
             raise ValueError(f"unsupported research task kind: {task_kind}")
-        if not 2 <= max_subquestions <= 4:
-            raise ValueError("max_subquestions must be between 2 and 4")
+        if not 2 <= max_subquestions <= 6:
+            raise ValueError("max_subquestions must be between 2 and 6")
         if (parent_run_id is None) != (follow_up_question is None):
             raise ValueError("parent_run_id and follow_up_question must be provided together")
         if parent_run_id is not None and (

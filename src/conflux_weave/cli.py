@@ -348,3 +348,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command in _LOCAL_VALIDATION_COMMANDS:
         return run_local_validation(args, _print_json)
     parser.error(f"unsupported command: {args.command}")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+

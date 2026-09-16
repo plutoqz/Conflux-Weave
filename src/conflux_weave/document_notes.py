@@ -547,7 +547,10 @@ class NoteHtmlRenderer:
       padding: 32px 20px;
     }}
     .note-container {{
-      max-width: 920px;
+      max-width: 100%;
+      width: 100%;
+      box-sizing: border-box;
+      padding: 24px 32px;
       margin: 0 auto;
       display: flex;
       flex-direction: column;
@@ -768,7 +771,8 @@ class NoteHtmlRenderer:
       background: var(--chalk);
       font-weight: 600;
       color: var(--ink);
-      white-space: nowrap;
+      white-space: normal;
+      word-break: break-word;
     }}
     .note-table tbody tr:nth-child(even) {{
       background: color-mix(in srgb, var(--chalk) 65%, transparent);

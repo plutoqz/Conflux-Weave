@@ -115,8 +115,8 @@ class ManagedVerifiedResearchWorkflow:
     def execute(self, objective: str, *, max_subquestions: int = 4) -> ManagedResearchExecution:
         if not objective.strip():
             raise ValueError("objective must not be empty")
-        if not 2 <= max_subquestions <= 4:
-            raise ValueError("max_subquestions must be between 2 and 4")
+        if not 2 <= max_subquestions <= 6:
+            raise ValueError("max_subquestions must be between 2 and 6")
         plan_completion = self.manager_chat.complete(
             system_prompt=MANAGER_PLAN_SYSTEM_PROMPT,
             user_prompt=json.dumps({"objective": objective, "max_subquestions": max_subquestions}, ensure_ascii=False),
@@ -156,7 +156,7 @@ class ManagedVerifiedResearchWorkflow:
             )
             for item in subquestions
         )
-        claims, evidence, citations, blocks = self._aggregate(objective, normalized, subruns)
+        claims, evidence, citations, blocks, all_claim_sections = self._aggregate(objective, normalized, subruns)
         require_closed_citations(claims, evidence, citations)
         answered_subquestions = sum(bool(item.claims) for item in subruns)
         coverage_completion = None
@@ -230,6 +230,8 @@ class ManagedVerifiedResearchWorkflow:
             intro_lines.append("")
         intro_lines.append("---")
 
+        overall_summary = self._synthesize_overall_summary(objective, subquestions, claims)
+
         report = render_evidence_report(
             title=f"深度学术研究报告：{objective}",
             intro_lines=tuple(intro_lines),
@@ -239,6 +241,8 @@ class ManagedVerifiedResearchWorkflow:
             citations=citations,
             evidence_trust={item.evidence_id: SourceTrustLevel.GENERAL_SOURCE for item in evidence},
             limitations=limitations,
+            overall_summary=overall_summary,
+            unified_claims_summary=all_claim_sections,
         )
         report_ref = self.store.put_bytes(report.encode("utf-8"), media_type="text/markdown; charset=utf-8", producer_step_id="s1-manager-deliver", schema_version="conflux-weave.managed-research-report.v1")
         manifest = {
@@ -522,6 +526,7 @@ class ManagedVerifiedResearchWorkflow:
         evidence = []
         citations = []
         blocks = []
+        all_claim_sections = []
         display_index = 1
         for sub_index, (question, run) in enumerate(zip(subquestions, subruns), 1):
             claim_map = {item.claim_id: f"sq{sub_index}-{item.claim_id}" for item in run.claims}
@@ -564,16 +569,16 @@ class ManagedVerifiedResearchWorkflow:
                         f"{claim.text}\n\n"
                         f"> *支撑流水线：`{claim.generated_by_step}` ；声明标识：`{claim.claim_id}`*"
                     )
+                all_claim_sections.extend(claim_sections)
 
                 synthesis = self._synthesize_section(objective, question, sub_index, remapped_claims)
                 if synthesis:
-                    block_body = (
-                        synthesis
-                        + "\n\n---\n\n### 专题核验论点溯源清单\n\n"
-                        + "\n\n---\n\n".join(claim_sections)
-                    )
+                    block_body = synthesis
                 else:
-                    block_body = "\n\n---\n\n".join(claim_sections)
+                    block_body = "\n\n".join(
+                        f"- **论点 {sub_index}.{c_idx}**：{claim.text}"
+                        for c_idx, claim in enumerate(remapped_claims, 1)
+                    )
 
                 blocks.append(
                     AnswerBlock(
@@ -591,4 +596,41 @@ class ManagedVerifiedResearchWorkflow:
                         EvidenceSupportStatus.UNSUPPORTED_CLAIM,
                     )
                 )
-        return tuple(claims), tuple(evidence), tuple(citations), tuple(blocks)
+        return tuple(claims), tuple(evidence), tuple(citations), tuple(blocks), tuple(all_claim_sections)
+
+    def _synthesize_overall_summary(
+        self, objective: str, subquestions, all_claims: tuple[Claim, ...]
+    ) -> str | None:
+        if not all_claims or not self._can_synthesize():
+            return None
+        sq_summaries = [
+            f"子专题 {i}: {getattr(sq, 'question', str(sq))}"
+            for i, sq in enumerate(subquestions, 1)
+        ]
+        prompt_payload = {
+            "research_objective": objective,
+            "subquestions": sq_summaries,
+            "all_verified_claims": [
+                {"claim_id": c.claim_id, "text": c.text} for c in all_claims[:20]
+            ],
+        }
+        try:
+            completion = self.manager_chat.complete(
+                system_prompt=(
+                    "你是资深学术研究主管。请根据各子专题的调研发现与核心论点，对整个调研课题撰写一份高水准的综合研判与全景总结（400-800字）。"
+                    "内容应包括：1. 跨专题核心发现的系统性整合与机制对比；2. 关键技术瓶颈与工程权衡；3. 实践启示与未来研究/落地建议。"
+                    "行文严谨客观、逻辑清晰，切勿出现空泛套话，直接输出 Markdown 正文。"
+                ),
+                user_prompt=json.dumps(prompt_payload, ensure_ascii=False),
+                max_output_tokens=3000,
+                temperature=0.3,
+                json_object=False,
+                enable_thinking=False,
+                producer_step_id="s1-manager-overall-synthesis",
+            )
+            content = (completion.content or "").strip()
+            if content:
+                return content
+        except Exception:
+            pass
+        return None
