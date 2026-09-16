@@ -214,6 +214,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ decision: "fail_unknown_external" }),
     }),
+  cancelRun: (runId: string) =>
+    request<RunDetail>(`/api/v1/runs/${encodeURIComponent(runId)}/cancel`, {
+      method: "POST",
+    }),
   rerunRun: (runId: string) => request(`/api/v1/runs/${encodeURIComponent(runId)}/rerun`, { method: "POST" }),
   followUpRun: (runId: string, query: string) =>
     request(`/api/v1/runs/${encodeURIComponent(runId)}/follow-up`, {

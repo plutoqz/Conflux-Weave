@@ -137,6 +137,7 @@ export interface ChatMessage {
     scope?: string;
     category?: string;
     reason?: string;
+    status?: "pending" | "approved" | "rejected";
   }>;
   image_assets?: Array<{
     asset_id: string;
@@ -144,6 +145,13 @@ export interface ChatMessage {
     page?: number | null;
     url: string;
   }>;
+  citations?: Array<{
+    index: number;
+    chunk_id: string;
+    source_snapshot_id: string;
+    locator?: string;
+  }>;
+  verification?: "model-knowledge" | "unverified-aggregation" | "durable-run-dispatched";
 }
 
 export interface ConversationSummary {

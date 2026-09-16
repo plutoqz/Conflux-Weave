@@ -58,9 +58,16 @@ export const App: React.FC = () => {
         if (runId) {
           setActiveRunId(runId);
         }
+        const docId = params.get("document_id") || params.get("doc_id");
+        if (docId) {
+          openNoteStudio(docId);
+        }
       }
       if (pathRunId && base === "research") {
         setActiveRunId(pathRunId);
+      }
+      if (pathRunId && base === "library") {
+        openNoteStudio(pathRunId);
       }
     };
     handleHash();

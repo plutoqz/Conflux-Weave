@@ -21,6 +21,7 @@ import {
   Trash2,
   RotateCcw,
   Globe,
+  AlertTriangle,
 } from "lucide-react";
 import { marked } from "marked";
 import { renderMarkdownWithMath } from "@/lib/math";
@@ -405,13 +406,26 @@ export const ChatView: React.FC = () => {
   const [webSearch, setWebSearch] = useState<boolean>(false);
   const [thinkingDepth, setThinkingDepth] = useState<"quick" | "deep" | "rigorous">("deep");
   const [lightboxImage, setLightboxImage] = useState<{ url: string; caption?: string } | null>(null);
-  const [candidateActions, setCandidateActions] = useState<Record<string, "approved" | "rejected" | "loading">>({});
+  const [candidateActions, setCandidateActions] = useState<Record<string, "approved" | "rejected" | "loading">>(() => {
+    try {
+      const saved = localStorage.getItem("cw_candidate_actions");
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
 
   const handleCandidateAction = async (candidateId: string, action: "approve" | "reject") => {
     setCandidateActions((prev) => ({ ...prev, [candidateId]: "loading" }));
     try {
       await api.actOnMemoryCandidate(candidateId, action);
-      setCandidateActions((prev) => ({ ...prev, [candidateId]: action === "approve" ? "approved" : "rejected" }));
+      setCandidateActions((prev) => {
+        const next = { ...prev, [candidateId]: action === "approve" ? ("approved" as const) : ("rejected" as const) };
+        try {
+          localStorage.setItem("cw_candidate_actions", JSON.stringify(next));
+        } catch {}
+        return next;
+      });
     } catch {
       setCandidateActions((prev) => {
         const next = { ...prev };
@@ -489,6 +503,35 @@ export const ChatView: React.FC = () => {
     scrollToBottom();
   }, [messages]);
 
+  const getRequestedConvId = () => {
+    const hash = window.location.hash;
+    const pathMatch = (hash.match(/^#\/chat\/([^?]+)/) || [])[1];
+    if (pathMatch) return decodeURIComponent(pathMatch);
+    const queryPart = hash.split("?")[1] || "";
+    const params = new URLSearchParams(queryPart);
+    return params.get("conversation_id") || params.get("conv_id") || null;
+  };
+
+  const loadDraft = (convId: string | null) => {
+    try {
+      const draft = localStorage.getItem("cw_draft_" + (convId || "new")) || "";
+      setInput(draft);
+    } catch {
+      setInput("");
+    }
+  };
+
+  const handleInputChange = (val: string) => {
+    setInput(val);
+    try {
+      if (val) {
+        localStorage.setItem("cw_draft_" + (activeConversationId || "new"), val);
+      } else {
+        localStorage.removeItem("cw_draft_" + (activeConversationId || "new"));
+      }
+    } catch {}
+  };
+
   // Load conversation list on mount
   const refreshConversations = async (targetConvId?: string, status = convFilter) => {
     try {
@@ -498,11 +541,13 @@ export const ChatView: React.FC = () => {
       setConversations(items);
 
       // Match target, or check URL hash, or fallback to first
-      const requestedId = targetConvId || (window.location.hash.match(/^#\/chat\/([^?]+)/) || [])[1];
+      const requestedId = targetConvId || getRequestedConvId();
       const found = items.find((it) => it.conversation_id === requestedId) || items[0];
 
-      if (found && !activeConversationId) {
+      if (found && (!activeConversationId || activeConversationId !== found.conversation_id)) {
         await selectConversation(found.conversation_id);
+      } else if (!items.length) {
+        loadDraft(null);
       }
     } catch (err) {
       console.error("Failed to load conversations:", err);
@@ -535,9 +580,21 @@ export const ChatView: React.FC = () => {
     };
   }, [convFilter]);
 
+  useEffect(() => {
+    const handleHashChange = () => {
+      const target = getRequestedConvId();
+      if (target && target !== activeConversationId) {
+        selectConversation(target);
+      }
+    };
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
+  }, [activeConversationId]);
+
   const selectConversation = async (convId: string) => {
     try {
       setActiveConversationId(convId);
+      loadDraft(convId);
       const detail = await api.getConversationDetail(convId);
       setMessages(detail.messages || []);
       if (detail.active_mode && (detail.active_mode === "direct" || detail.active_mode === "rag" || detail.active_mode === "deep")) {
@@ -552,13 +609,13 @@ export const ChatView: React.FC = () => {
   const handleNewConversation = () => {
     setActiveConversationId(null);
     setMessages([]);
-    setInput("");
+    loadDraft(null);
     window.history.replaceState(null, "", "#/chat");
   };
 
-  const handleSend = async (e?: React.FormEvent) => {
+  const handleSend = async (e?: React.FormEvent, retryPrompt?: string) => {
     if (e) e.preventDefault();
-    const q = input.trim();
+    const q = (retryPrompt || input).trim();
     if (!q || loading) return;
 
     const userMsg: ChatMessage = {
@@ -569,6 +626,9 @@ export const ChatView: React.FC = () => {
     };
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
+    try {
+      localStorage.removeItem("cw_draft_" + (activeConversationId || "new"));
+    } catch {}
     setLoading(true);
 
     try {
@@ -590,6 +650,8 @@ export const ChatView: React.FC = () => {
         memory_candidates: res.memory_candidates,
         image_assets: res.image_assets,
         run_id: res.run_id,
+        citations: res.citations || [],
+        verification: res.verification || "model-knowledge",
       };
       setMessages((prev) => [...prev, assistantMsg]);
 
@@ -600,6 +662,10 @@ export const ChatView: React.FC = () => {
         api.getConversations().then((cRes) => setConversations(cRes.items || [])).catch(() => {});
       }
     } catch (err: any) {
+      setInput(q);
+      try {
+        localStorage.setItem("cw_draft_" + (activeConversationId || "new"), q);
+      } catch {}
       setMessages((prev) => [
         ...prev,
         {
@@ -884,10 +950,28 @@ export const ChatView: React.FC = () => {
                         />
                       ) : (
                         <div onClick={handleCitationClick}>
-                          <div
-                            className="prose prose-stone dark:prose-invert max-w-none text-base leading-relaxed font-serif-academic text-foreground [&_.katex-display]:my-3 [&_.katex-display]:overflow-x-auto [&_.katex-display]:text-center"
-                            dangerouslySetInnerHTML={renderMarkdown(msg.content)}
-                          />
+                          {msg.content.startsWith("回答发生错误:") ? (
+                            <div className="flex flex-col gap-2">
+                              <div className="text-destructive flex items-center gap-1.5 text-xs font-sans">
+                                <AlertTriangle className="h-4 w-4 shrink-0" />
+                                <span>{msg.content}</span>
+                              </div>
+                              {input && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleSend(undefined, input)}
+                                  className="self-start text-xs font-sans px-2.5 py-1 rounded bg-destructive/10 text-destructive hover:bg-destructive/20 transition cursor-pointer"
+                                >
+                                  重试发送
+                                </button>
+                              )}
+                            </div>
+                          ) : (
+                            <div
+                              className="prose prose-stone dark:prose-invert max-w-none text-base leading-relaxed font-serif-academic text-foreground [&_.katex-display]:my-3 [&_.katex-display]:overflow-x-auto [&_.katex-display]:text-center"
+                              dangerouslySetInnerHTML={renderMarkdown(msg.content)}
+                            />
+                          )}
                           {msg.message_id && (
                             <div className="pt-2 mt-3 border-t border-border/40 flex items-center gap-2.5 text-xs font-mono text-muted-foreground">
                               <span className="flex items-center gap-1">
@@ -919,7 +1003,7 @@ export const ChatView: React.FC = () => {
                           </span>
                           {msg.memory_candidates.map((mem) => {
                             const displayText = mem.statement || (mem.key ? `${mem.key}: ${mem.value}` : "学术事实记忆");
-                            const actionState = candidateActions[mem.candidate_id];
+                            const actionState = candidateActions[mem.candidate_id] || (mem.status === "approved" ? "approved" : mem.status === "rejected" ? "rejected" : undefined);
                             return (
                               <div
                                 key={mem.candidate_id}
@@ -930,14 +1014,27 @@ export const ChatView: React.FC = () => {
                                   <Badge variant="outline" className="text-xs font-mono text-emerald-600 border-emerald-500/40 bg-emerald-50/50 dark:bg-emerald-950/20 shrink-0">
                                     已沉淀入库
                                   </Badge>
-                                ) : (
-                                  <Badge
-                                    variant="outline"
-                                    className="text-xs font-mono cursor-pointer hover:bg-primary/10 shrink-0"
-                                    onClick={() => handleCandidateAction(mem.candidate_id, "approve")}
-                                  >
-                                    {actionState === "loading" ? "保存中…" : "沉淀入库"}
+                                ) : actionState === "rejected" ? (
+                                  <Badge variant="outline" className="text-xs font-mono text-muted-foreground border-border bg-muted/40 shrink-0">
+                                    已忽略
                                   </Badge>
+                                ) : (
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    <Badge
+                                      variant="outline"
+                                      className="text-xs font-mono cursor-pointer hover:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30"
+                                      onClick={() => handleCandidateAction(mem.candidate_id, "approve")}
+                                    >
+                                      {actionState === "loading" ? "保存中…" : "沉淀入库"}
+                                    </Badge>
+                                    <Badge
+                                      variant="outline"
+                                      className="text-xs font-mono cursor-pointer hover:bg-destructive/10 text-muted-foreground hover:text-destructive border-border"
+                                      onClick={() => handleCandidateAction(mem.candidate_id, "reject")}
+                                    >
+                                      忽略
+                                    </Badge>
+                                  </div>
                                 )}
                               </div>
                             );
@@ -1011,7 +1108,7 @@ export const ChatView: React.FC = () => {
             <textarea
               rows={2}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => handleInputChange(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={`输入学术问题（Enter 发送，Shift+Enter 换行）...`}
               className="w-full text-xs sm:text-sm p-1 border-0 bg-transparent focus:outline-none focus:ring-0 resize-none min-h-[48px] max-h-[140px] leading-relaxed text-foreground placeholder:text-muted-foreground"

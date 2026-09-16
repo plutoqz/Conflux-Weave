@@ -78,57 +78,73 @@ export const ResearchView: React.FC = () => {
     }
   };
 
+  const fetchRunData = async (runId: string) => {
+    try {
+      const detail = await api.getRunDetail(runId);
+      setActiveRunDetail(detail);
+
+      // 1. Fetch delivery artifact content (check artifact_ids and artifact_refs)
+      const artifactIds = detail.delivery?.artifact_ids || detail.delivery?.artifact_refs || [];
+      if (artifactIds.length > 0) {
+        try {
+          const res = await api.getArtifactContent(runId, artifactIds[0]);
+          let content = typeof res === "string" ? res : res.content;
+          if (res.artifact?.media_type?.includes("json") && typeof content === "string") {
+            try {
+              const parsed = JSON.parse(content);
+              content = parsed.answer || parsed.report || JSON.stringify(parsed, null, 2);
+            } catch {}
+          }
+          setReportText(content || "");
+        } catch (err) {
+          console.error("Failed to load artifact content:", err);
+          setReportText(detail.report_content || "");
+        }
+      } else {
+        setReportText(detail.report_content || "");
+      }
+
+      // 2. Fetch evidence list
+      const evidenceIds = detail.delivery?.evidence_ids || detail.delivery?.evidence_refs || [];
+      if (evidenceIds.length > 0) {
+        try {
+          const evs = await Promise.all(
+            evidenceIds.slice(0, 30).map((id) => api.getEvidence(id, runId).catch(() => null))
+          );
+          setEvidenceList(evs.filter(Boolean));
+        } catch (err) {
+          console.error("Failed to load evidence items:", err);
+        }
+      } else if (detail.evidence) {
+        setEvidenceList(detail.evidence);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   useEffect(() => {
     if (!activeRunId) return;
     setLoading(true);
     setReportText("");
     setEvidenceList([]);
 
-    api.getRunDetail(activeRunId)
-      .then(async (detail) => {
-        setActiveRunDetail(detail);
+    fetchRunData(activeRunId).finally(() => setLoading(false));
 
-        // 1. Fetch delivery artifact content (check artifact_ids and artifact_refs)
-        const artifactIds = detail.delivery?.artifact_ids || detail.delivery?.artifact_refs || [];
-        if (artifactIds.length > 0) {
-          try {
-            const res = await api.getArtifactContent(activeRunId, artifactIds[0]);
-            let content = typeof res === "string" ? res : res.content;
-            if (res.artifact?.media_type?.includes("json") && typeof content === "string") {
-              try {
-                const parsed = JSON.parse(content);
-                content = parsed.answer || parsed.report || JSON.stringify(parsed, null, 2);
-              } catch {}
-            }
-            setReportText(content || "");
-          } catch (err) {
-            console.error("Failed to load artifact content:", err);
-            setReportText(detail.report_content || "");
-          }
-        } else {
-          setReportText(detail.report_content || "");
-        }
+    // Live event subscription via SSE
+    const unsubscribe = api.subscribeRunEvents(activeRunId, {
+      onEvent: () => {
+        api.getRunDetail(activeRunId).then((d) => setActiveRunDetail(d)).catch(() => {});
+      },
+      onTerminal: () => {
+        fetchRunData(activeRunId);
+      },
+    });
 
-        // 2. Fetch evidence list
-        const evidenceIds = detail.delivery?.evidence_ids || detail.delivery?.evidence_refs || [];
-        if (evidenceIds.length > 0) {
-          try {
-            const evs = await Promise.all(
-              evidenceIds.slice(0, 30).map((id) => api.getEvidence(id, activeRunId).catch(() => null))
-            );
-            setEvidenceList(evs.filter(Boolean));
-          } catch (err) {
-            console.error("Failed to load evidence items:", err);
-          }
-        } else if (detail.evidence) {
-          setEvidenceList(detail.evidence);
-        }
-      })
-      .catch((err) => {
-        console.error(err);
-      })
-      .finally(() => setLoading(false));
-  }, [activeRunId, setActiveRunDetail]);
+    return () => {
+      unsubscribe();
+    };
+  }, [activeRunId]);
 
   // Parse markdown headings for TOC
   useEffect(() => {
@@ -300,21 +316,59 @@ export const ResearchView: React.FC = () => {
     }
   };
 
+  const [actionLoading, setActionLoading] = useState(false);
+
+  const handleCancel = async () => {
+    if (!activeRunId || actionLoading) return;
+    if (!window.confirm("确定要取消此研究任务吗？已生成的部分证据将保留。")) return;
+    setActionLoading(true);
+    try {
+      await api.cancelRun(activeRunId);
+      await fetchRunData(activeRunId);
+    } catch (e: any) {
+      alert(`取消失败: ${e.message}`);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   const handleRerun = async () => {
-    if (!activeRunId) return;
+    if (!activeRunId || actionLoading) return;
+    setActionLoading(true);
     try {
       await api.rerunRun(activeRunId);
+      await fetchRunData(activeRunId);
     } catch (e: any) {
-      alert(e.message);
+      alert(`重试失败: ${e.message}`);
+    } finally {
+      setActionLoading(false);
     }
   };
 
   const handleRetry = async () => {
-    if (!activeRunId) return;
+    if (!activeRunId || actionLoading) return;
+    setActionLoading(true);
     try {
       await api.retryRun(activeRunId);
+      await fetchRunData(activeRunId);
     } catch (e: any) {
-      alert(e.message);
+      alert(`重试失败: ${e.message}`);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleFail = async () => {
+    if (!activeRunId || actionLoading) return;
+    if (!window.confirm("确定要终止并标记为失败吗？这将结束重试流程。")) return;
+    setActionLoading(true);
+    try {
+      await api.failRun(activeRunId);
+      await fetchRunData(activeRunId);
+    } catch (e: any) {
+      alert(`终止失败: ${e.message}`);
+    } finally {
+      setActionLoading(false);
     }
   };
 
@@ -361,6 +415,17 @@ export const ResearchView: React.FC = () => {
         </div>
 
         <div className="flex items-center space-x-2">
+          {(currentStatus === "working" || currentStatus === "pending" || currentStatus === "running") && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={actionLoading}
+              onClick={handleCancel}
+              className="gap-1.5 text-xs text-destructive border-destructive/40 hover:bg-destructive/10 font-serif-academic cursor-pointer"
+            >
+              <span>取消任务</span>
+            </Button>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -373,6 +438,7 @@ export const ResearchView: React.FC = () => {
           <Button
             variant="ghost"
             size="sm"
+            disabled={actionLoading}
             onClick={handleRerun}
             title="重新运行当前任务"
             className="gap-1.5 text-xs text-muted-foreground hover:text-foreground"
@@ -388,6 +454,34 @@ export const ResearchView: React.FC = () => {
         {/* Middle: Golden Reading Canvas (840px max width) */}
         <div className="flex-1 overflow-y-auto px-6 py-8 flex justify-center bg-background">
           <article className="w-full max-w-[840px] space-y-6">
+            {currentStatus === "needs_attention" && (
+              <div className="p-4 rounded-xl border border-amber-500/40 bg-amber-50/70 dark:bg-amber-950/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs sm:text-sm shadow-xs">
+                <div className="flex items-center gap-2 text-amber-800 dark:text-amber-300">
+                  <AlertTriangle className="h-4 w-4 shrink-0" />
+                  <span>任务遇到不确定的外部调用（如付费调用后网络超时），请选择人工恢复策略：</span>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <Button
+                    size="sm"
+                    variant="default"
+                    disabled={actionLoading}
+                    onClick={handleRetry}
+                    className="bg-amber-600 hover:bg-amber-700 text-white text-xs h-7 cursor-pointer"
+                  >
+                    重试外部调用
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={actionLoading}
+                    onClick={handleFail}
+                    className="border-amber-600/40 text-amber-800 dark:text-amber-300 hover:bg-amber-100/50 text-xs h-7 cursor-pointer"
+                  >
+                    终止并标记失败
+                  </Button>
+                </div>
+              </div>
+            )}
             {loading ? (
               <div className="space-y-4 py-8 animate-pulse">
                 <div className="h-8 bg-muted rounded w-2/3" />

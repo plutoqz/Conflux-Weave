@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import {
   Sun,
   Moon,
@@ -11,7 +11,7 @@ import {
   ExternalLink,
   Trash2,
 } from "lucide-react";
-import { useWorkbenchStore } from "@/stores/useWorkbenchStore";
+import { useWorkbenchStore, type GlobalBackgroundTask } from "@/stores/useWorkbenchStore";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { GlobalSearch } from "@/components/shell/GlobalSearch";
@@ -34,6 +34,7 @@ export const Topbar: React.FC = () => {
     theme,
     toggleTheme,
     health,
+    runs,
     backgroundTasks,
     removeBackgroundTask,
     openNoteStudio,
@@ -42,11 +43,28 @@ export const Topbar: React.FC = () => {
 
   const [isTaskCenterOpen, setIsTaskCenterOpen] = useState(false);
 
+  const activeRunsAsTasks: GlobalBackgroundTask[] = useMemo(() => {
+    return (runs || [])
+      .filter((r) => r.state === "working" || r.state === "accepted" || r.state === "queued" || r.state === "needs_attention")
+      .filter((r) => !backgroundTasks.some((bt) => bt.id === r.run_id))
+      .map((r) => ({
+        id: r.run_id,
+        title: r.query || r.run_id,
+        type: "research" as const,
+        status: r.state === "needs_attention" ? ("failed" as const) : ("running" as const),
+        startTime: r.created_at ? new Date(r.created_at).getTime() : Date.now(),
+        message: r.state === "needs_attention" ? "需要人工干预恢复" : "后台研究任务持续运行中...",
+        targetId: r.run_id,
+      }));
+  }, [runs, backgroundTasks]);
+
+  const allTasks = useMemo(() => [...backgroundTasks, ...activeRunsAsTasks], [backgroundTasks, activeRunsAsTasks]);
+
   const isReady = health?.status === "ready";
-  const runningTasks = backgroundTasks.filter((t) => t.status === "running");
+  const runningTasks = allTasks.filter((t) => t.status === "running");
   const runningCount = runningTasks.length;
 
-  const handleOpenTask = (task: (typeof backgroundTasks)[0]) => {
+  const handleOpenTask = (task: GlobalBackgroundTask) => {
     setIsTaskCenterOpen(false);
     if (task.type === "reading" && task.targetId) {
       openNoteStudio(task.targetId);
@@ -127,14 +145,14 @@ export const Topbar: React.FC = () => {
               <Layers className="h-3.5 w-3.5" />
             )}
             <span className="hidden md:inline">任务中心</span>
-            {backgroundTasks.length > 0 && (
+            {allTasks.length > 0 && (
               <Badge
                 variant={runningCount > 0 ? "default" : "secondary"}
                 className={`text-[10px] px-1 py-0 h-4 font-mono ${
                   runningCount > 0 ? "bg-emerald-700 text-white" : ""
                 }`}
               >
-                {runningCount > 0 ? `${runningCount} 运行中` : backgroundTasks.length}
+                {runningCount > 0 ? `${runningCount} 运行中` : allTasks.length}
               </Badge>
             )}
           </Button>
@@ -151,10 +169,10 @@ export const Topbar: React.FC = () => {
                   <div className="flex items-center gap-1.5">
                     <Layers className="h-4 w-4 text-emerald-800 dark:text-emerald-300" />
                     <span className="text-xs font-serif-academic font-bold text-foreground">
-                      并发与后台任务中心 ({backgroundTasks.length})
+                      并发与后台任务中心 ({allTasks.length})
                     </span>
                   </div>
-                  {backgroundTasks.some((t) => t.status !== "running") && (
+                  {allTasks.some((t) => t.status !== "running") && (
                     <button
                       onClick={() => {
                         backgroundTasks
@@ -169,13 +187,13 @@ export const Topbar: React.FC = () => {
                   )}
                 </div>
 
-                {backgroundTasks.length === 0 ? (
+                {allTasks.length === 0 ? (
                   <div className="py-8 text-center text-xs text-muted-foreground font-serif-academic">
                     当前没有正在执行或待处理的后台任务。
                   </div>
                 ) : (
                   <div className="max-h-72 overflow-y-auto space-y-1.5 pr-0.5">
-                    {backgroundTasks.map((t) => {
+                    {allTasks.map((t) => {
                       const elapsed = Math.round((Date.now() - t.startTime) / 1000);
                       return (
                         <div

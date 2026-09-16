@@ -448,13 +448,18 @@ class GlobalSearchService:
         if object_type == "run":
             return f"#/research?run_id={object_id}"
         if object_type == "evidence" and metadata.get("run_id"):
-            return f"#/research?run_id={metadata['run_id']}"
+            return f"#/research?run_id={metadata['run_id']}&evidence_id={object_id}"
         if object_type == "chat_message":
-            return "#/chat"
+            conv_id = metadata.get("conversation_id")
+            if conv_id:
+                return f"#/chat?conversation_id={conv_id}&message_id={object_id}"
+            return f"#/chat?message_id={object_id}"
         if object_type in ("note", "document", "paper"):
             document_id = metadata.get("document_id") if object_type == "note" else object_id
-            if object_type == "note" and not document_id:
-                return "#/library"
+            if object_type == "note":
+                if document_id:
+                    return f"#/library?document_id={document_id}&note_id={object_id}"
+                return f"#/library?note_id={object_id}"
             return f"#/library?document_id={document_id}"
         return "#/overview"
 
