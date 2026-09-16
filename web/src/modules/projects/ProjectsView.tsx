@@ -241,7 +241,10 @@ export const ProjectsView: React.FC = () => {
   const [selectedFile, setSelectedFile] = useState<string>("");
   const [fileContent, setFileContent] = useState<string>("");
   const [diff, setDiff] = useState<string>("");
-  const [codingPrompt, setCodingPrompt] = useState<string>("");
+  const [semanticDiff, setSemanticDiff] = useState<any>(null);
+  const [diffLoading, setDiffLoading] = useState<boolean>(false);
+  const [compareBranch, setCompareBranch] = useState<string>("main");
+  const [codingPrompt, setCodingPrompt] = useState<string>("" );
   const [proposal, setProposal] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [treeLoading, setTreeLoading] = useState(false);
@@ -280,6 +283,15 @@ export const ProjectsView: React.FC = () => {
   const [addError, setAddError] = useState<string | null>(null);
   const [submittingAdd, setSubmittingAdd] = useState(false);
   const [browsingFolder, setBrowsingFolder] = useState(false);
+
+  // In-modal Directory Navigator
+  const [showFsBrowser, setShowFsBrowser] = useState<boolean>(false);
+  const [fsDrives, setFsDrives] = useState<string[]>([]);
+  const [fsQuickRoots, setFsQuickRoots] = useState<string[]>([]);
+  const [currentFsPath, setCurrentFsPath] = useState<string>("");
+  const [currentFsDirs, setCurrentFsDirs] = useState<Array<{ name: string; path: string }>>([]);
+  const [currentFsParent, setCurrentFsParent] = useState<string | null>(null);
+  const [fsBrowserLoading, setFsBrowserLoading] = useState<boolean>(false);
 
   const loadProjects = async (selectId?: string) => {
     try {
@@ -340,10 +352,7 @@ export const ProjectsView: React.FC = () => {
       .catch(() => setTree([]))
       .finally(() => setTreeLoading(false));
 
-    api
-      .getProjectSemanticDiff(selectedProjectId)
-      .then((res) => setDiff(res.diff || ""))
-      .catch(() => setDiff(""));
+    fetchSemanticDiff(compareBranch);
 
     setGovLoading(true);
     setLearningLoading(true);
@@ -364,6 +373,44 @@ export const ProjectsView: React.FC = () => {
       .catch(() => setLearningData(null))
       .finally(() => setLearningLoading(false));
   }, [selectedProjectId]);
+
+  const fetchSemanticDiff = async (branch?: string) => {
+    if (!selectedProjectId) return;
+    const b = branch !== undefined ? branch : compareBranch;
+    setDiffLoading(true);
+    try {
+      const res = await api.getProjectSemanticDiff(selectedProjectId, b);
+      setSemanticDiff(res);
+      setDiff(res?.diff || "");
+    } catch {
+      setSemanticDiff(null);
+      setDiff("");
+    } finally {
+      setDiffLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    const handleSelectionChange = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || !sel.toString().trim()) {
+        setSelectionPos(null);
+        setSelectedSnippet("");
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setSelectionPos(null);
+        setSelectedSnippet("");
+      }
+    };
+    document.addEventListener("selectionchange", handleSelectionChange);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("selectionchange", handleSelectionChange);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -390,6 +437,21 @@ export const ProjectsView: React.FC = () => {
     }
   };
 
+  const calcLineRange = (content: string, snippet: string): { startLine: number; endLine: number } => {
+    if (!snippet || !content) return { startLine: 1, endLine: 1 };
+    const trimmed = snippet.trim();
+    let idx = content.indexOf(trimmed);
+    if (idx === -1) {
+      const firstLine = trimmed.split("\n")[0].trim();
+      idx = firstLine ? content.indexOf(firstLine) : -1;
+    }
+    if (idx === -1) return { startLine: 1, endLine: 1 };
+    const startLine = content.substring(0, idx).split("\n").length;
+    const linesCount = trimmed.split("\n").length;
+    const endLine = startLine + linesCount - 1;
+    return { startLine, endLine };
+  };
+
   const handleCodeMouseUp = () => {
     const sel = window.getSelection();
     const text = sel ? sel.toString().trim() : "";
@@ -411,17 +473,26 @@ export const ProjectsView: React.FC = () => {
 
   const handleQuoteToCopilot = (snippetToQuote?: string) => {
     const snippet = snippetToQuote !== undefined ? snippetToQuote : selectedSnippet;
-    const lang = getLanguageFromPath(selectedFile);
-    let quoteBlock = "";
-    if (snippet && snippet.trim()) {
-      quoteBlock = `> 引用自 \`${selectedFile}\`:\n\`\`\`${lang}\n${snippet.trim()}\n\`\`\`\n请帮我分析这段代码：`;
+    let citationBadge = "";
+    if (snippet && snippet.trim() && selectedFile) {
+      const { startLine, endLine } = calcLineRange(fileContent, snippet);
+      const lineTag = startLine === endLine ? `${startLine}行` : `${startLine}行-${endLine}行`;
+      citationBadge = `[${selectedFile}-${lineTag}]`;
     } else if (selectedFile) {
-      quoteBlock = `> 引用文件: \`${selectedFile}\`\n请帮我分析该文件的核心逻辑与实现细节：`;
+      citationBadge = `[${selectedFile}]`;
     } else {
       return;
     }
 
-    setCopilotInput((prev) => (prev.trim() ? `${prev}\n\n${quoteBlock}` : quoteBlock));
+    setCopilotInput((prev) => {
+      const trimmed = prev.trim();
+      if (!trimmed) {
+        return `${citationBadge} 请帮我分析：`;
+      }
+      return `${trimmed} ${citationBadge} `;
+    });
+
+    window.getSelection()?.removeAllRanges();
     setSelectedSnippet("");
     setSelectionPos(null);
 
@@ -435,9 +506,10 @@ export const ProjectsView: React.FC = () => {
 
   const handleBrowseFolder = async () => {
     setBrowsingFolder(true);
+    setAddError(null);
     try {
       const res = await api.browseFolder();
-      if (res.path) {
+      if (res && res.path) {
         if (!addPaths.includes(res.path)) {
           const next = [...addPaths, res.path];
           setAddPaths(next);
@@ -446,11 +518,63 @@ export const ProjectsView: React.FC = () => {
             if (parts.length > 0) setAddName(parts[parts.length - 1]);
           }
         }
+      } else {
+        setAddError("未从文件资源管理器选择文件夹或已取消。如系统弹窗被挡在后台，可检查任务栏，或展开下方【本地磁盘与目录浏览器】直接点选目录。");
       }
     } catch (err: any) {
-      alert(`无法打开资源管理器选择目录: ${err.message}`);
+      setAddError(`无法打开系统资源管理器 (${err.message})。您可以展开下方【本地磁盘与目录浏览器】直接点选目录，或手动输入绝对路径。`);
     } finally {
       setBrowsingFolder(false);
+    }
+  };
+
+  const toggleFsBrowser = async () => {
+    const nextState = !showFsBrowser;
+    setShowFsBrowser(nextState);
+    if (nextState && fsDrives.length === 0) {
+      setFsBrowserLoading(true);
+      try {
+        const res = await api.getFsDrives();
+        setFsDrives(res.drives || []);
+        setFsQuickRoots(res.quick_roots || []);
+        if (res.quick_roots && res.quick_roots.length > 0) {
+          navigateFsDir(res.quick_roots[0]);
+        } else if (res.drives && res.drives.length > 0) {
+          navigateFsDir(res.drives[0]);
+        }
+      } catch {
+        // ignore
+      } finally {
+        setFsBrowserLoading(false);
+      }
+    }
+  };
+
+  const navigateFsDir = async (targetPath: string) => {
+    if (!targetPath) return;
+    setFsBrowserLoading(true);
+    try {
+      const res = await api.getFsDirs(targetPath);
+      if (res.exists) {
+        setCurrentFsPath(res.path);
+        setCurrentFsParent(res.parent || null);
+        setCurrentFsDirs(res.dirs || []);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setFsBrowserLoading(false);
+    }
+  };
+
+  const handleSelectFsDir = (dirPath: string) => {
+    if (!addPaths.includes(dirPath)) {
+      const next = [...addPaths, dirPath];
+      setAddPaths(next);
+      if (!addName.trim()) {
+        const parts = dirPath.split(/[/\\]/).filter(Boolean);
+        if (parts.length > 0) setAddName(parts[parts.length - 1]);
+      }
     }
   };
 
@@ -1046,7 +1170,7 @@ export const ProjectsView: React.FC = () => {
                           <MessageSquare className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-400" />
                           <span>
                             {selectedSnippet
-                              ? `引用选中代码 (${selectedSnippet.split("\n").length}行) 至对话`
+                              ? `引用选中代码 [${calcLineRange(fileContent, selectedSnippet).startLine}-${calcLineRange(fileContent, selectedSnippet).endLine}行] 至对话`
                               : "引用当前文件至对话"}
                           </span>
                         </Button>
@@ -1055,6 +1179,10 @@ export const ProjectsView: React.FC = () => {
                     <div
                       className="flex-1 overflow-auto code-viewer-container relative"
                       onMouseUp={handleCodeMouseUp}
+                      onScroll={() => {
+                        setSelectionPos(null);
+                        setSelectedSnippet("");
+                      }}
                     >
                       {selectionPos && selectedSnippet && (
                         <div
@@ -1731,28 +1859,212 @@ export const ProjectsView: React.FC = () => {
 
             {/* VIEW 7: Git Diff (Git 差异追踪) */}
             {workspaceTab === "diff" && (
-              <div className="h-full flex flex-col p-6 max-w-5xl mx-auto space-y-4">
-                <div className="flex items-center justify-between">
-                  <h3 className="font-serif-academic font-bold text-sm text-foreground flex items-center gap-2">
-                    <GitCompare className="h-4 w-4 text-emerald-700 dark:text-emerald-400" />
-                    工作区 Git 语义差异
-                  </h3>
-                  {diff && (
-                    <Badge variant="outline" className="text-xs font-mono">
-                      {diff.split("\n").length} 行变更
-                    </Badge>
-                  )}
+              <div className="h-full flex flex-col p-6 max-w-5xl mx-auto space-y-4 overflow-y-auto">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/70 pb-3.5">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-700 dark:text-emerald-400">
+                      <GitCompare className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <h3 className="font-serif-academic font-bold text-sm text-foreground flex items-center gap-2">
+                        工作区 Git 语义差异追踪
+                      </h3>
+                      <p className="text-[11px] text-muted-foreground font-serif-academic">
+                        实时监控工作区未提交修改（暂存/未暂存/新文件）及与基准分支的代码演进
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center space-x-1.5 bg-muted/40 px-2.5 py-1 rounded-md border border-border/60 text-xs font-mono">
+                      <GitBranch className="h-3 w-3 text-muted-foreground" />
+                      <span className="text-muted-foreground">当前:</span>
+                      <span className="font-semibold text-emerald-700 dark:text-emerald-400">
+                        {semanticDiff?.current_branch || "HEAD"}
+                      </span>
+                      <span className="text-muted-foreground">⟷ 对比:</span>
+                      <input
+                        value={compareBranch}
+                        onChange={(e) => setCompareBranch(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            fetchSemanticDiff(compareBranch);
+                          }
+                        }}
+                        className="w-16 h-5 px-1 bg-background border border-border/80 rounded text-[11px] font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                        title="输入对比基准分支名称后按回车刷新"
+                      />
+                    </div>
+
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => fetchSemanticDiff(compareBranch)}
+                      disabled={diffLoading}
+                      className="h-7 px-2.5 text-xs font-serif-academic gap-1.5 cursor-pointer"
+                    >
+                      <RefreshCw className={cn("h-3 w-3", diffLoading && "animate-spin")} />
+                      <span>刷新对比</span>
+                    </Button>
+                  </div>
                 </div>
 
-                {diff ? (
-                  <pre className="flex-1 p-4 rounded-xl border border-border/70 bg-muted/20 font-mono text-xs overflow-auto leading-relaxed text-foreground/90 selection:bg-primary/20">
-                    <code>{diff}</code>
-                  </pre>
-                ) : (
-                  <div className="p-16 text-center text-muted-foreground rounded-xl border border-dashed border-border/80">
-                    <CheckCircle2 className="h-8 w-8 mx-auto mb-2 text-emerald-600" />
-                    <span className="font-serif-academic text-sm">工作区当前为整洁状态，无未提交的 Git 变更。</span>
+                {/* Stats & Intent Card */}
+                {semanticDiff && (
+                  <div className="p-4 rounded-xl border border-border/70 bg-card/50 space-y-3 shadow-2xs">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Badge variant="outline" className="text-xs font-mono bg-background">
+                          {semanticDiff.impact_level === "major_experiment"
+                            ? "🚀 重大实验变动"
+                            : semanticDiff.impact_level === "refactor"
+                            ? "🔨 结构性重构"
+                            : semanticDiff.impact_level === "ui_enhancement"
+                            ? "🎨 界面交互优化"
+                            : semanticDiff.impact_level === "test_suite"
+                            ? "🧪 测试套件增强"
+                            : semanticDiff.impact_level === "docs_only"
+                            ? "📝 文档与配置"
+                            : "✨ 常规代码微调"}
+                        </Badge>
+                        {semanticDiff.changed_areas && semanticDiff.changed_areas.map((a: string) => (
+                          <span
+                            key={a}
+                            className="px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-800 dark:text-emerald-300 border border-emerald-500/20 font-serif-academic"
+                          >
+                            {a === "core_algorithms" ? "核心算法与智能体" :
+                             a === "api_service" ? "API服务与契约" :
+                             a === "storage_data" ? "数据存储与持久化" :
+                             a === "workbench_ui" ? "前端工作台与交互" :
+                             a === "test_verification" ? "自动化测试套件" :
+                             a === "documentation_config" ? "文档与工程配置" : a}
+                          </span>
+                        ))}
+                      </div>
+
+                      <div className="flex items-center space-x-2 text-xs font-mono">
+                        <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 font-semibold border border-emerald-500/20">
+                          +{semanticDiff.total_additions || 0} 行
+                        </span>
+                        <span className="px-2 py-0.5 rounded bg-rose-500/10 text-rose-700 dark:text-rose-400 font-semibold border border-rose-500/20">
+                          -{semanticDiff.total_deletions || 0} 行
+                        </span>
+                        <span className="text-muted-foreground text-[11px]">
+                          共 {semanticDiff.file_diff_summaries?.length || 0} 个变更项
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="text-xs text-foreground/90 font-serif-academic leading-relaxed bg-background/60 p-2.5 rounded-lg border border-border/50">
+                      {semanticDiff.experiment_intent}
+                    </div>
                   </div>
+                )}
+
+                {/* Changed Files Summary List */}
+                {semanticDiff?.file_diff_summaries && semanticDiff.file_diff_summaries.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-xs font-serif-academic text-muted-foreground px-1">
+                      <span>变更文件清单（点击可直接打开源码查看）</span>
+                      <span>状态 · 增删行统计</span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {semanticDiff.file_diff_summaries.map((f: any, idx: number) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => handleSelectFile(f.file)}
+                          className="flex items-center justify-between p-2 rounded-lg border border-border/60 bg-background hover:bg-muted/40 transition text-left text-xs font-mono group cursor-pointer"
+                        >
+                          <div className="flex items-center space-x-2 truncate mr-2">
+                            <FileCode className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-400 shrink-0 group-hover:scale-110 transition" />
+                            <span className="truncate text-foreground/90 group-hover:text-emerald-700 dark:group-hover:text-emerald-400 font-medium">
+                              {f.file}
+                            </span>
+                          </div>
+                          <div className="flex items-center space-x-1.5 shrink-0">
+                            <span
+                              className={cn(
+                                "px-1.5 py-0.2 rounded text-[10px] uppercase font-mono",
+                                f.status === "worktree_modified"
+                                  ? "bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30"
+                                  : f.status === "untracked"
+                                  ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30"
+                                  : "bg-sky-500/15 text-sky-700 dark:text-sky-400 border border-sky-500/30"
+                              )}
+                            >
+                              {f.status === "worktree_modified"
+                                ? "未提交"
+                                : f.status === "untracked"
+                                ? "未跟踪"
+                                : "分支提交"}
+                            </span>
+                            {(f.additions > 0 || f.deletions > 0) && (
+                              <span className="text-[10px] text-muted-foreground">
+                                <span className="text-emerald-600">+{f.additions}</span>
+                                {" / "}
+                                <span className="text-rose-600">-{f.deletions}</span>
+                              </span>
+                            )}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Unified Diff View */}
+                {diff ? (
+                  <div className="space-y-1.5 flex-1 flex flex-col min-h-0">
+                    <div className="flex items-center justify-between text-xs font-serif-academic text-muted-foreground px-1">
+                      <span>统一补丁差异 (Unified Diff)</span>
+                      <span className="font-mono text-[11px]">{diff.split("\n").length} 行补丁数据</span>
+                    </div>
+                    <pre className="flex-1 p-4 rounded-xl border border-border/70 bg-muted/25 font-mono text-xs overflow-auto leading-relaxed text-foreground/90 selection:bg-primary/20 max-h-[520px]">
+                      <code>
+                        {diff.split("\n").map((line: string, i: number) => {
+                          const isAdd = line.startsWith("+") && !line.startsWith("+++");
+                          const isDel = line.startsWith("-") && !line.startsWith("---");
+                          const isHunk = line.startsWith("@@");
+                          const isHeader = line.startsWith("diff --git") || line.startsWith("# ===");
+                          return (
+                            <div
+                              key={i}
+                              className={cn(
+                                "px-1 -mx-1",
+                                isAdd && "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 font-medium",
+                                isDel && "bg-rose-500/15 text-rose-700 dark:text-rose-400 font-medium",
+                                isHunk && "text-sky-600 dark:text-sky-400 font-bold bg-sky-500/5",
+                                isHeader && "text-foreground font-bold border-t border-border/40 pt-1 mt-1"
+                              )}
+                            >
+                              {line || " "}
+                            </div>
+                          );
+                        })}
+                      </code>
+                    </pre>
+                  </div>
+                ) : (
+                  (!semanticDiff?.file_diff_summaries || semanticDiff.file_diff_summaries.length === 0) && (
+                    <div className="p-16 text-center text-muted-foreground rounded-xl border border-dashed border-border/80">
+                      <CheckCircle2 className="h-8 w-8 mx-auto mb-2 text-emerald-600" />
+                      <span className="font-serif-academic text-sm block">工作区当前为整洁状态，无未提交的代码变更。</span>
+                      <span className="font-serif-academic text-xs text-muted-foreground mt-1 block">
+                        当前分支与对比基准（{compareBranch}）亦完全一致。
+                      </span>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => fetchSemanticDiff(compareBranch)}
+                        className="mt-3 h-7 text-xs font-serif-academic"
+                      >
+                        重新检测
+                      </Button>
+                    </div>
+                  )
                 )}
               </div>
             )}
@@ -2085,6 +2397,117 @@ export const ProjectsView: React.FC = () => {
                 >
                   添加路径
                 </Button>
+              </div>
+
+              {/* Expandable In-Modal Local Directory Quick Browser */}
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={toggleFsBrowser}
+                  className="flex items-center space-x-1.5 text-xs text-emerald-800 dark:text-emerald-300 hover:underline cursor-pointer font-serif-academic"
+                >
+                  <Folder className="h-3.5 w-3.5" />
+                  <span>{showFsBrowser ? "收起本地磁盘与目录点选浏览器 ▲" : "或：展开本地磁盘与目录浏览器 (网页内直接点选) ▼"}</span>
+                </button>
+
+                {showFsBrowser && (
+                  <div className="mt-2 p-3 rounded-lg border border-border/80 bg-muted/30 space-y-2.5">
+                    {/* Drives and Quick Roots */}
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[11px] text-muted-foreground font-mono">驱动器/快速路径:</span>
+                      {fsDrives.map((d) => (
+                        <button
+                          key={d}
+                          type="button"
+                          onClick={() => navigateFsDir(d)}
+                          className={cn(
+                            "px-2 py-0.5 rounded text-[11px] font-mono border transition cursor-pointer",
+                            currentFsPath.startsWith(d)
+                              ? "bg-emerald-800 text-white border-emerald-800 font-semibold"
+                              : "bg-background border-border/70 hover:bg-muted text-foreground"
+                          )}
+                        >
+                          {d}
+                        </button>
+                      ))}
+                      {fsQuickRoots.map((qr) => (
+                        <button
+                          key={qr}
+                          type="button"
+                          onClick={() => navigateFsDir(qr)}
+                          className="px-2 py-0.5 rounded text-[11px] font-mono border bg-background border-border/70 hover:bg-muted text-foreground truncate max-w-[140px] cursor-pointer"
+                          title={qr}
+                        >
+                          {qr.split(/[/\\]/).filter(Boolean).slice(-1)[0] || qr}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Current Path Bar with Back button and Select button */}
+                    <div className="flex items-center justify-between gap-2 p-1.5 rounded bg-background border border-border/60 text-xs font-mono">
+                      <div className="flex items-center space-x-1.5 truncate">
+                        {currentFsParent && (
+                          <button
+                            type="button"
+                            onClick={() => navigateFsDir(currentFsParent)}
+                            className="p-1 hover:bg-muted rounded text-foreground/80 hover:text-foreground shrink-0"
+                            title="返回上一级目录"
+                          >
+                            ⬅
+                          </button>
+                        )}
+                        <span className="truncate text-foreground/90 font-medium">{currentFsPath || "请选择路径..."}</span>
+                      </div>
+                      {currentFsPath && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={() => handleSelectFsDir(currentFsPath)}
+                          className="h-6 px-2 text-[11px] bg-emerald-800 hover:bg-emerald-900 text-white shrink-0 cursor-pointer"
+                        >
+                          ➕ 选用当前目录
+                        </Button>
+                      )}
+                    </div>
+
+                    {/* Subdirectories List */}
+                    <div className="max-h-44 overflow-y-auto space-y-1 rounded border border-border/40 bg-background/80 p-1.5 text-xs font-mono">
+                      {fsBrowserLoading ? (
+                        <div className="p-3 text-center text-muted-foreground text-xs font-serif-academic flex items-center justify-center gap-2">
+                          <RefreshCw className="h-3 w-3 animate-spin" />
+                          <span>正在扫描目录...</span>
+                        </div>
+                      ) : currentFsDirs.length > 0 ? (
+                        currentFsDirs.map((dir) => (
+                          <div
+                            key={dir.path}
+                            className="flex items-center justify-between p-1 rounded hover:bg-muted/50 group transition"
+                          >
+                            <button
+                              type="button"
+                              onClick={() => navigateFsDir(dir.path)}
+                              className="flex items-center space-x-1.5 text-left truncate flex-1 hover:text-emerald-700 dark:hover:text-emerald-400 cursor-pointer"
+                            >
+                              <Folder className="h-3.5 w-3.5 text-amber-600 dark:text-amber-500 shrink-0" />
+                              <span className="truncate">{dir.name}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSelectFsDir(dir.path)}
+                              className="opacity-0 group-hover:opacity-100 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-800 dark:text-emerald-300 hover:bg-emerald-500/20 transition cursor-pointer font-serif-academic"
+                            >
+                              选用
+                            </button>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="p-3 text-center text-muted-foreground text-[11px] font-serif-academic">
+                          该目录下无子文件夹
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 

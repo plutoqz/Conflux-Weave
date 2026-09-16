@@ -457,7 +457,15 @@ export const api = {
   getProjectTree: (projectId: string) => request<any>(`/api/v1/projects/${projectId}/tree`),
   getProjectFile: (projectId: string, filePath: string) =>
     request<any>(`/api/v1/projects/${projectId}/file?path=${encodeURIComponent(filePath)}`),
-  getProjectSemanticDiff: (projectId: string) => request<any>(`/api/v1/projects/${projectId}/git/semantic-diff`),
+  getFsDrives: () => request<{ drives: string[]; quick_roots: string[] }>("/api/v1/projects/fs-drives"),
+  getFsDirs: (path: string) =>
+    request<{ path: string; parent?: string | null; exists: boolean; error?: string; dirs: Array<{ name: string; path: string }> }>(
+      `/api/v1/projects/fs-dirs?path=${encodeURIComponent(path)}`
+    ),
+  getProjectSemanticDiff: (projectId: string, compareBranch?: string) =>
+    request<any>(
+      `/api/v1/projects/${projectId}/git/semantic-diff${compareBranch ? `?compare_branch=${encodeURIComponent(compareBranch)}` : ""}`
+    ),
   proposeProjectCoding: (projectId: string, prompt: string, targetFile?: string) =>
     request<any>(`/api/v1/projects/${projectId}/coding/propose`, {
       method: "POST",
