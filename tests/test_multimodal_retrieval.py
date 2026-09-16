@@ -730,14 +730,17 @@ def test_image_dimension_mismatch_degrades_to_text_only(tmp_path):
 
     run = pipeline.search("transformer self-attention architecture")
     assert len(run.final.hits) >= 1, "text branch must still deliver hits"
-    assert run.image_hits == ()
+    assert len(run.image_hits) >= 1, "caption branch delivers visual hits even on vector conflict"
+    assert run.image_hits[0].asset_id == "asset-transformer-fig1"
     assert run.image_degradation is not None
     assert run.image_degradation.startswith("image_dimension_mismatch(index=1024, embedder=128)")
 
 
-def test_search_images_by_text_dimension_conflict_returns_empty(tmp_path):
+def test_search_images_by_text_dimension_conflict_retrieves_caption(tmp_path):
     pipeline, _ = _build_dimension_mismatch_pipeline(tmp_path)
-    assert pipeline.search_images_by_text("transformer architecture") == ()
+    hits = pipeline.search_images_by_text("transformer architecture")
+    assert len(hits) >= 1
+    assert hits[0].asset_id == "asset-transformer-fig1"
 
 
 def test_search_vector_dimension_mismatch_raises_typed_error(tmp_path):

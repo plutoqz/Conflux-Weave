@@ -412,17 +412,21 @@ def merge_and_rank(records: list[PaperRecord], *, query_terms: tuple[str, ...], 
             merged[match] = _merge_records(merged[match], record)
         for key in _identity_keys(merged[match]):
             indexes[key] = match
+    all_candidates = list(merged)
+    filtered = list(merged)
     clean_terms = tuple(dict.fromkeys(_normalize_title(term) for term in query_terms if len(_normalize_title(term)) > 1))
     if clean_terms:
         minimum_hits = 1 if len(clean_terms) == 1 else 2
-        merged = [paper for paper in merged if _term_hits(paper, clean_terms) >= minimum_hits]
+        filtered = [paper for paper in filtered if _term_hits(paper, clean_terms) >= minimum_hits]
     required = tuple(dict.fromkeys(_normalize_title(term) for term in required_terms if len(_normalize_title(term)) > 1))
     if required:
-        merged = [paper for paper in merged if _term_hits(paper, required) == len(required)]
+        filtered = [paper for paper in filtered if _term_hits(paper, required) == len(required)]
     concepts = tuple(tuple(dict.fromkeys(_normalize_title(term) for term in group if len(_normalize_title(term)) > 1)) for group in required_concepts)
     concepts = tuple(group for group in concepts if group)
     if concepts:
-        merged = [paper for paper in merged if all(_concept_hit(paper, group) for group in concepts)]
+        filtered = [paper for paper in filtered if all(_concept_hit(paper, group) for group in concepts)]
+
+    merged = filtered
     if sort == "newest":
         key = lambda paper: (paper.year or 0, _relevance(paper, query_terms))
     elif sort == "impact":

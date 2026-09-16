@@ -188,6 +188,10 @@ def _find_caption_for_bbox(page: fitz.Page, bbox: BoundingBox | None) -> tuple[s
     if bbox is None:
         return None, None
 
+    # Small decorative icons, symbols, and sub-figure crops should not match figure/table captions
+    if (bbox.width < 140 and bbox.height < 120) or (bbox.width * bbox.height < 15000):
+        return None, None
+
     blocks = page.get_text("blocks")
     candidates: list[tuple[float, str, dict[str, Any]]] = []
 
@@ -201,6 +205,16 @@ def _find_caption_for_bbox(page: fitz.Page, bbox: BoundingBox | None) -> tuple[s
 
         match = CAPTION_PREFIX_PATTERN.match(cleaned_text)
         if match:
+            # Check horizontal overlap / column alignment
+            img_x0 = bbox.x
+            img_x1 = bbox.x + bbox.width
+            h_overlap = min(img_x1, bx1) - max(img_x0, bx0)
+            if h_overlap <= 0:
+                h_dist = min(abs(img_x0 - bx1), abs(bx0 - img_x1))
+                if h_dist > 60:
+                    # In a different column or too far horizontally
+                    continue
+
             img_bottom = bbox.y + bbox.height
             if by0 >= img_bottom - 5:
                 v_dist = by0 - img_bottom
@@ -426,6 +440,27 @@ class PDFAssetExtractor:
                             extraction_status = "failed"
                             warnings.append(f"extract_image_failed: {exc}")
 
+                    # Detect decorative icons / divider lines / bullet graphics / logos / sub-figure snippets / partial borders
+                    is_icon = False
+                    if bbox is not None:
+                        if (bbox.width <= 120 and bbox.height <= 120) or (bbox.width * bbox.height < 12000):
+                            is_icon = True
+                        elif (bbox.width / max(bbox.height, 0.1) > 6) or (bbox.height / max(bbox.width, 0.1) > 6):
+                            is_icon = True
+                        elif min(bbox.width, bbox.height) < 40:
+                            is_icon = True
+                    if width_px > 0 and height_px > 0:
+                        if (width_px <= 140 and height_px <= 140) or (width_px * height_px < 20000):
+                            is_icon = True
+                        elif (width_px / max(height_px, 1) > 6) or (height_px / max(width_px, 1) > 6):
+                            is_icon = True
+                        elif min(width_px, height_px) < 50:
+                            is_icon = True
+
+                    if is_icon:
+                        asset_kind = "icon"
+                        warnings.append("small_icon_filtered")
+
                     # Handle color space and smask warnings
                     if smask > 0:
                         warnings.append(f"has_soft_mask:{smask}")
@@ -475,10 +510,13 @@ class PDFAssetExtractor:
                         seen_content_hashes[content_hash] = asset_id
                         status_counts[extraction_status] += 1
 
-                    # Caption extraction
-                    caption, caption_locator = _find_caption_for_bbox(page, bbox)
-                    if caption is None and asset_kind == "embedded_image":
-                        warnings.append("caption_not_found")
+                    # Caption extraction (icons never match figure/table captions)
+                    if asset_kind == "icon":
+                        caption, caption_locator = None, None
+                    else:
+                        caption, caption_locator = _find_caption_for_bbox(page, bbox)
+                        if caption is None and asset_kind == "embedded_image":
+                            warnings.append("caption_not_found")
 
                     asset = DocumentAsset(
                         asset_id=asset_id,
@@ -508,6 +546,50 @@ class PDFAssetExtractor:
                     assets.append(asset)
 
         doc.close()
+
+        # Deduplicate captions on the same page so small sub-images don't hijack figure captions
+        page_caption_groups: dict[tuple[int, str], list[int]] = defaultdict(list)
+        for idx, a in enumerate(assets):
+            if a.caption:
+                page_caption_groups[(a.page, a.caption)].append(idx)
+
+        for group_indices in page_caption_groups.values():
+            if len(group_indices) > 1:
+                def _area(i: int) -> float:
+                    item = assets[i]
+                    if item.bbox is not None:
+                        return item.bbox.width * item.bbox.height
+                    return float(item.width_px * item.height_px)
+                primary_idx = max(group_indices, key=_area)
+                for i in group_indices:
+                    if i != primary_idx:
+                        orig = assets[i]
+                        assets[i] = DocumentAsset(
+                            asset_id=orig.asset_id,
+                            document_id=orig.document_id,
+                            source_snapshot_id=orig.source_snapshot_id,
+                            page=orig.page,
+                            asset_kind=orig.asset_kind,
+                            artifact_ref=orig.artifact_ref,
+                            thumbnail_artifact_ref=orig.thumbnail_artifact_ref,
+                            media_type=orig.media_type,
+                            content_hash=orig.content_hash,
+                            width_px=orig.width_px,
+                            height_px=orig.height_px,
+                            bbox=orig.bbox,
+                            page_width=orig.page_width,
+                            page_height=orig.page_height,
+                            page_rotation=orig.page_rotation,
+                            coordinate_space=orig.coordinate_space,
+                            caption=None,
+                            caption_locator=None,
+                            parent_segment_ids=orig.parent_segment_ids,
+                            extraction_method=orig.extraction_method,
+                            extraction_status=orig.extraction_status,
+                            duplicate_of_asset_id=orig.duplicate_of_asset_id,
+                            warnings=orig.warnings,
+                            schema_version=orig.schema_version,
+                        )
 
         manifest_timestamp = generated_at or _utc_now()
 

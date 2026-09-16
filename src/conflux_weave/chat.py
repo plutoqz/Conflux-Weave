@@ -370,7 +370,15 @@ class ChatService:
         finally:
             conn.close()
 
-    def direct_answer(self, question: str, conversation_id: str | None, *, conversation_mode: str | None = None) -> dict:
+    def direct_answer(
+        self,
+        question: str,
+        conversation_id: str | None,
+        *,
+        conversation_mode: str | None = None,
+        web_search: bool = False,
+        thinking_depth: str = "deep",
+    ) -> dict:
         normalized = (question or "").strip()
         if not normalized:
             raise ValueError("question must not be empty")
@@ -389,10 +397,42 @@ class ChatService:
             conversation_mode=conversation_mode,
         )
 
+        web_context = ""
+        web_citations = []
+        if web_search:
+            try:
+                from ddgs import DDGS
+                with DDGS() as ddgs:
+                    results = list(ddgs.text(normalized, max_results=5))
+                if results:
+                    ref_lines = []
+                    for idx, r in enumerate(results, 1):
+                        title = r.get("title", "")
+                        href = r.get("href") or r.get("link", "")
+                        body = r.get("body", "")
+                        ref_lines.append(f"[{idx}] 标题: {title}\n链接: {href}\n摘要: {body}")
+                        web_citations.append({"index": idx, "title": title, "url": href})
+                    web_context = "\n\n".join(ref_lines)
+            except Exception:
+                pass
+
+        depth_instruction = {
+            "quick": "【回答风格】：精炼、快速，直接回答核心答案，减少背景铺垫与长篇大论。",
+            "deep": "【回答风格】：深入、系统，包含技术原语、架构机制推导与严谨逻辑阐述。",
+            "rigorous": "【回答风格】：极致严谨，学术级考证，覆盖边界条件、反例对比与系统权衡。",
+        }.get(thinking_depth, "")
+
         context_blocks = [
             f"{message.role}: {message.content}" for message in history
-        ] + [f"user: {normalized}"]
-        system_prompt = DIRECT_SYSTEM_PROMPT
+        ]
+        if web_context:
+            context_blocks.append(
+                f"【实时互联网搜索参考资料】\n{web_context}\n\n"
+                f"请充分结合上述最新的互联网搜索结果回答用户的问题。如果引用了检索到的事实、数据或结论，请在句末标注数字引用序号如 [1]，并在文末附上参考来源链接！"
+            )
+        context_blocks.append(f"user: {normalized}")
+
+        system_prompt = f"{DIRECT_SYSTEM_PROMPT}\n{depth_instruction}".strip()
         if self._memory_agent is not None:
             mem_ctx = self._memory_agent.format_prompt_context(
                 user_id="user_default",
@@ -400,7 +440,7 @@ class ChatService:
                 query=normalized,
             )
             if mem_ctx:
-                system_prompt = f"{DIRECT_SYSTEM_PROMPT}\n\n{mem_ctx}"
+                system_prompt = f"{system_prompt}\n\n{mem_ctx}"
 
         provider_started = time.monotonic()
         completion = self._chat.complete(
@@ -414,6 +454,12 @@ class ChatService:
         )
         provider_ms = int((time.monotonic() - provider_started) * 1000)
         answer = (completion.content or "").strip()[:MAX_CONTENT_CHARS] or "(空回答)"
+
+        if web_citations and "http" not in answer:
+            answer += "\n\n---\n**实时互联网参考来源：**\n" + "\n".join(
+                f"- [{c['index']}] [{c['title']}]({c['url']})" for c in web_citations
+            )
+
         assistant = ChatMessage(
             f"msg-{uuid4().hex}", conversation, "assistant", "direct", answer, _utc_now(), turn_id=turn_id, sequence=sequence
         )
@@ -449,7 +495,15 @@ class ChatService:
             "memory_candidates": memory_candidates,
         }
 
-    def rag_answer(self, question: str, conversation_id: str | None, *, conversation_mode: str | None = None) -> dict:
+    def rag_answer(
+        self,
+        question: str,
+        conversation_id: str | None,
+        *,
+        conversation_mode: str | None = None,
+        web_search: bool = False,
+        thinking_depth: str = "deep",
+    ) -> dict:
         """W3.1 模式 B：本地语料检索 → 综合成文 → 确定性后检（未核验聚合）。"""
         if self._retrieval is None:
             raise RuntimeError("knowledge corpus is not available")
@@ -465,22 +519,68 @@ class ChatService:
         retrieval_started = time.monotonic()
         run = self._retrieval.search(normalized)
         retrieval_ms = int((time.monotonic() - retrieval_started) * 1000)
-        hits = run.final.hits[:RAG_SNIPPET_LIMIT]
+        text_source_hits = run.text_run.final.hits if hasattr(run, "text_run") and run.text_run else run.final.hits
         snippets = []
-        for index, hit in enumerate(hits, 1):
-            document = self._retrieval.document_by_id[hit.document_id]
+        for hit in text_source_hits:
+            doc_id = getattr(hit, "document_id", None) or getattr(hit, "hit_id", "")
+            document = self._retrieval.document_by_id.get(doc_id)
+            if document is None:
+                continue
             snippets.append(
                 {
-                    "index": index,
-                    "chunk_id": hit.document_id,
-                    "score": hit.score,
-                    "source_snapshot_id": hit.source_snapshot_id or "",
-                    "locator": hit.locator or {},
+                    "index": len(snippets) + 1,
+                    "chunk_id": doc_id,
+                    "score": getattr(hit, "score", 0.0),
+                    "source_snapshot_id": getattr(hit, "source_snapshot_id", "") or "",
+                    "locator": getattr(hit, "locator", {}) or {},
                     "text": document.text[:RAG_SNIPPET_CHARS],
                 }
             )
+            if len(snippets) >= RAG_SNIPPET_LIMIT:
+                break
         if not snippets:
             raise ValueError("knowledge corpus returned no matching chunks")
+
+        # 多模态图表与插图抽取（P2.3 / P9）
+        image_assets = []
+        for hit in getattr(run, "fused_hits", ()) or ():
+            if getattr(hit, "modality", "") == "image" and getattr(hit, "asset_id", None):
+                cap = getattr(hit, "text", "") or getattr(hit, "caption", "") or (hit.locator.get("caption") if isinstance(hit.locator, dict) else "") or "学术文献相关图表"
+                p = getattr(hit, "page", None) or (hit.locator.get("page") if isinstance(hit.locator, dict) else None)
+                score = getattr(hit, "score", 0.0)
+                image_assets.append({
+                    "asset_id": hit.asset_id,
+                    "caption": cap,
+                    "page": p,
+                    "url": f"/api/v1/library/assets/{hit.asset_id}/content",
+                    "score": score,
+                })
+        if not image_assets and hasattr(run, "image_hits"):
+            for hit in getattr(run, "image_hits", ()) or ():
+                asset_id = getattr(hit, "asset_id", None) or getattr(hit, "hit_id", "")
+                if asset_id:
+                    caption = getattr(hit, "caption", "") or (hit.locator.get("caption") if isinstance(hit.locator, dict) else "") or "相关图表插图"
+                    page = getattr(hit, "page", None) or (hit.locator.get("page") if isinstance(hit.locator, dict) else None)
+                    score = getattr(hit, "score", 0.0)
+                    image_assets.append({
+                        "asset_id": asset_id,
+                        "caption": caption,
+                        "page": page,
+                        "url": f"/api/v1/library/assets/{asset_id}/content",
+                        "score": score,
+                    })
+
+        multimodal_keywords = (
+            "架构图", "流程图", "示意图", "曲线图", "折线图", "柱状图", "散点图", "热力图",
+            "图表", "插图", "配图", "看图", "截屏", "截图", "可视化",
+            "figure", "fig.", "chart", "diagram", "plot", "illustration"
+        )
+        multimodal_intent = any(k in normalized.lower() for k in multimodal_keywords)
+        # 仅当用户明确提问视觉图表或可视化、且相关度 >= 0.55 时，才启用图表资产注入与渲染；纯文本问答保持纯粹聚焦
+        filtered_image_assets = [
+            img for img in image_assets
+            if img.get("score", 0.0) >= 0.55
+        ][:3] if multimodal_intent else []
 
         input_persist_started = time.monotonic()
         self._append(
@@ -498,15 +598,39 @@ class ChatService:
             f"{json.dumps(item['locator'], ensure_ascii=False)})\n{item['text']}"
             for item in snippets
         ]
+
+        visual_prompt_block = ""
+        if filtered_image_assets:
+            visual_lines = [
+                f"- 图表资产 `{img['asset_id']}`"
+                + (f"（第 {img['page']} 页）" if img['page'] else "")
+                + f"：{img['caption'][:120]}\n"
+                f"  图片地址: `{img['url']}`\n"
+                f"  Markdown 语法: `![{img['caption'][:50].strip()}]({img['url']})`"
+                for img in filtered_image_assets[:3]
+            ]
+            visual_prompt_block = (
+                "\n\n【检索到的学术论文多模态图表/插图资源】\n"
+                + "\n".join(visual_lines)
+                + "\n\n【多模态嵌入规范】：若上述图表与当前核心论据高度相关，请在正文相应论述句末使用 Markdown 语法插入该图片（语法：`![简要说明](图片地址)`），并用一两句话针对性解读其实证结论；若图表与论述主题不吻合，严禁强行插入或编造解读！"
+            )
+
+        depth_instruction = {
+            "quick": "【回答风格】：精炼、快速，先直接给结论，再用必要文献论据支持。",
+            "deep": "【回答风格】：深入、系统，全面梳理文献脉络与机制细节。",
+            "rigorous": "【回答风格】：极致严谨，学术级严格对照，指出文献依据与边界。",
+        }.get(thinking_depth, "")
+
         base_user_prompt = (
             ("会话历史：\n" + "\n\n".join(context_blocks) + "\n\n" if context_blocks else "")
             + "知识库片段：\n" + "\n\n".join(snippet_blocks)
+            + visual_prompt_block
             + "\n\n问题：" + normalized
         )
         violations: tuple[str, ...] = ()
         completion = None
         answer = ""
-        system_prompt = RAG_SYSTEM_PROMPT
+        system_prompt = f"{RAG_SYSTEM_PROMPT}\n{depth_instruction}".strip()
         if self._memory_agent is not None:
             mem_ctx = self._memory_agent.format_prompt_context(
                 user_id="user_default",
@@ -514,7 +638,7 @@ class ChatService:
                 query=normalized,
             )
             if mem_ctx:
-                system_prompt = f"{RAG_SYSTEM_PROMPT}\n\n{mem_ctx}"
+                system_prompt = f"{system_prompt}\n\n{mem_ctx}"
 
         provider_started = time.monotonic()
         provider_attempts = 0
@@ -538,6 +662,18 @@ class ChatService:
                 break
         answer = _normalize_rag_citations(answer, len(snippets))
         violations = _check_rag_answer(answer, len(snippets))
+        if filtered_image_assets and multimodal_intent and "![" not in answer:
+            # 仅当首选图表相关度达到极高置信度（>= 0.65）且用户显式要求图表时，才作为后备实证挂载
+            high_conf_images = [img for img in filtered_image_assets if img.get("score", 0.0) >= 0.65]
+            if high_conf_images:
+                fig_blocks = ["\n\n### 🖼 关联学术图表实证\n"]
+                for img in high_conf_images[:2]:
+                    short_caption = (img.get("caption") or "学术文献相关图表").strip()
+                    if len(short_caption) > 80:
+                        short_caption = short_caption[:77] + "..."
+                    page_str = f"（第 {img['page']} 页）" if img.get("page") else ""
+                    fig_blocks.append(f"\n![{short_caption}]({img['url']})\n*{short_caption} {page_str}*\n")
+                answer += "".join(fig_blocks)
         provider_ms = int((time.monotonic() - provider_started) * 1000)
         # W3.5：来源脚注压缩为紧凑引用（文档标题+页码），与深度研究报告的
         # 来源引用同一排版语义；chunk/snapshot/定位 JSON 留在 API citations
@@ -633,6 +769,7 @@ class ChatService:
                 "total": int((time.monotonic() - started) * 1000),
             },
             "memory_candidates": memory_candidates,
+            "image_assets": tuple(filtered_image_assets),
         }
 
     def history(self, limit: int = 20) -> list[ChatMessage]:

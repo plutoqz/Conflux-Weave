@@ -11,6 +11,7 @@ import base64
 import hashlib
 import json
 import math
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -775,31 +776,170 @@ class LanceDBImageIndex:
 
         hits: list[MultimodalRetrievalHit] = []
         for rank, row in enumerate(rows, 1):
-            locator = json.loads(row.get("locator_json") or "{}")
-            bbox = locator.get("bbox") if isinstance(locator.get("bbox"), dict) else None
-            coordinate_space = str(locator.get("coordinate_space") or "pdf_page_points_top_left")
-            parent_ids = tuple(json.loads(row.get("parent_chunk_ids_json") or "[]"))
             score = cosine_similarity(tuple(query_vector), tuple(row["vector"]))
+            hits.append(self._row_to_hit(row, score, rank))
+        return tuple(hits)
 
-            hit = MultimodalRetrievalHit(
-                asset_id=str(row["asset_id"]),
-                score=score,
-                rank=rank,
-                modality=str(row.get("modality", "image")),
-                source_snapshot_id=str(row.get("source_snapshot_id", "")),
-                document_id=str(row.get("document_id", "")),
-                page=int(row.get("page", 1)),
-                bbox=bbox,
-                coordinate_space=coordinate_space,
-                parent_chunk_ids=parent_ids,
-                caption=row.get("caption") or None,
-                artifact_ref=str(row.get("artifact_ref", "")),
-                thumbnail_artifact_ref=row.get("thumbnail_artifact_ref") or None,
-                embedding_model=str(row.get("embedding_model", "")),
-                index_version=MULTIMODAL_INDEX_SCHEMA_VERSION,
-                locator=locator,
-            )
-            hits.append(hit)
+    def _row_to_hit(self, row: dict[str, Any], score: float, rank: int) -> MultimodalRetrievalHit:
+        locator = json.loads(row.get("locator_json") or "{}")
+        bbox = locator.get("bbox") if isinstance(locator.get("bbox"), dict) else None
+        coordinate_space = str(locator.get("coordinate_space") or "pdf_page_points_top_left")
+        parent_ids = tuple(json.loads(row.get("parent_chunk_ids_json") or "[]"))
+        return MultimodalRetrievalHit(
+            asset_id=str(row["asset_id"]),
+            score=score,
+            rank=rank,
+            modality=str(row.get("modality", "image")),
+            source_snapshot_id=str(row.get("source_snapshot_id", "")),
+            document_id=str(row.get("document_id", "")),
+            page=int(row.get("page", 1)),
+            bbox=bbox,
+            coordinate_space=coordinate_space,
+            parent_chunk_ids=parent_ids,
+            caption=row.get("caption") or None,
+            artifact_ref=str(row.get("artifact_ref", "")),
+            thumbnail_artifact_ref=row.get("thumbnail_artifact_ref") or None,
+            embedding_model=str(row.get("embedding_model", "")),
+            index_version=MULTIMODAL_INDEX_SCHEMA_VERSION,
+            locator=locator,
+        )
+
+    def search_caption_text(
+        self,
+        query: str,
+        *,
+        top_k: int = 5,
+        where: str | None = None,
+    ) -> tuple[MultimodalRetrievalHit, ...]:
+        """Search image assets by substantive keyword/token match on their caption."""
+        if self.table is None or not query or not query.strip():
+            return ()
+
+        # Stop words & modality format words (these should NOT trigger wildcard matches)
+        MODALITY_STOP_WORDS = {
+            "图", "表", "图表", "图片", "插图", "架构图", "流程图", "figure", "fig",
+            "chart", "table", "diagram", "plot", "论文", "检索", "相关", "请结合",
+            "包括", "介绍", "分析", "了解", "关于", "总结", "梳理", "中的", "展示", "说明", "我想"
+        }
+
+        # Substantive domain concept mapping (Chinese query terms -> English academic caption tokens)
+        CONCEPT_MAP = {
+            "注意力": ["attention", "self-attention", "cross-attention"],
+            "上下文": ["context", "long-context", "context-length", "context-window", "context rot"],
+            "扩展": ["scaling", "extension", "expansion", "extending", "interpolate"],
+            "长文本": ["long-context", "long sequence", "long horizon"],
+            "长序列": ["long-context", "long sequence", "long horizon"],
+            "大模型": ["llm", "language model", "transformer", "foundation model"],
+            "评估": ["evaluation", "benchmark", "assessment", "eval", "metric"],
+            "基准": ["benchmark", "baseline"],
+            "记忆": ["memory", "working memory", "long-term memory", "amem", "memrefine", "mem0"],
+            "检索": ["retrieval", "rag", "dense retrieval", "sparse"],
+            "智能体": ["agent", "multi-agent", "agentic", "pomdp", "workflow"],
+            "agent": ["agent", "multi-agent"],
+            "压缩": ["compression", "compact", "pruning", "distillation", "compaction"],
+            "容错": ["fault-tolerant", "fault tolerance"],
+            "表面码": ["surface code", "quantum", "threshold"],
+            "代码": ["code", "coding", "software", "program", "repair"],
+            "量化": ["quantization", "quantized", "int8", "int4"],
+            "微调": ["fine-tuning", "finetuning", "lora", "sft"],
+            "对齐": ["alignment", "rlhf", "dpo"],
+            "架构": ["architecture", "framework", "overview", "system"],
+            "流程": ["flow", "process", "pipeline", "loop"],
+            "框架": ["framework", "architecture", "system"],
+            "对比": ["comparison", "vs", "benchmark", "ablation"],
+            "实验": ["experiment", "result", "evaluation", "benchmark"],
+            "结果": ["result", "results", "performance", "metric"],
+            "消融": ["ablation", "ablate"],
+            "损失": ["loss", "loss curve"],
+            "曲线": ["curve", "plot", "trend"],
+            "热力图": ["heatmap"],
+            "标准差": ["standard deviation", "deviation", "std"],
+            "分布": ["distribution"],
+        }
+
+        # Extract substantive tokens
+        substantive_tokens: list[str] = []
+        raw_words = [w.lower() for w in re.findall(r"[a-zA-Z0-9_\-]+", query) if len(w) >= 3]
+        for w in raw_words:
+            if w not in MODALITY_STOP_WORDS and w not in {"the", "and", "for", "with", "this", "that"}:
+                substantive_tokens.append(w)
+
+        for concept_cn, en_syns in CONCEPT_MAP.items():
+            if concept_cn.lower() in query.lower():
+                substantive_tokens.extend(en_syns)
+
+        substantive_tokens = list(dict.fromkeys(substantive_tokens))
+        if not substantive_tokens:
+            return ()
+
+        try:
+            arrow_tbl = self.table.to_arrow()
+            pydict = arrow_tbl.to_pydict()
+        except Exception:
+            return ()
+
+        total_rows = len(pydict.get("asset_id", []))
+        scored = []
+        for i in range(total_rows):
+            cap = str(pydict.get("caption", [""])[i] or "").lower()
+            doc_id = str(pydict.get("document_id", [""])[i] or "").lower()
+            combined = f"{cap} {doc_id}"
+            substantive_matches = 0
+            match_score = 0.0
+            for t in substantive_tokens:
+                if t in combined:
+                    substantive_matches += 1
+                    match_score += 2.0 + len(t) * 0.15
+
+            # Must have at least one substantive concept match!
+            if substantive_matches > 0:
+                row_dict = {col: pydict[col][i] for col in pydict}
+                scored.append((match_score, row_dict))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        hits = []
+        for rank, (score, row) in enumerate(scored[:top_k], 1):
+            hits.append(self._row_to_hit(row, score, rank))
+        return tuple(hits)
+
+    def search_by_document_pages(
+        self,
+        doc_pages: Sequence[tuple[str, int]],
+        *,
+        top_k: int = 5,
+    ) -> tuple[MultimodalRetrievalHit, ...]:
+        """Find image assets co-occurring on specific document pages or adjacent pages."""
+        if self.table is None or not doc_pages:
+            return ()
+        try:
+            arrow_tbl = self.table.to_arrow()
+            pydict = arrow_tbl.to_pydict()
+        except Exception:
+            return ()
+
+        wanted = set(doc_pages)
+        hits = []
+        rank = 1
+        total_rows = len(pydict.get("asset_id", []))
+        for i in range(total_rows):
+            d_id = str(pydict.get("document_id", [""])[i] or "")
+            p_num = int(pydict.get("page", [1])[i] or 1)
+            # Exact page match receives score 0.6
+            if (d_id, p_num) in wanted:
+                row_dict = {col: pydict[col][i] for col in pydict}
+                hit = self._row_to_hit(row_dict, 0.6, rank)
+                hits.append(hit)
+                rank += 1
+                if len(hits) >= top_k:
+                    break
+            # Immediately adjacent page (+/- 1) receives score 0.35
+            elif any(d_id == wd and abs(p_num - wp) <= 1 for wd, wp in wanted):
+                row_dict = {col: pydict[col][i] for col in pydict}
+                hit = self._row_to_hit(row_dict, 0.35, rank)
+                hits.append(hit)
+                rank += 1
+                if len(hits) >= top_k:
+                    break
         return tuple(hits)
 
 

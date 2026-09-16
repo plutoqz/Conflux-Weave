@@ -169,22 +169,33 @@ class MultimodalRetrievalPipeline:
         if not self.is_multimodal_active():
             return ()
         conflict = self._image_dimension_conflict()
-        if conflict is not None:
-            return ()
 
-        assert self.image_embedding is not None
-        assert self.image_index is not None
+        vector_hits: list[MultimodalRetrievalHit] = []
+        if conflict is None and self.image_embedding is not None and self.image_index is not None:
+            try:
+                embedded = self.image_embedding.embed_query_text(
+                    query, producer_step_id=producer_step_id
+                )
+                if embedded.vectors:
+                    vector_hits = list(self.image_index.search_vector(embedded.vectors[0], top_k=top_k, where=where))
+            except ImageVectorDimensionMismatch:
+                pass
+            except Exception:
+                pass
 
-        embedded = self.image_embedding.embed_query_text(
-            query, producer_step_id=producer_step_id
-        )
-        if not embedded.vectors:
-            return ()
-        query_vector = embedded.vectors[0]
-        try:
-            return self.image_index.search_vector(query_vector, top_k=top_k, where=where)
-        except ImageVectorDimensionMismatch:
-            return ()
+        caption_hits: list[MultimodalRetrievalHit] = []
+        if self.image_index is not None and hasattr(self.image_index, "search_caption_text"):
+            caption_hits = list(self.image_index.search_caption_text(query, top_k=top_k, where=where))
+
+        merged: list[MultimodalRetrievalHit] = []
+        seen = set()
+        for h in vector_hits + caption_hits:
+            if h.asset_id not in seen:
+                seen.add(h.asset_id)
+                merged.append(h)
+                if len(merged) >= top_k:
+                    break
+        return tuple(merged)
 
     def search_text_by_image(
         self,
@@ -289,26 +300,58 @@ class MultimodalRetrievalPipeline:
         image_degradation = None
         if self.is_multimodal_active():
             conflict = self._image_dimension_conflict()
+            vector_hits: list[MultimodalRetrievalHit] = []
             if conflict is None:
                 assert self.image_embedding is not None
                 assert self.image_index is not None
-                embedded = self.image_embedding.embed_query_text(
-                    query, producer_step_id="step-image-retrieval"
-                )
-                req_art = embedded.request_artifact.artifact_id
-                resp_art = embedded.response_artifact.artifact_id
-                if embedded.vectors:
-                    try:
-                        image_hits = self.image_index.search_vector(
+                try:
+                    embedded = self.image_embedding.embed_query_text(
+                        query, producer_step_id="step-image-retrieval"
+                    )
+                    req_art = embedded.request_artifact.artifact_id
+                    resp_art = embedded.response_artifact.artifact_id
+                    if embedded.vectors:
+                        vector_hits = list(self.image_index.search_vector(
                             embedded.vectors[0], top_k=image_k
-                        )
-                    except ImageVectorDimensionMismatch as mismatch:
-                        image_degradation = (
-                            f"image_dimension_mismatch(index={mismatch.index_dimensions}, "
-                            f"embedder={mismatch.query_dimensions}); degraded to text-only retrieval"
-                        )
+                        ))
+                except ImageVectorDimensionMismatch as mismatch:
+                    image_degradation = (
+                        f"image_dimension_mismatch(index={mismatch.index_dimensions}, "
+                        f"embedder={mismatch.query_dimensions}); degraded to text-only retrieval"
+                    )
+                except Exception:
+                    pass
             else:
                 image_degradation = conflict
+
+            caption_hits: list[MultimodalRetrievalHit] = []
+            if self.image_index is not None and hasattr(self.image_index, "search_caption_text"):
+                caption_hits = list(self.image_index.search_caption_text(query, top_k=image_k))
+
+            page_hits: list[MultimodalRetrievalHit] = []
+            if self.image_index is not None and hasattr(self.image_index, "search_by_document_pages") and text_run and text_run.final.hits:
+                doc_pages = []
+                for th in text_run.final.hits[:10]:
+                    p = None
+                    if isinstance(th.locator, dict) and "page" in th.locator:
+                        try:
+                            p = int(th.locator["page"])
+                        except Exception:
+                            pass
+                    doc_pages.append((th.document_id, p or 1))
+                page_hits = list(self.image_index.search_by_document_pages(doc_pages, top_k=image_k))
+
+            merged: list[MultimodalRetrievalHit] = []
+            seen = set()
+            candidate_hits = vector_hits + caption_hits + page_hits
+            candidate_hits.sort(key=lambda h: getattr(h, "score", 0.0), reverse=True)
+            for h in candidate_hits:
+                if h.asset_id not in seen and getattr(h, "score", 0.0) >= 0.30:
+                    seen.add(h.asset_id)
+                    merged.append(h)
+                    if len(merged) >= image_k:
+                        break
+            image_hits = tuple(merged)
 
         text_by_id = {doc.document_id: doc.text for doc in self.documents}
         fused_hits = multimodal_reciprocal_rank_fusion(
