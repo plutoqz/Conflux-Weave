@@ -94,6 +94,7 @@ class SemanticBranchDiff:
     file_diff_summaries: list[dict[str, Any]] = field(default_factory=list)
     total_additions: int = 0
     total_deletions: int = 0
+    diff: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -339,8 +340,10 @@ class GitInspector:
         total_add = 0
         total_del = 0
         commit_msgs: list[str] = []
+        unified_diff = ""
 
         try:
+            # 1. Capture commit log
             res_log = subprocess.run(
                 ["git", "log", commit_spec, "--pretty=format:%s"],
                 cwd=root_path,
@@ -354,6 +357,7 @@ class GitInspector:
             if res_log.returncode == 0 and res_log.stdout.strip():
                 commit_msgs = [line.strip() for line in res_log.stdout.splitlines() if line.strip()]
 
+            # 2. Check branch diff numstat
             res_num = subprocess.run(
                 ["git", "-c", "core.quotepath=false", "diff", "--numstat", diff_spec],
                 cwd=root_path,
@@ -365,19 +369,19 @@ class GitInspector:
                 check=False,
             )
             num_output = res_num.stdout if res_num.returncode == 0 else ""
-            if not num_output.strip():
-                res_head = subprocess.run(
-                    ["git", "-c", "core.quotepath=false", "diff", "--numstat", "HEAD~1"],
-                    cwd=root_path,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=5,
-                    check=False,
-                )
-                if res_head.returncode == 0 and res_head.stdout.strip():
-                    num_output = res_head.stdout
+
+            # Check branch unified diff
+            res_branch_diff = subprocess.run(
+                ["git", "-c", "core.quotepath=false", "diff", diff_spec],
+                cwd=root_path,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=10,
+                check=False,
+            )
+            branch_diff_text = res_branch_diff.stdout if res_branch_diff.returncode == 0 else ""
 
             for line in num_output.splitlines():
                 parts = line.split("\t")
@@ -395,25 +399,82 @@ class GitInspector:
                         "deletions": dels,
                     })
 
+            # 3. Check uncommitted working tree diff (staged + unstaged)
+            wt_diff_text = cls.get_diff(root_path)
+
             if status.is_dirty:
                 for mf in status.modified_files:
-                    if not any(f["file"] == mf for f in file_diffs):
+                    existing = next((f for f in file_diffs if f["file"] == mf), None)
+                    # Query numstat for this specific modified file
+                    res_f = subprocess.run(
+                        ["git", "-c", "core.quotepath=false", "diff", "--numstat", "HEAD", "--", mf],
+                        cwd=root_path,
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=3,
+                        check=False,
+                    )
+                    adds, dels = 0, 0
+                    if res_f.returncode == 0 and res_f.stdout.strip():
+                        p = res_f.stdout.strip().split("\t")
+                        adds = int(p[0]) if p[0].isdigit() else 0
+                        dels = int(p[1]) if p[1].isdigit() else 0
+                    if existing:
+                        existing["additions"] = max(existing["additions"], adds)
+                        existing["deletions"] = max(existing["deletions"], dels)
+                        existing["status"] = "worktree_modified"
+                    else:
+                        total_add += adds
+                        total_del += dels
                         file_diffs.append({
                             "file": mf,
                             "status": "worktree_modified",
                             "category": cls._categorize_file(mf),
-                            "additions": 0,
-                            "deletions": 0,
+                            "additions": adds,
+                            "deletions": dels,
                         })
+
                 for uf in status.untracked_files:
                     if not any(f["file"] == uf for f in file_diffs):
+                        adds = 0
+                        try:
+                            uf_path = root_path / uf
+                            if uf_path.is_file() and uf_path.stat().st_size < 100000:
+                                adds = len(uf_path.read_text(encoding="utf-8", errors="replace").splitlines())
+                        except Exception:
+                            pass
+                        total_add += adds
                         file_diffs.append({
                             "file": uf,
                             "status": "untracked",
                             "category": cls._categorize_file(uf),
-                            "additions": 0,
+                            "additions": adds,
                             "deletions": 0,
                         })
+
+            # Assemble unified diff text
+            if wt_diff_text.strip() and branch_diff_text.strip():
+                unified_diff = f"# === 分支历史提交差异 ({compare_branch}...{cur_branch}) ===\n{branch_diff_text.strip()}\n\n# === 工作区未提交修改 ===\n{wt_diff_text.strip()}"
+            elif wt_diff_text.strip():
+                unified_diff = wt_diff_text.strip()
+            elif branch_diff_text.strip():
+                unified_diff = branch_diff_text.strip()
+            elif not file_diffs:
+                # Fallback check HEAD~1 if requested
+                res_head = subprocess.run(
+                    ["git", "-c", "core.quotepath=false", "diff", "HEAD~1"],
+                    cwd=root_path,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=5,
+                    check=False,
+                )
+                if res_head.returncode == 0 and res_head.stdout.strip():
+                    unified_diff = res_head.stdout.strip()
         except Exception:
             pass
 
@@ -446,7 +507,7 @@ class GitInspector:
             impact = "none"
 
         if not file_diffs:
-            intent = f"分支 `{cur_branch}` 与 `{compare_branch}` 处于代码同步状态，未发现差异变更。"
+            intent = f"分支 `{cur_branch}` 与 `{compare_branch}` 处于代码同步状态，无未提交或分支差异变更。"
         else:
             recent_subjects = f"；近期提交涉及：{'、'.join(commit_msgs[:3])}" if commit_msgs else ""
             dirty_notice = f"（当前工作区有 {len(status.modified_files) + len(status.untracked_files)} 个未提交修改）" if status.is_dirty else ""
@@ -465,6 +526,7 @@ class GitInspector:
             file_diff_summaries=file_diffs,
             total_additions=total_add,
             total_deletions=total_del,
+            diff=unified_diff,
         )
 
     @staticmethod

@@ -450,6 +450,7 @@ class SemanticBranchDiffResponse(_ApiModel):
     file_diff_summaries: tuple[dict[str, Any], ...] = ()
     total_additions: int = 0
     total_deletions: int = 0
+    diff: str = ""
 
 
 class TheoryMappingItem(_ApiModel):

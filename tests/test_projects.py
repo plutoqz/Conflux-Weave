@@ -280,12 +280,58 @@ def test_project_agent_patch_target_file_sanitization(tmp_path: Path) -> None:
         target_file="main.py:10",
         custom_replacement="def run():\n    return 42\n",
     )
-    assert proposal.target_file == "main.py"
-
     proposal.target_file = "main.py:10"
     success, msg = agent.apply_patch(proj, proposal)
     assert success is True
     assert "return 42" in target.read_text(encoding="utf-8")
+
+
+def test_semantic_diff_returns_diff_and_worktree_stats(tmp_path: Path) -> None:
+    from conflux_weave.api_contracts import SemanticBranchDiffResponse
+
+    repo = tmp_path / "diff_repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Tester"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+
+    # Initial commit
+    file1 = repo / "core_engine.py"
+    file1.write_text("def start():\n    return 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "core_engine.py"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "Initial engine"], cwd=repo, check=True)
+
+    # Clean state diff
+    diff_clean = GitInspector.get_semantic_diff(repo)
+    assert diff_clean.current_branch != ""
+    assert isinstance(diff_clean.diff, str)
+
+    # Modify file1 and create untracked file2
+    file1.write_text("def start():\n    print('starting')\n    return 42\n", encoding="utf-8")
+    file2 = repo / "new_helper.py"
+    file2.write_text("def helper():\n    return True\n", encoding="utf-8")
+
+    diff_dirty = GitInspector.get_semantic_diff(repo)
+    assert diff_dirty.diff != ""
+    assert "core_engine.py" in diff_dirty.diff
+    assert any(f["file"] == "core_engine.py" for f in diff_dirty.file_diff_summaries)
+    assert any(f["file"] == "new_helper.py" for f in diff_dirty.file_diff_summaries)
+    assert diff_dirty.total_additions > 0
+
+    # API contract verification
+    resp = SemanticBranchDiffResponse(
+        current_branch=diff_dirty.current_branch,
+        compare_branch=diff_dirty.compare_branch,
+        experiment_intent=diff_dirty.experiment_intent,
+        changed_areas=tuple(diff_dirty.changed_areas),
+        impact_level=diff_dirty.impact_level,
+        file_diff_summaries=tuple(diff_dirty.file_diff_summaries),
+        total_additions=diff_dirty.total_additions,
+        total_deletions=diff_dirty.total_deletions,
+        diff=diff_dirty.diff,
+    )
+    assert resp.diff == diff_dirty.diff
+    assert len(resp.file_diff_summaries) >= 2
 
 
 

@@ -253,3 +253,11 @@ def test_app_exposes_only_one_local_worker_and_no_workbench_assets(tmp_path) -> 
     assert "/api/v1/runs/{run_id}/events" in paths
     assert not any(path.startswith("/workbench") for path in paths)
     assert app.state.worker.worker_id if hasattr(app.state.worker, "worker_id") else True
+
+
+def test_project_fs_navigator_endpoints(tmp_path) -> None:
+    repository, runtime = build_fixture(tmp_path)
+    app = create_app(repository, runtime)
+    paths = {route.path for route in app.routes}
+    assert "/api/v1/projects/fs-drives" in paths
+    assert "/api/v1/projects/fs-dirs" in paths

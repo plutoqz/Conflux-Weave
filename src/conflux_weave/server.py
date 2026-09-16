@@ -4026,17 +4026,16 @@ def create_app(
         def _open_picker() -> str | None:
             if os.name == "nt":
                 # Priority 1: Tkinter native dialog via a clean, isolated subprocess with current python interpreter
-                # Running via sys.executable avoids main-thread GUI deadlocks and external process permission blocks.
                 try:
                     init_dir = str(Path(initial_dir).resolve()) if initial_dir and Path(initial_dir).is_dir() else ""
                     py_code = (
                         "import tkinter as tk, tkinter.filedialog as fd, sys, os\n"
                         "root = tk.Tk()\n"
                         "root.withdraw()\n"
-                        "root.attributes('-topmost', True)\n"
+                        "root.wm_attributes('-topmost', 1)\n"
                         "root.focus_force()\n"
                         f"initial = {repr(init_dir)}\n"
-                        "path = fd.askdirectory(title='选择工程项目根目录', initialdir=initial if initial and os.path.isdir(initial) else None)\n"
+                        "path = fd.askdirectory(parent=root, title='选择工程项目根目录', initialdir=initial if initial and os.path.isdir(initial) else None)\n"
                         "root.destroy()\n"
                         "if path:\n"
                         "    sys.stdout.buffer.write(path.encode('utf-8'))\n"
@@ -4053,24 +4052,35 @@ def create_app(
                 except Exception as tk_err:
                     logger.warning(f"Tkinter folder picker failed: {tk_err}")
 
-                # Priority 2: PowerShell -EncodedCommand with -ExecutionPolicy Bypass
+                # Priority 2: PowerShell with TopMost WinForms owner Form
                 try:
                     init_dir = str(Path(initial_dir).resolve()).replace("'", "''") if initial_dir and Path(initial_dir).is_dir() else ""
                     init_clause = f"$f.SelectedPath = '{init_dir}';" if init_dir else ""
                     ps_script = (
-                        "[System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null\n"
+                        "Add-Type -AssemblyName System.Windows.Forms | Out-Null\n"
+                        "$form = New-Object System.Windows.Forms.Form\n"
+                        "$form.TopMost = $true\n"
+                        "$form.Width = 0\n"
+                        "$form.Height = 0\n"
+                        "$form.ShowInTaskbar = $false\n"
                         "$f = New-Object System.Windows.Forms.FolderBrowserDialog\n"
                         "$f.Description = '选择工程项目根目录'\n"
                         "$f.ShowNewFolderButton = $true\n"
                         f"{init_clause}\n"
-                        "if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.SelectedPath }\n"
+                        "if ($f.ShowDialog($form) -eq [System.Windows.Forms.DialogResult]::OK) {\n"
+                        "    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n"
+                        "    Write-Output $f.SelectedPath\n"
+                        "}\n"
                         "$f.Dispose()\n"
+                        "$form.Dispose()\n"
                     )
                     encoded_cmd = base64.b64encode(ps_script.encode("utf-16le")).decode("ascii")
                     res = subprocess.run(
                         ["powershell.exe", "-NoProfile", "-Sta", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded_cmd],
                         capture_output=True,
                         text=True,
+                        encoding="utf-8",
+                        errors="replace",
                         timeout=90,
                     )
                     path = res.stdout.strip().splitlines()[-1].strip() if res.stdout.strip() else ""
@@ -4087,6 +4097,57 @@ def create_app(
         except Exception as exc:
             logger.error(f"browse_folder_endpoint error: {exc}")
             return {"path": None}
+
+    @app.get("/api/v1/projects/fs-drives")
+    async def get_fs_drives_endpoint():
+        drives = []
+        if os.name == "nt":
+            import string
+            for letter in string.ascii_uppercase:
+                drive = f"{letter}:\\"
+                if os.path.exists(drive):
+                    drives.append(drive)
+            if not drives:
+                drives.append("C:\\")
+        else:
+            drives = ["/"]
+        quick_roots = []
+        try:
+            home = str(Path.home().resolve())
+            if home and home not in drives:
+                quick_roots.append(home)
+            cwd = str(Path.cwd().resolve())
+            if cwd and cwd not in drives and cwd not in quick_roots:
+                quick_roots.append(cwd)
+        except Exception:
+            pass
+        return {"drives": drives, "quick_roots": quick_roots}
+
+    @app.get("/api/v1/projects/fs-dirs")
+    async def get_fs_dirs_endpoint(path: str = Query(...)):
+        try:
+            p = Path(path).resolve()
+            if not p.is_dir():
+                return {"path": str(p), "exists": False, "dirs": []}
+            dirs = []
+            for entry in os.scandir(p):
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        if entry.name.startswith(".") or entry.name.startswith("$") or entry.name.lower() in (
+                            "system volume information", "$recycle.bin", "recovery", "node_modules", "target", "build", "dist", "venv", ".venv", "__pycache__"
+                        ):
+                            continue
+                        dirs.append({
+                            "name": entry.name,
+                            "path": entry.path,
+                        })
+                except Exception:
+                    continue
+            dirs.sort(key=lambda d: d["name"].lower())
+            parent = str(p.parent) if p.parent != p else None
+            return {"path": str(p), "parent": parent, "exists": True, "dirs": dirs}
+        except Exception as exc:
+            return {"path": path, "exists": False, "error": str(exc), "dirs": []}
 
     @app.get("/api/v1/projects", response_model=list[ProjectSummaryResponse])
     async def list_projects_endpoint():
@@ -4428,6 +4489,7 @@ def create_app(
             file_diff_summaries=tuple(diff.file_diff_summaries),
             total_additions=diff.total_additions,
             total_deletions=diff.total_deletions,
+            diff=diff.diff,
         )
 
     @app.get("/api/v1/health/ready")
