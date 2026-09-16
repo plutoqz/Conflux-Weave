@@ -143,6 +143,30 @@ export const api = {
       } | null;
     }>("/api/v1/config/provider/test", { method: "POST", body: JSON.stringify(data) }),
 
+  // Overview Stats
+  getOverviewStats: () =>
+    request<{
+      runs: {
+        total: number;
+        complete: number;
+        partial: number;
+        working: number;
+        failed: number;
+        cancelled: number;
+        success_rate: number;
+      };
+      corpus: {
+        total_documents: number;
+        arxiv_papers: number;
+        local_pdf: number;
+        local_md: number;
+        structured_knowledge: number;
+        visual_assets: number;
+      };
+      corpus_scope: string;
+      provider_ok: boolean;
+    }>("/api/v1/overview/stats"),
+
   // Runs / Research
   getRuns: (limit = 50, lifecycle = "active") =>
     request<{ items: RunSummary[] }>(`/api/v1/runs?limit=${limit}&lifecycle=${encodeURIComponent(lifecycle)}`),
@@ -162,6 +186,15 @@ export const api = {
     ),
   createResearchTask: (data: { query: string; topics?: string[]; max_results?: number }) =>
     request<{ task_id: string; run_id: string }>("/api/v1/tasks/research", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  createVerifiedResearchTask: (data: {
+    objective: string;
+    mode?: "single" | "managed";
+    max_subquestions?: number;
+  }) =>
+    request<{ task_id: string; run_id: string; state: string }>("/api/v1/tasks/verified-research", {
       method: "POST",
       body: JSON.stringify(data),
     }),
@@ -281,8 +314,13 @@ export const api = {
       updated_at: string;
       messages: ChatMessage[];
     }>(`/api/v1/conversations/${encodeURIComponent(convId)}`),
-  getConversationMessages: (convId: string) => request<{ items: ChatMessage[] }>(`/api/v1/chat/messages?conversation_id=${convId}`),
-  sendChat: (data: { question: string; conversation_id?: string; mode?: string }) =>
+  sendChat: (data: {
+    question: string;
+    conversation_id?: string;
+    mode?: string;
+    web_search?: boolean;
+    thinking_depth?: "quick" | "deep" | "rigorous";
+  }) =>
     request<any>("/api/v1/chat", { method: "POST", body: JSON.stringify(data) }),
 
   // Memory
@@ -317,6 +355,7 @@ export const api = {
         url: (p.landing_urls && p.landing_urls[0]) || (p.pdf_candidates && p.pdf_candidates[0]?.url) || p.url || "",
         published_year: p.year || (p.published ? parseInt(p.published.slice(0, 4)) : undefined),
         source: Array.isArray(p.sources) ? p.sources.join(", ") : (p.source || "arXiv/OpenAlex"),
+        raw_paper: p,
       }));
       return {
         items,
@@ -325,6 +364,14 @@ export const api = {
       };
     });
   },
+  importPaper: (paper: any, action: "fulltext" | "metadata" = "fulltext") =>
+    request<{ status: string; paper_id?: string; document_id?: string; message?: string }>(
+      "/api/v1/library/papers",
+      {
+        method: "POST",
+        body: JSON.stringify({ action, paper: paper.raw_paper || paper }),
+      }
+    ),
 
   // Document Notes
   getDocumentNote: (noteId: string) => request<DocumentNote>(`/api/v1/notes/${encodeURIComponent(noteId)}`),
@@ -411,10 +458,126 @@ export const api = {
   getProjectFile: (projectId: string, filePath: string) =>
     request<any>(`/api/v1/projects/${projectId}/file?path=${encodeURIComponent(filePath)}`),
   getProjectSemanticDiff: (projectId: string) => request<any>(`/api/v1/projects/${projectId}/git/semantic-diff`),
-  proposeProjectCoding: (projectId: string, prompt: string) =>
-    request<any>(`/api/v1/projects/${projectId}/coding/propose`, { method: "POST", body: JSON.stringify({ prompt }) }),
-  applyProjectCoding: (projectId: string, proposalId: string) =>
-    request<any>(`/api/v1/projects/${projectId}/coding/apply`, { method: "POST", body: JSON.stringify({ proposal_id: proposalId }) }),
+  proposeProjectCoding: (projectId: string, prompt: string, targetFile?: string) =>
+    request<any>(`/api/v1/projects/${projectId}/coding/propose`, {
+      method: "POST",
+      body: JSON.stringify({
+        prompt,
+        instruction: prompt,
+        target_file: targetFile || "",
+      }),
+    }),
+  applyProjectCoding: (projectId: string, proposalOrId: string | any) => {
+    const payload =
+      typeof proposalOrId === "string"
+        ? { proposal_id: proposalOrId }
+        : {
+            proposal_id: proposalOrId.proposal_id,
+            target_file: proposalOrId.target_file,
+            expected_hash: proposalOrId.original_hash,
+            proposed_content: proposalOrId.proposed_content,
+          };
+    return request<any>(`/api/v1/projects/${projectId}/coding/apply`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  getProjectWalkthrough: (projectId: string) =>
+    request<{
+      project_id: string;
+      overview: string;
+      components: Array<{
+        name: string;
+        layer: string;
+        files: string[];
+        responsibilities: string;
+        dependencies: string[];
+      }>;
+      mermaid_topology: string;
+      data_flow_description: string;
+      theory_mappings: Array<{
+        concept: string;
+        paper_reference: string;
+        code_symbol: string;
+        file_path: string;
+        line_number: number;
+        description: string;
+        design_rationale: string;
+      }>;
+      dependencies_analysis: Record<string, any>;
+    }>(`/api/v1/projects/${encodeURIComponent(projectId)}/walkthrough`),
+  getProjectAudit: (projectId: string) =>
+    request<{
+      report_id: string;
+      project_id: string;
+      summary: string;
+      implementation_score: number;
+      health_score: number;
+      status_counts: Record<string, number>;
+      findings: Array<{
+        finding_id: string;
+        category: string;
+        severity: "critical" | "high" | "medium" | "low" | "info";
+        title: string;
+        description: string;
+        target_file: string;
+        line_number: number;
+        snippet: string;
+        recommendation: string;
+        implementation_status: string;
+      }>;
+    }>(`/api/v1/projects/${encodeURIComponent(projectId)}/audit`),
+  askProject: (projectId: string, question: string) =>
+    request<{
+      project_id: string;
+      answer_markdown: string;
+      cited_files: string[];
+      git_evidence: any;
+      risks_and_recommendations: string[];
+    }>(`/api/v1/projects/${encodeURIComponent(projectId)}/ask`, {
+      method: "POST",
+      body: JSON.stringify({ question }),
+    }),
+  getProjectLearningGuide: (projectId: string) =>
+    request<{
+      project_id: string;
+      project_name: string;
+      project_type: string;
+      framework: string;
+      primary_language: string;
+      total_files: number;
+      total_lines: number;
+      mental_model: string;
+      design_philosophy: string;
+      onboarding_roadmap: Array<{
+        step_number: number;
+        title: string;
+        description: string;
+        target_files: string[];
+        reading_focus: string;
+        estimated_minutes: number;
+      }>;
+      lexicon: Array<{
+        name: string;
+        kind: string;
+        file_path: string;
+        line: number;
+        summary: string;
+      }>;
+      vibe_coding_tips: string[];
+      architecture_overview: string[];
+      entrypoints: string[];
+    }>(`/api/v1/projects/${encodeURIComponent(projectId)}/learning-guide`),
+
+  askProjectLearning: (projectId: string, question: string) =>
+    request<{
+      project_id: string;
+      question: string;
+      answer: string;
+    }>(`/api/v1/projects/${encodeURIComponent(projectId)}/ask-learning`, {
+      method: "POST",
+      body: JSON.stringify({ question }),
+    }),
 
   // Skills Studio (P5.1)
   getSkills: () => request<{ items: SkillSummary[]; count: number }>("/api/v1/skills"),

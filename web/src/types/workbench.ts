@@ -130,6 +130,12 @@ export interface ChatMessage {
     value: string;
     reason: string;
   }>;
+  image_assets?: Array<{
+    asset_id: string;
+    caption: string;
+    page?: number | null;
+    url: string;
+  }>;
 }
 
 export interface ConversationSummary {
@@ -177,6 +183,8 @@ export interface PaperItem {
   published_year?: number;
   source: string;
   match_snippet?: string;
+  raw_paper?: any;
+  status?: string;
 }
 
 export interface ProjectSummary {
@@ -203,6 +211,7 @@ export interface DocumentNote {
   content_markdown?: string;
   content_html?: string;
   created_at: string;
+  metadata?: Record<string, any>;
   revisions?: Array<{ note_id?: string; revision_id?: string; version: number; instruction?: string; created_at: string }>;
 }
 

@@ -1,5 +1,18 @@
 import { create } from "zustand";
 import type { SectionType, RunSummary, RunDetail, HealthReady } from "@/types/workbench";
+import { api } from "@/services/api";
+
+export type FontSizePreference = "normal" | "medium" | "large" | "xlarge";
+
+export interface GlobalBackgroundTask {
+  id: string;
+  title: string;
+  type: "reading" | "research" | "project";
+  status: "running" | "succeeded" | "failed";
+  startTime: number;
+  message?: string;
+  targetId?: string;
+}
 
 interface WorkbenchState {
   section: SectionType;
@@ -7,6 +20,9 @@ interface WorkbenchState {
 
   theme: "light" | "dark";
   toggleTheme: () => void;
+
+  fontSize: FontSizePreference;
+  setFontSize: (size: FontSizePreference) => void;
 
   zenMode: boolean;
   toggleZenMode: () => void;
@@ -17,6 +33,7 @@ interface WorkbenchState {
 
   runs: RunSummary[];
   setRuns: (runs: RunSummary[]) => void;
+  refreshRuns: () => Promise<void>;
   activeRunId: string | null;
   setActiveRunId: (id: string | null) => void;
   activeRunDetail: RunDetail | null;
@@ -24,6 +41,18 @@ interface WorkbenchState {
 
   health: HealthReady | null;
   setHealth: (health: HealthReady | null) => void;
+
+  // Background Task Ledger
+  backgroundTasks: GlobalBackgroundTask[];
+  addBackgroundTask: (task: GlobalBackgroundTask) => void;
+  updateBackgroundTask: (id: string, updates: Partial<GlobalBackgroundTask>) => void;
+  removeBackgroundTask: (id: string) => void;
+
+  // Global Note Studio Opener
+  activeNoteDocId: string | null;
+  isNoteStudioOpen: boolean;
+  openNoteStudio: (docId: string) => void;
+  closeNoteStudio: () => void;
 
   // Modals
   isNewTaskOpen: boolean;
@@ -47,13 +76,25 @@ const getInitialTheme = (): "light" | "dark" => {
   );
 };
 
-const initialTheme = getInitialTheme();
+const getInitialFontSize = (): FontSizePreference => {
+  try {
+    const saved = localStorage.getItem("cw_font_size") as FontSizePreference;
+    if (saved && ["normal", "medium", "large", "xlarge"].includes(saved)) {
+      return saved;
+    }
+  } catch {}
+  return "normal";
+};
 
+const initialTheme = getInitialTheme();
 if (initialTheme === "dark") {
   document.documentElement.classList.add("dark");
 } else {
   document.documentElement.classList.remove("dark");
 }
+
+const initialFontSize = getInitialFontSize();
+document.documentElement.setAttribute("data-font-size", initialFontSize);
 
 export const useWorkbenchStore = create<WorkbenchState>((set) => ({
   section: "overview",
@@ -75,6 +116,13 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
       return { theme: next };
     }),
 
+  fontSize: initialFontSize,
+  setFontSize: (size) => {
+    localStorage.setItem("cw_font_size", size);
+    document.documentElement.setAttribute("data-font-size", size);
+    set({ fontSize: size });
+  },
+
   zenMode: false,
   toggleZenMode: () => set((s) => ({ zenMode: !s.zenMode })),
   setZenMode: (val) => set({ zenMode: val }),
@@ -84,6 +132,12 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
 
   runs: [],
   setRuns: (runs) => set({ runs }),
+  refreshRuns: async () => {
+    try {
+      const res = await api.getRuns();
+      set({ runs: res.items || [] });
+    } catch {}
+  },
   activeRunId: null,
   setActiveRunId: (id) => {
     try {
@@ -97,6 +151,25 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
 
   health: null,
   setHealth: (health) => set({ health }),
+
+  backgroundTasks: [],
+  addBackgroundTask: (task) =>
+    set((s) => ({
+      backgroundTasks: [task, ...s.backgroundTasks.filter((t) => t.id !== task.id)],
+    })),
+  updateBackgroundTask: (id, updates) =>
+    set((s) => ({
+      backgroundTasks: s.backgroundTasks.map((t) => (t.id === id ? { ...t, ...updates } : t)),
+    })),
+  removeBackgroundTask: (id) =>
+    set((s) => ({
+      backgroundTasks: s.backgroundTasks.filter((t) => t.id !== id),
+    })),
+
+  activeNoteDocId: null,
+  isNoteStudioOpen: false,
+  openNoteStudio: (docId) => set({ activeNoteDocId: docId, isNoteStudioOpen: true }),
+  closeNoteStudio: () => set({ isNoteStudioOpen: false }),
 
   isNewTaskOpen: false,
   setIsNewTaskOpen: (open) => set({ isNewTaskOpen: open }),

@@ -16,9 +16,22 @@ import { api } from "@/services/api";
 import type { SectionType } from "@/types/workbench";
 
 export const App: React.FC = () => {
-  const { section, setSection, setRuns, setHealth, setActiveRunId } = useWorkbenchStore();
+  const {
+    section,
+    setSection,
+    setRuns,
+    setHealth,
+    setActiveRunId,
+    activeNoteDocId,
+    isNoteStudioOpen,
+    openNoteStudio,
+    closeNoteStudio,
+  } = useWorkbenchStore();
   const [selectedNoteDocId, setSelectedNoteDocId] = useState<string | null>(null);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
+
+  const effectiveDocId = activeNoteDocId || selectedNoteDocId;
+  const effectiveOpen = isNoteStudioOpen || isNoteOpen;
 
   // Sync route with window.location.hash
   useEffect(() => {
@@ -72,6 +85,14 @@ export const App: React.FC = () => {
   const handleOpenNote = (docId: string) => {
     setSelectedNoteDocId(docId);
     setIsNoteOpen(true);
+    openNoteStudio(docId);
+  };
+
+  const handleCloseNote = (open: boolean) => {
+    setIsNoteOpen(open);
+    if (!open) {
+      closeNoteStudio();
+    }
   };
 
   return (
@@ -98,9 +119,9 @@ export const App: React.FC = () => {
       <TaskDialog />
       <FollowUpDialog />
       <NoteStudioDialog
-        documentId={selectedNoteDocId}
-        open={isNoteOpen}
-        onOpenChange={setIsNoteOpen}
+        documentId={effectiveDocId}
+        open={effectiveOpen}
+        onOpenChange={handleCloseNote}
       />
     </div>
   );

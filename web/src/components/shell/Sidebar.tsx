@@ -14,6 +14,7 @@ import {
 import { useWorkbenchStore } from "@/stores/useWorkbenchStore";
 import { Button } from "@/components/ui/button";
 import { formatTimeAgo, cn } from "@/lib/utils";
+import { api } from "@/services/api";
 import type { RunSummary, RunStatus } from "@/types/workbench";
 
 export const Sidebar: React.FC = () => {
@@ -23,6 +24,7 @@ export const Sidebar: React.FC = () => {
     hudOpen,
     toggleHud,
     runs,
+    setRuns,
     activeRunId,
     setActiveRunId,
     setSection,
@@ -32,6 +34,29 @@ export const Sidebar: React.FC = () => {
 
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | "completed" | "active">("all");
+
+  // Auto-refresh runs list silently in background and on window focus
+  useEffect(() => {
+    const fetchLatest = () => {
+      api.getRuns().then((res) => {
+        if (res.items) setRuns(res.items);
+      }).catch(() => {});
+    };
+
+    fetchLatest();
+    const interval = setInterval(fetchLatest, 4000);
+    const handleFocus = () => {
+      if (document.visibilityState === "visible") fetchLatest();
+    };
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleFocus);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleFocus);
+    };
+  }, [setRuns]);
 
   // Auto-select first run if none selected
   useEffect(() => {

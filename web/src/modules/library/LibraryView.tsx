@@ -20,6 +20,7 @@ import {
   ZoomIn,
   Loader2,
   Filter,
+  Check,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -106,10 +107,28 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
   };
 
   useEffect(() => {
-    if (activeTab === "assets" && allAssets.length === 0) {
+    if (activeTab === "documents") {
+      refreshDocuments(docFilter);
+    } else if (activeTab === "assets" && allAssets.length === 0) {
       loadAssets();
     }
   }, [activeTab]);
+
+  const [importingPaperIds, setImportingPaperIds] = useState<Record<string, "fetching" | "done" | "failed">>({});
+  const [batchImporting, setBatchImporting] = useState(false);
+
+  const handleImportPaper = async (paper: PaperItem, action: "fulltext" | "metadata" = "fulltext") => {
+    setImportingPaperIds((prev) => ({ ...prev, [paper.id]: "fetching" }));
+    try {
+      const res = await api.importPaper(paper, action);
+      setImportingPaperIds((prev) => ({ ...prev, [paper.id]: "done" }));
+      await refreshDocuments();
+      alert(res.message || (action === "metadata" ? "论文元数据已保存！" : "论文全文已成功获取并解析入库，文献库已自动刷新！"));
+    } catch (err: any) {
+      setImportingPaperIds((prev) => ({ ...prev, [paper.id]: "failed" }));
+      alert(`入库失败: ${err.message}`);
+    }
+  };
 
   const handleMultimodalSearch = async (e?: React.FormEvent, customQuery?: string) => {
     if (e) e.preventDefault();
@@ -169,9 +188,24 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
     setSelectedPaperIds(next);
   };
 
-  const handleBatchImport = () => {
+  const handleBatchImport = async () => {
     if (selectedPaperIds.size === 0) return;
-    alert(`已将选中的 ${selectedPaperIds.size} 篇学术论文加入本地知识库入库队列！`);
+    setBatchImporting(true);
+    const selected = papers.filter((p) => selectedPaperIds.has(p.id));
+    let successCount = 0;
+    for (const paper of selected) {
+      setImportingPaperIds((prev) => ({ ...prev, [paper.id]: "fetching" }));
+      try {
+        await api.importPaper(paper, "fulltext");
+        setImportingPaperIds((prev) => ({ ...prev, [paper.id]: "done" }));
+        successCount++;
+      } catch {
+        setImportingPaperIds((prev) => ({ ...prev, [paper.id]: "failed" }));
+      }
+    }
+    setBatchImporting(false);
+    await refreshDocuments();
+    alert(`批量入库完成：已成功入库 ${successCount} / ${selected.length} 篇论文，本地文献库已自动刷新！`);
   };
 
   // Mock data for charts
@@ -630,22 +664,30 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
             </div>
           </div>
 
-          {assetsLoading ? (
-            <div className="text-center py-24 space-y-3">
-              <Loader2 className="h-8 w-8 animate-spin mx-auto text-emerald-800 dark:text-emerald-400" />
-              <p className="text-xs sm:text-sm text-muted-foreground font-serif-academic">正在聚合文献视觉图表与插图...</p>
-            </div>
-          ) : allAssets.length === 0 ? (
-            <div className="text-center py-20 bg-card rounded-xl border border-dashed border-border/80 space-y-2">
-              <ImageIcon className="h-10 w-10 mx-auto text-muted-foreground/50" />
-              <h4 className="text-sm font-serif-academic font-medium text-foreground">暂未提取到图表资产</h4>
-              <p className="text-xs text-muted-foreground max-w-sm mx-auto font-serif-academic">
-                可在多模态检索栏中直接搜索图表，或导入包含插图的 PDF 文档自动提取。
-              </p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-              {allAssets.map((asset) => (
+          {(() => {
+            const filteredAssets = allAssets.filter((asset) => {
+              if (asset.asset_kind === "icon") return false;
+              const bbox = asset.bbox;
+              if (bbox && ((bbox.width <= 120 && bbox.height <= 120) || bbox.width * bbox.height < 10000)) return false;
+              if (asset.width_px > 0 && asset.height_px > 0 && ((asset.width_px <= 130 && asset.height_px <= 130) || asset.width_px * asset.height_px < 15000)) return false;
+              return true;
+            });
+            return assetsLoading ? (
+              <div className="text-center py-24 space-y-3">
+                <Loader2 className="h-8 w-8 animate-spin mx-auto text-emerald-800 dark:text-emerald-400" />
+                <p className="text-xs sm:text-sm text-muted-foreground font-serif-academic">正在聚合文献视觉图表与插图...</p>
+              </div>
+            ) : filteredAssets.length === 0 ? (
+              <div className="text-center py-20 bg-card rounded-xl border border-dashed border-border/80 space-y-2">
+                <ImageIcon className="h-10 w-10 mx-auto text-muted-foreground/50" />
+                <h4 className="text-sm font-serif-academic font-medium text-foreground">暂未提取到图表资产</h4>
+                <p className="text-xs text-muted-foreground max-w-sm mx-auto font-serif-academic">
+                  可在多模态检索栏中直接搜索图表，或导入包含插图的 PDF 文档自动提取。
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                {filteredAssets.map((asset) => (
                 <div
                   key={asset.asset_id}
                   className="rounded-xl border border-border/80 bg-card overflow-hidden shadow-2xs top-bevel hover:border-emerald-800/50 transition group flex flex-col justify-between"
@@ -695,9 +737,10 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
                 </div>
               ))}
             </div>
-          )}
-        </div>
-      )}
+          );
+        })()}
+      </div>
+    )}
 
       {/* Tab 2: Papers Panel (With Complete Filters & Batch Actions) */}
       {activeTab === "papers" && (
@@ -909,20 +952,64 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
                     </p>
                   )}
 
-                  <div className="flex flex-wrap items-center gap-3.5 pt-2 text-xs text-foreground/75 font-mono">
-                    {paper.arxiv_id && <span className="font-medium">arXiv: {paper.arxiv_id}</span>}
-                    {paper.doi && <span className="font-medium">DOI: {paper.doi}</span>}
-                    {paper.url && (
-                      <a
-                        href={paper.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="flex items-center space-x-1 text-emerald-800 dark:text-emerald-400 hover:underline font-medium"
+                  <div className="flex flex-wrap items-center justify-between gap-3 pt-2 text-xs text-foreground/75 font-mono border-t border-border/40 mt-1">
+                    <div className="flex flex-wrap items-center gap-3.5">
+                      {paper.arxiv_id && <span className="font-medium">arXiv: {paper.arxiv_id}</span>}
+                      {paper.doi && <span className="font-medium">DOI: {paper.doi}</span>}
+                      {paper.url && (
+                        <a
+                          href={paper.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex items-center space-x-1 text-emerald-800 dark:text-emerald-400 hover:underline font-medium"
+                        >
+                          <span>原文链接</span>
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </a>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        type="button"
+                        disabled={importingPaperIds[paper.id] === "fetching" || batchImporting}
+                        onClick={() => handleImportPaper(paper, "metadata")}
+                        className="h-7 text-xs font-serif-academic text-muted-foreground hover:text-foreground"
                       >
-                        <span>原文链接</span>
-                        <ExternalLink className="h-3.5 w-3.5" />
-                      </a>
-                    )}
+                        🔖 保存元数据
+                      </Button>
+                      <Button
+                        size="sm"
+                        type="button"
+                        disabled={importingPaperIds[paper.id] === "fetching" || batchImporting}
+                        onClick={() => handleImportPaper(paper, "fulltext")}
+                        className={cn(
+                          "h-7 text-xs font-serif-academic gap-1.5",
+                          importingPaperIds[paper.id] === "done"
+                            ? "bg-emerald-700 hover:bg-emerald-800 text-white"
+                            : "bg-emerald-800 hover:bg-emerald-900 text-white"
+                        )}
+                      >
+                        {importingPaperIds[paper.id] === "fetching" ? (
+                          <>
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            <span>入库中...</span>
+                          </>
+                        ) : importingPaperIds[paper.id] === "done" ? (
+                          <>
+                            <Check className="h-3 w-3" />
+                            <span>已在知识库</span>
+                          </>
+                        ) : (
+                          <>
+                            <DownloadCloud className="h-3 w-3" />
+                            <span>获取全文并入库</span>
+                          </>
+                        )}
+                      </Button>
+                    </div>
                   </div>
                 </div>
               );

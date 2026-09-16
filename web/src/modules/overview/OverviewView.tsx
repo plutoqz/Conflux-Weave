@@ -27,6 +27,27 @@ export const OverviewView: React.FC = () => {
   const { health, setHealth, setSection, setIsNewTaskOpen, runs, setRuns, setActiveRunId } = useWorkbenchStore();
   const [docCount, setDocCount] = useState(0);
   const [runFilter, setRunFilter] = useState<"active" | "archived" | "deleted">("active");
+  const [overviewStats, setOverviewStats] = useState<{
+    runs: {
+      total: number;
+      complete: number;
+      partial: number;
+      working: number;
+      failed: number;
+      cancelled: number;
+      success_rate: number;
+    };
+    corpus: {
+      total_documents: number;
+      arxiv_papers: number;
+      local_pdf: number;
+      local_md: number;
+      structured_knowledge: number;
+      visual_assets: number;
+    };
+    corpus_scope: string;
+    provider_ok: boolean;
+  } | null>(null);
 
   const refreshRuns = async (filter = runFilter) => {
     try {
@@ -34,6 +55,12 @@ export const OverviewView: React.FC = () => {
       setRuns(res.items || []);
     } catch {
       // keep current list
+    }
+    try {
+      const stats = await api.getOverviewStats();
+      setOverviewStats(stats);
+    } catch {
+      // ignore
     }
   };
   const handleRunLifecycle = async (runId: string, action: "archive" | "delete" | "restore") => {
@@ -46,36 +73,73 @@ export const OverviewView: React.FC = () => {
   };
 
   useEffect(() => {
+    refreshRuns();
     api.getHealthReady().then(setHealth).catch(() => {});
     api.getDocuments().then((res) => setDocCount(res.items?.length || 0)).catch(() => {});
-  }, [setHealth]);
+    api.getOverviewStats().then(setOverviewStats).catch(() => {});
+
+    const timer = setInterval(() => {
+      refreshRuns();
+    }, 4000);
+
+    const onFocus = () => {
+      refreshRuns();
+    };
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [setHealth, runFilter]);
 
   const checkList = Array.isArray(health?.checks) ? health.checks : [];
   const providerCheck = checkList.find((c) => c.name === "provider");
-  const isProviderOk = providerCheck?.status === "ready";
-  const isReady = health?.status === "ready";
+  const isProviderOk = overviewStats ? overviewStats.provider_ok : (providerCheck?.status === "ready");
 
-  // Calculate task distribution for chart
-  const completedRuns = runs.filter((r) => r.status === "complete").length;
-  const partialRuns = runs.filter((r) => r.status === "partial").length;
-  const activeRuns = runs.filter((r) => r.status === "working" || r.status === "queued").length;
-  const failedRuns = runs.filter((r) => r.status === "failed").length;
-  const totalRuns = runs.length;
+  // Real aggregated stats directly from backend SQLite & Corpus
+  const totalRuns = overviewStats ? overviewStats.runs.total : runs.length;
+  const completedRuns = overviewStats
+    ? overviewStats.runs.complete
+    : runs.filter((r: any) => (r.state || r.status) === "complete").length;
+  const partialRuns = overviewStats
+    ? overviewStats.runs.partial
+    : runs.filter((r: any) => (r.state || r.status) === "partial").length;
+  const activeRuns = overviewStats
+    ? overviewStats.runs.working
+    : runs.filter((r: any) => ["working", "queued", "pending"].includes(r.state || r.status)).length;
+  const failedRuns = overviewStats
+    ? overviewStats.runs.failed
+    : runs.filter((r: any) => (r.state || r.status) === "failed").length;
 
-  const successRate = totalRuns > 0 ? Math.round(((completedRuns + partialRuns) / totalRuns) * 100) : 100;
+  const successRate = overviewStats
+    ? overviewStats.runs.success_rate
+    : totalRuns > 0
+    ? Math.round(((completedRuns + partialRuns) / totalRuns) * 100)
+    : 100;
 
   const taskSegments = [
-    { label: "完整完成", value: completedRuns || 4, color: "#1b4931" },
-    { label: "部分达成", value: partialRuns || 2, color: "#d97706" },
-    { label: "进行中", value: activeRuns || 1, color: "#0284c7" },
-    { label: "失败/异常", value: failedRuns || 0, color: "#e11d48" },
+    { label: "完整完成", value: completedRuns, color: "#1b4931" },
+    { label: "部分达成", value: partialRuns, color: "#d97706" },
+    { label: "进行中", value: activeRuns, color: "#0284c7" },
+    { label: "失败/异常", value: failedRuns, color: "#e11d48" },
   ];
 
+  const totalDocs = overviewStats ? overviewStats.corpus.total_documents : docCount;
+  const arxivCount = overviewStats ? overviewStats.corpus.arxiv_papers : docCount;
+  const localPdfCount = overviewStats ? overviewStats.corpus.local_pdf : 0;
+  const localMdCount = overviewStats ? overviewStats.corpus.local_md : 0;
+  const visualAssetsCount = overviewStats ? overviewStats.corpus.visual_assets : 0;
+
   const corpusSegments = [
-    { label: "arXiv 论文", value: Math.max(docCount, 18), color: "#1b4931" },
-    { label: "本地 PDF/MD", value: 12, color: "#2d7a52" },
-    { label: "结构化知识", value: 6, color: "#d97706" },
-  ];
+    { label: "arXiv 论文", value: arxivCount, color: "#1b4931" },
+    { label: "本地 PDF", value: localPdfCount, color: "#2d7a52" },
+    { label: "本地 Markdown", value: localMdCount, color: "#059669" },
+    { label: "视觉图表资产", value: visualAssetsCount, color: "#d97706" },
+  ].filter((s) => s.value > 0);
+  if (corpusSegments.length === 0) {
+    corpusSegments.push({ label: "文档资料", value: totalDocs || 1, color: "#1b4931" });
+  }
 
   return (
     <div className="max-w-6xl mx-auto p-6 sm:p-8 space-y-8 animate-in fade-in-50">
@@ -148,7 +212,7 @@ export const OverviewView: React.FC = () => {
             </div>
           </CardHeader>
           <CardContent className="p-4 pt-1">
-            <div className="text-2xl sm:text-3xl font-bold font-mono text-foreground">{docCount || 222}</div>
+            <div className="text-2xl sm:text-3xl font-bold font-mono text-foreground">{totalDocs}</div>
             <p className="text-xs sm:text-sm font-serif-academic text-foreground/75 font-normal mt-1">本地文档与论文</p>
           </CardContent>
         </Card>
@@ -163,7 +227,7 @@ export const OverviewView: React.FC = () => {
             </div>
           </CardHeader>
           <CardContent className="p-4 pt-1">
-            <div className="text-base sm:text-lg font-bold font-mono text-foreground truncate">{health?.corpus_scope || "arxiv-oa"}</div>
+            <div className="text-base sm:text-lg font-bold font-mono text-foreground truncate">{overviewStats?.corpus_scope || health?.corpus_scope || "arxiv-oa"}</div>
             <p className="text-xs sm:text-sm font-serif-academic text-foreground/75 font-normal mt-1">混合多模态检索索引</p>
           </CardContent>
         </Card>
@@ -209,7 +273,7 @@ export const OverviewView: React.FC = () => {
             <DonutChart
               segments={taskSegments}
               centerTitle="总研究数"
-              centerValue={String(totalRuns || 7)}
+              centerValue={String(totalRuns)}
             />
           </CardContent>
         </Card>
@@ -235,7 +299,7 @@ export const OverviewView: React.FC = () => {
             <DonutChart
               segments={corpusSegments}
               centerTitle="知识库条目"
-              centerValue={String(docCount || 222)}
+              centerValue={String(totalDocs)}
             />
           </CardContent>
         </Card>

@@ -20,8 +20,10 @@ import {
   Archive,
   Trash2,
   RotateCcw,
+  Globe,
 } from "lucide-react";
 import { marked } from "marked";
+import { renderMarkdownWithMath } from "@/lib/math";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { api } from "@/services/api";
@@ -30,9 +32,24 @@ import type { ChatMessage, ConversationSummary } from "@/types/workbench";
 
 const renderMarkdown = (content: string) => {
   try {
-    return { __html: marked.parse(content, { gfm: true, breaks: true }) as string };
+    return { __html: renderMarkdownWithMath(content, { enableCitations: true }) };
   } catch {
     return { __html: content };
+  }
+};
+
+const handleCitationClick = (e: React.MouseEvent<HTMLDivElement>) => {
+  const target = (e.target as HTMLElement).closest(".citation-badge");
+  if (target) {
+    const citeId = target.getAttribute("data-cite");
+    if (citeId) {
+      const refEl = document.getElementById(`cite-${citeId}`);
+      if (refEl) {
+        refEl.scrollIntoView({ behavior: "smooth", block: "center" });
+        refEl.classList.add("highlight-flash");
+        setTimeout(() => refEl.classList.remove("highlight-flash"), 2200);
+      }
+    }
   }
 };
 
@@ -43,8 +60,34 @@ const DeepResearchMessageBubble: React.FC<{
   const [runState, setRunState] = useState<string>("running");
   const [stepCount, setStepCount] = useState<number>(0);
   const [currentPhase, setCurrentPhase] = useState<string>("");
-
   const isPending = message.content.includes("已为您启动深度研究任务");
+  const [reportText, setReportText] = useState<string>(!isPending ? message.content : "");
+  const [loadingReport, setLoadingReport] = useState<boolean>(false);
+
+  const fetchReport = async (runId: string, detail?: any) => {
+    try {
+      setLoadingReport(true);
+      const d = detail || (await api.getRunDetail(runId));
+      const artifactIds = d?.delivery?.artifact_ids || d?.delivery?.artifact_refs || [];
+      if (artifactIds.length > 0) {
+        const res = await api.getArtifactContent(runId, artifactIds[0]);
+        const content = typeof res === "string" ? res : res.content;
+        if (content && typeof content === "string") {
+          setReportText(content);
+          onReportLoaded(content);
+          return;
+        }
+      }
+      if (d?.report_content) {
+        setReportText(d.report_content);
+        onReportLoaded(d.report_content);
+      }
+    } catch (err) {
+      console.error("加载深度研究报告失败:", err);
+    } finally {
+      setLoadingReport(false);
+    }
+  };
 
   const handleTerminal = (st: string, detail: any) => {
     // P6-A3：浏览器通知 + 页面内横幅（离开页面也能看到完成/失败）
@@ -67,20 +110,30 @@ const DeepResearchMessageBubble: React.FC<{
       }
     } catch {}
     if (finishedOk) {
-      const artifactIds = detail?.delivery?.artifact_ids || detail?.delivery?.artifact_refs || [];
-      if (artifactIds.length > 0) {
-        api.getArtifactContent(message.run_id!, artifactIds[0]).then((res) => {
-          const content = typeof res === "string" ? res : res.content;
-          if (content && typeof content === "string") onReportLoaded(content);
-        }).catch(() => {});
-      }
+      fetchReport(message.run_id!, detail);
     }
   };
 
   useEffect(() => {
-    if (!message.run_id || !isPending) return;
+    if (!message.run_id) return;
 
     let cancelled = false;
+
+    // Immediate initial check on mount
+    api.getRunDetail(message.run_id).then((detail) => {
+      if (cancelled) return;
+      const st = detail.state || detail.status || "running";
+      setRunState(st);
+      if (detail.progress) {
+        if (detail.progress.current_phase) setCurrentPhase(detail.progress.current_phase);
+        if (detail.progress.total_steps) setStepCount(detail.progress.total_steps);
+      }
+      if (st === "complete" || st === "partial") {
+        fetchReport(message.run_id!, detail);
+      }
+    }).catch(() => {});
+
+    if (!isPending) return;
 
     // P6-A3：主通道 = SSE 事件流（带游标补发与断线重连）；轮询降级为兜底。
     const unsubscribe = api.subscribeRunEvents(message.run_id, {
@@ -112,18 +165,6 @@ const DeepResearchMessageBubble: React.FC<{
           clearInterval(interval);
           unsubscribe();
           handleTerminal(st, detail);
-          const artifactIds = detail.delivery?.artifact_ids || detail.delivery?.artifact_refs || [];
-          if (artifactIds.length > 0) {
-            const res = await api.getArtifactContent(message.run_id!, artifactIds[0]);
-            const content = typeof res === "string" ? res : res.content;
-            if (content && typeof content === "string") {
-              onReportLoaded(content);
-              return;
-            }
-          }
-          if (detail.report_content) {
-            onReportLoaded(detail.report_content);
-          }
         } else if (st === "failed" || st === "waiting_for_user" || st === "cancelled" || st === "expired") {
           clearInterval(interval);
           unsubscribe();
@@ -175,24 +216,45 @@ const DeepResearchMessageBubble: React.FC<{
           </div>
         </div>
       ) : runState === "complete" || runState === "partial" ? (
-        <div className="rounded-xl border border-emerald-600/30 bg-emerald-50/60 dark:bg-emerald-950/20 p-4 space-y-2.5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-2 text-emerald-800 dark:text-emerald-300 font-semibold text-sm">
-              <CheckCircle2 className="h-4 w-4" />
-              <span>深度研究已完成（{runState}）</span>
+        <div className="space-y-3">
+          <div className="rounded-xl border border-emerald-600/30 bg-emerald-50/60 dark:bg-emerald-950/20 p-4 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2 text-emerald-800 dark:text-emerald-300 font-semibold text-sm">
+                <CheckCircle2 className="h-4 w-4" />
+                <span>深度研究已完成（{runState}）</span>
+              </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 text-xs text-emerald-900 dark:text-emerald-200 hover:bg-emerald-600/10 gap-1 px-2"
+                onClick={() => {
+                  window.location.hash = `#/research?run_id=${encodeURIComponent(message.run_id!)}`;
+                }}
+              >
+                <span>在研究中心查看完整证据链</span>
+                <ExternalLink className="h-3 w-3" />
+              </Button>
             </div>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-7 text-xs text-emerald-900 dark:text-emerald-200 hover:bg-emerald-600/10 gap-1 px-2"
-              onClick={() => {
-                window.location.hash = `#/research?run_id=${encodeURIComponent(message.run_id!)}`;
-              }}
-            >
-              <span>查看报告与证据链</span>
-              <ExternalLink className="h-3 w-3" />
-            </Button>
+            <div className="flex items-center justify-between text-xs text-muted-foreground pt-1 border-t border-emerald-600/20">
+              <span className="font-mono">Run ID: {message.run_id}</span>
+              <span className="text-emerald-700 dark:text-emerald-300">报告已在下方同步渲染</span>
+            </div>
           </div>
+
+          {/* Inline Report Rendering */}
+          {reportText ? (
+            <div className="pt-2" onClick={handleCitationClick}>
+              <div
+                className="prose prose-stone dark:prose-invert max-w-none text-base leading-relaxed font-serif-academic text-foreground [&_.katex-display]:my-3 [&_.katex-display]:overflow-x-auto [&_.katex-display]:text-center"
+                dangerouslySetInnerHTML={renderMarkdown(reportText)}
+              />
+            </div>
+          ) : loadingReport ? (
+            <div className="flex items-center space-x-2 p-3 text-xs text-muted-foreground font-sans">
+              <Loader2 className="h-4 w-4 animate-spin text-emerald-600" />
+              <span>正在获取深度研究综合报告与证据链...</span>
+            </div>
+          ) : null}
         </div>
       ) : isPending ? (
         <div className="rounded-xl border border-amber-600/30 bg-amber-50/50 dark:bg-amber-950/20 p-4 space-y-2.5">
@@ -282,6 +344,19 @@ export const ChatView: React.FC = () => {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [exportingAnswer, setExportingAnswer] = useState<string>("");
   const [convFilter, setConvFilter] = useState<"active" | "archived" | "deleted">("active");
+  const [webSearch, setWebSearch] = useState<boolean>(false);
+  const [thinkingDepth, setThinkingDepth] = useState<"quick" | "deep" | "rigorous">("deep");
+  const [lightboxImage, setLightboxImage] = useState<{ url: string; caption?: string } | null>(null);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && lightboxImage) {
+        setLightboxImage(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [lightboxImage]);
 
   const handleRenameConversation = async (convId: string, current: string) => {
     const title = window.prompt("重命名对话", current);
@@ -365,7 +440,27 @@ export const ChatView: React.FC = () => {
 
   useEffect(() => {
     refreshConversations();
-  }, []);
+
+    // Auto-refresh conversation list silently in background and on window focus
+    const silentRefresh = () => {
+      api.getConversations(convFilter).then((res) => {
+        if (res.items) setConversations(res.items);
+      }).catch(() => {});
+    };
+
+    const interval = setInterval(silentRefresh, 4000);
+    const handleFocus = () => {
+      if (document.visibilityState === "visible") silentRefresh();
+    };
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleFocus);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleFocus);
+    };
+  }, [convFilter]);
 
   const selectConversation = async (convId: string) => {
     try {
@@ -408,6 +503,8 @@ export const ChatView: React.FC = () => {
         question: q,
         conversation_id: activeConversationId || undefined,
         mode,
+        web_search: webSearch,
+        thinking_depth: thinkingDepth,
       });
 
       const replyContent = res.answer || res.content || res.text || "已完成分析回答。";
@@ -417,6 +514,7 @@ export const ChatView: React.FC = () => {
         mode: res.routed_mode || res.mode || mode,
         created_at: new Date().toISOString(),
         memory_candidates: res.memory_candidates,
+        image_assets: res.image_assets,
         run_id: res.run_id,
       };
       setMessages((prev) => [...prev, assistantMsg]);
@@ -633,7 +731,22 @@ export const ChatView: React.FC = () => {
         </header>
 
         {/* Main Conversation Scroll Area */}
-        <div className="flex-1 overflow-y-auto w-full flex justify-center py-6 px-4">
+        <div
+          className="flex-1 overflow-y-auto w-full flex justify-center py-6 px-4"
+          onClick={(e) => {
+            const target = e.target as HTMLElement;
+            if (target.tagName === "IMG") {
+              const src = target.getAttribute("src");
+              if (src) {
+                e.stopPropagation();
+                setLightboxImage({
+                  url: src,
+                  caption: target.getAttribute("alt") || "论文高清图表实证",
+                });
+              }
+            }
+          }}
+        >
           <div className="w-full max-w-3xl space-y-6">
             {messages.length === 0 ? (
               <div className="flex flex-col items-center justify-center min-h-[50vh] text-center space-y-4 py-12">
@@ -696,9 +809,9 @@ export const ChatView: React.FC = () => {
                           onReportLoaded={(newContent) => updateMessageContent(i, newContent)}
                         />
                       ) : (
-                        <div>
+                        <div onClick={handleCitationClick}>
                           <div
-                            className="prose prose-stone dark:prose-invert max-w-none text-base leading-relaxed font-serif-academic text-foreground"
+                            className="prose prose-stone dark:prose-invert max-w-none text-base leading-relaxed font-serif-academic text-foreground [&_.katex-display]:my-3 [&_.katex-display]:overflow-x-auto [&_.katex-display]:text-center"
                             dangerouslySetInnerHTML={renderMarkdown(msg.content)}
                           />
                           {msg.message_id && (
@@ -743,6 +856,43 @@ export const ChatView: React.FC = () => {
                           ))}
                         </div>
                       )}
+
+                      {/* Image Assets Gallery (P2.3 / P9) */}
+                      {msg.image_assets && msg.image_assets.length > 0 && (
+                        <div className="pt-3 border-t border-border/60 flex flex-col gap-2 font-sans">
+                          <span className="text-xs text-foreground/80 font-mono flex items-center gap-1.5 font-semibold">
+                            <Sparkles className="h-3.5 w-3.5 text-emerald-800 dark:text-emerald-400" />
+                            检索命中的多模态文献图表 ({msg.image_assets.length} 张):
+                          </span>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                            {msg.image_assets.map((img, imgIdx) => (
+                              <div
+                                key={imgIdx}
+                                onClick={() => setLightboxImage({ url: img.url, caption: img.caption })}
+                                className="group relative border border-border/70 rounded-xl overflow-hidden bg-muted/40 hover:border-emerald-800/60 hover:shadow-xs transition cursor-pointer"
+                              >
+                                <div className="aspect-video w-full overflow-hidden bg-black/5 dark:bg-white/5 flex items-center justify-center">
+                                  <img
+                                    src={img.url}
+                                    alt={img.caption}
+                                    className="max-h-full max-w-full object-contain group-hover:scale-105 transition duration-200"
+                                    loading="lazy"
+                                  />
+                                </div>
+                                <div className="p-2 text-xs">
+                                  <div className="flex items-center justify-between text-[11px] text-muted-foreground font-mono mb-1">
+                                    <span>{img.page ? `第 ${img.page} 页` : "插图"}</span>
+                                    <span className="truncate max-w-[120px]">{img.asset_id}</span>
+                                  </div>
+                                  <p className="line-clamp-2 text-foreground/90 font-serif-academic text-xs leading-snug">
+                                    {img.caption}
+                                  </p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                     {isUser && (
                       <div className="h-8 w-8 rounded-lg bg-muted text-muted-foreground flex items-center justify-center shrink-0 mt-0.5">
@@ -768,27 +918,110 @@ export const ChatView: React.FC = () => {
         </div>
 
         {/* Bottom Input Composer */}
-        <footer className="shrink-0 border-t border-border/70 bg-card/70 px-6 py-3 flex justify-center backdrop-blur-sm">
-          <form onSubmit={handleSend} className="w-full max-w-3xl relative flex items-end gap-2">
+        <footer className="shrink-0 border-t border-border/70 bg-card/70 px-4 py-3 flex justify-center backdrop-blur-sm">
+          <form onSubmit={handleSend} className="w-full max-w-3xl flex flex-col rounded-2xl border border-border/80 bg-background/95 p-3 shadow-xs focus-within:ring-2 focus-within:ring-emerald-800/30 focus-within:border-emerald-800/60 transition-all">
             <textarea
               rows={2}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={`输入学术问题（Enter 发送，Shift+Enter 换行）...`}
-              className="w-full text-xs sm:text-sm p-3 pr-12 rounded-xl border border-input bg-background/90 focus:outline-none focus:ring-2 focus:ring-emerald-800/40 shadow-xs resize-none"
+              className="w-full text-xs sm:text-sm p-1 border-0 bg-transparent focus:outline-none focus:ring-0 resize-none min-h-[48px] max-h-[140px] leading-relaxed text-foreground placeholder:text-muted-foreground"
             />
-            <Button
-              type="submit"
-              size="icon"
-              disabled={!input.trim() || loading}
-              className="absolute right-2.5 bottom-2.5 h-8 w-8 rounded-lg bg-emerald-800 hover:bg-emerald-900 text-white shadow-xs"
-            >
-              <Send className="h-4 w-4" />
-            </Button>
+            {/* Toolbar row with Web Search, Thinking Depth, and Send button perfectly aligned */}
+            <div className="flex items-center justify-between pt-2 mt-1 border-t border-border/40 gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* 联网搜索开关 */}
+                <button
+                  type="button"
+                  onClick={() => setWebSearch((prev) => !prev)}
+                  className={cn(
+                    "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-sans border transition cursor-pointer select-none",
+                    webSearch
+                      ? "bg-blue-50 text-blue-700 border-blue-300 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800 font-semibold shadow-2xs"
+                      : "border-border/70 text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                  )}
+                  title="开启后将通过实时搜索引擎检索最新权威资讯并注入上下文"
+                >
+                  <Globe className={cn("h-3.5 w-3.5", webSearch ? "text-blue-600 dark:text-blue-400" : "text-muted-foreground")} />
+                  <span>联网搜索</span>
+                  <span className={cn("text-[10px] px-1 py-0.2 rounded font-mono", webSearch ? "bg-blue-600 text-white" : "bg-muted text-muted-foreground")}>
+                    {webSearch ? "ON" : "OFF"}
+                  </span>
+                </button>
+
+                {/* 思考深度控制 */}
+                <div className="flex items-center rounded-md border border-border/70 p-0.5 bg-muted/40 text-xs">
+                  <span className="text-[11px] text-muted-foreground px-1.5 font-serif-academic select-none">思考深度:</span>
+                  {([
+                    { id: "quick", label: "⚡ 快速", desc: "紧凑响应 · 降低延迟" },
+                    { id: "deep", label: "🧠 深度", desc: "详尽推演 · 严谨论证" },
+                    { id: "rigorous", label: "🔬 极致研判", desc: "闭环交叉反思 · 证据求交" },
+                  ] as const).map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setThinkingDepth(t.id)}
+                      title={t.desc}
+                      className={cn(
+                        "px-2 py-0.5 rounded text-xs transition cursor-pointer",
+                        thinkingDepth === t.id
+                          ? "bg-background text-foreground font-semibold shadow-2xs border border-border/40"
+                          : "text-muted-foreground hover:text-foreground"
+                      )}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 发送按钮 */}
+              <Button
+                type="submit"
+                size="sm"
+                disabled={!input.trim() || loading}
+                className="h-8 px-3.5 rounded-lg bg-emerald-800 hover:bg-emerald-900 text-white flex items-center gap-1.5 shadow-xs font-medium cursor-pointer shrink-0"
+              >
+                <span>发送</span>
+                <Send className="h-3.5 w-3.5" />
+              </Button>
+            </div>
           </form>
         </footer>
       </div>
+
+      {/* Lightbox Modal for Image Assets */}
+      {lightboxImage && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in-50"
+          onClick={() => setLightboxImage(null)}
+        >
+          <div
+            className="relative max-w-4xl max-h-[90vh] bg-card border border-border rounded-2xl overflow-hidden shadow-2xl p-4 flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between pb-2 border-b border-border/60">
+              <p className="text-sm font-serif-academic font-medium text-foreground truncate pr-4">
+                {lightboxImage.caption || "论文高清图表实证"}
+              </p>
+              <button
+                onClick={() => setLightboxImage(null)}
+                className="text-muted-foreground hover:text-foreground text-xs font-mono px-2 py-1 rounded bg-muted/60"
+              >
+                关闭 (ESC)
+              </button>
+            </div>
+            <div className="flex-1 overflow-auto flex items-center justify-center p-2 min-h-[300px]">
+              <img
+                src={lightboxImage.url}
+                alt={lightboxImage.caption || "放大图表"}
+                className="max-h-[75vh] max-w-full object-contain rounded-lg"
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

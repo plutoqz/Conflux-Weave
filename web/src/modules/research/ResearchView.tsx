@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useMemo } from "react";
 import { Marked } from "marked";
+import katex from "katex";
 import {
   RotateCcw,
   MessageSquarePlus,
@@ -11,6 +12,7 @@ import {
   CheckCircle2,
   ExternalLink,
   ChevronRight,
+  ChevronDown,
   Download,
   Image as ImageIcon,
 } from "lucide-react";
@@ -41,9 +43,27 @@ export const ResearchView: React.FC = () => {
   const [rightTab, setRightTab] = useState<"toc" | "evidence" | "activity">("toc");
   const [headings, setHeadings] = useState<Array<{ id: string; text: string; level: number }>>([]);
   const [evidenceList, setEvidenceList] = useState<any[]>([]);
+  const [expandedEvidenceIds, setExpandedEvidenceIds] = useState<Set<string>>(new Set());
   const [previewImage, setPreviewImage] = useState<{ url: string; title: string } | null>(null);
   const [exporting, setExporting] = useState<string>("");
   const [exportError, setExportError] = useState<string>("");
+
+  const toggleEvidenceExpanded = (id: string) => {
+    setExpandedEvidenceIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAllEvidence = () => {
+    if (expandedEvidenceIds.size === evidenceList.length) {
+      setExpandedEvidenceIds(new Set());
+    } else {
+      setExpandedEvidenceIds(new Set(evidenceList.map((e) => e.evidence_id)));
+    }
+  };
 
   const handleExport = async (format: "markdown" | "bibtex" | "json" | "zip") => {
     if (!activeRunId || exporting) return;
@@ -131,7 +151,7 @@ export const ResearchView: React.FC = () => {
     setHeadings(extracted);
   }, [reportText]);
 
-  // Compile Academic Markdown with Anchored Headings and Interactive Citation Pill Badges
+  // Compile Academic Markdown with Anchored Headings, KaTeX Math, and Interactive Citation Pill Badges
   const renderedReportHtml = useMemo(() => {
     if (!reportText) return "";
     let headingCount = 0;
@@ -146,17 +166,123 @@ export const ResearchView: React.FC = () => {
       },
     });
 
-    // 1. Mark reference list anchors (e.g. - [1]《Title》)
-    let md = reportText.replace(/^-\s*\[(\d+)\]\s*(.*)$/gm, "- @@REF_TARGET_$1@@ $2");
-    // 2. Transform inline bracket citations (e.g. [1][2]) into interactive badges
-    md = md.replace(/\[(\d+)\]/g, `<a class="citation-badge" href="#cite-$1" data-cite="$1">[$1]</a>`);
-    // 3. Restore reference targets with anchor ID
+    const mathTokens: { id: string; html: string }[] = [];
+    let tokenCounter = 0;
+
+    // Preserve display math $$ ... $$
+    let md = reportText.replace(/\$\$([\s\S]*?)\$\$/g, (_, eq) => {
+      const id = `@@KATEXBLOCK${tokenCounter++}@@`;
+      try {
+        const rendered = katex.renderToString(eq.trim(), {
+          displayMode: true,
+          throwOnError: false,
+        });
+        mathTokens.push({
+          id,
+          html: `<div class="katex-display my-3 overflow-x-auto text-center">${rendered}</div>`,
+        });
+      } catch {
+        mathTokens.push({
+          id,
+          html: `<pre class="text-xs bg-muted p-2 rounded">$$${eq}$$</pre>`,
+        });
+      }
+      return id;
+    });
+
+    // Preserve display math \[ ... \]
+    md = md.replace(/\\\[([\s\S]*?)\\\]/g, (_, eq) => {
+      const id = `@@KATEXBLOCK${tokenCounter++}@@`;
+      try {
+        const rendered = katex.renderToString(eq.trim(), {
+          displayMode: true,
+          throwOnError: false,
+        });
+        mathTokens.push({
+          id,
+          html: `<div class="katex-display my-3 overflow-x-auto text-center">${rendered}</div>`,
+        });
+      } catch {
+        mathTokens.push({
+          id,
+          html: `<pre class="text-xs bg-muted p-2 rounded">\\[${eq}\\]</pre>`,
+        });
+      }
+      return id;
+    });
+
+    // Preserve inline math \( ... \)
+    md = md.replace(/\\\(([\s\S]*?)\\\)/g, (_, eq) => {
+      const id = `@@KATEXINLINE${tokenCounter++}@@`;
+      try {
+        const rendered = katex.renderToString(eq.trim(), {
+          displayMode: false,
+          throwOnError: false,
+        });
+        mathTokens.push({ id, html: rendered });
+      } catch {
+        mathTokens.push({ id, html: `\\(${eq}\\)` });
+      }
+      return id;
+    });
+
+    // Preserve inline math $ ... $
+    md = md.replace(/(?<!\\)\$([^\$\n]+?)(?<!\\)\$/g, (fullMatch, eq) => {
+      if (/^\s*\d+([.,]\d+)?\s*$/.test(eq)) return fullMatch;
+      const id = `@@KATEXINLINE${tokenCounter++}@@`;
+      try {
+        const rendered = katex.renderToString(eq.trim(), {
+          displayMode: false,
+          throwOnError: false,
+        });
+        mathTokens.push({ id, html: rendered });
+      } catch {
+        mathTokens.push({ id, html: `$${eq}$` });
+      }
+      return id;
+    });
+
+    // 1. Mark reference list anchors (e.g. - [1] or - [sq1-claim-0001] or 1. [sq1-claim-0001])
     md = md.replace(
-      /@@REF_TARGET_(\d+)@@/g,
+      /^(\s*(?:-\s*|\d+\.\s*)\[)((?:sq\d+-|live-|paper-|review-|managed-)?claim-\d+|\d+|[a-zA-Z0-9_\-\.]+)(\]\s*)/gim,
+      "$1@@REF_TARGET_$2@@$3"
+    );
+
+    // 2. Also mark inline claim tags in summary: e.g. 声明标识：`sq1-claim-0001`
+    md = md.replace(
+      /(声明标识：`?)((?:sq\d+-|live-|paper-|review-|managed-)?claim-\d+)(`?)/g,
+      `$1<span id="cite-$2" class="citation-source-target font-mono font-bold text-primary underline">$2</span>$3`
+    );
+
+    // 3. Transform inline bracket citations (e.g. [1] or [sq1-claim-0001]) into interactive badges
+    md = md.replace(
+      /\[((?:sq\d+-|live-|paper-|review-|managed-)?claim-\d+|\d+)\]/g,
+      (match, id) => {
+        let displayLabel = id;
+        const sqMatch = id.match(/^sq(\d+)-claim-0*(\d+)$/i);
+        if (sqMatch) {
+          displayLabel = `Claim ${sqMatch[1]}.${sqMatch[2]}`;
+        } else {
+          const claimMatch = id.match(/^claim-0*(\d+)$/i);
+          if (claimMatch) {
+            displayLabel = `Claim ${claimMatch[1]}`;
+          }
+        }
+        return `<a class="citation-badge" href="#cite-${id}" data-cite="${id}">[${displayLabel}]</a>`;
+      }
+    );
+
+    // 4. Restore reference targets with anchor ID
+    md = md.replace(
+      /@@REF_TARGET_((?:sq\d+-|live-|paper-|review-|managed-)?claim-\d+|\d+|[a-zA-Z0-9_\-\.]+)@@/g,
       `<span id="cite-$1" class="citation-source-target font-mono font-bold text-primary inline-block mr-1.5">[<span class="underline">$1</span>]</span>`
     );
 
-    return m.parse(md, { gfm: true, breaks: true }) as string;
+    let html = m.parse(md, { gfm: true, breaks: true }) as string;
+    for (const token of mathTokens) {
+      html = html.split(token.id).join(token.html);
+    }
+    return html;
   }, [reportText]);
 
   const handleReportClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -206,6 +332,9 @@ export const ResearchView: React.FC = () => {
   const steps = activeRunDetail?.steps || [];
   const currentStatus = activeRunDetail?.state || activeRunDetail?.status || (loading ? "loading" : "unknown");
   const runQuery = activeRunDetail?.query || activeRunDetail?.task_input?.query || activeRunDetail?.task_input?.objective || activeRunDetail?.research_context?.query || activeRunId;
+
+  const reportCharCount = reportText.length;
+  const reportWordCount = (reportText.match(/[\u4e00-\u9fff]|[a-zA-Z0-9_-]+/g) || []).length;
 
   return (
     <div className="flex flex-col h-[calc(100vh-3.5rem)] overflow-hidden">
@@ -276,6 +405,14 @@ export const ResearchView: React.FC = () => {
                     <span className="font-semibold">Run ID: {activeRunId}</span>
                     <span>·</span>
                     <span>状态: {delivery?.disposition || currentStatus || "N/A"}</span>
+                    {reportText && (
+                      <>
+                        <span>·</span>
+                        <span className="text-foreground/90 font-medium">
+                          字数: {reportCharCount.toLocaleString()} 字 ({reportWordCount.toLocaleString()} 词)
+                        </span>
+                      </>
+                    )}
                     {evidenceList.length > 0 && (
                       <>
                         <span>·</span>
@@ -467,65 +604,98 @@ export const ResearchView: React.FC = () => {
                 </div>
               )}
 
-              <span className="text-xs font-mono uppercase tracking-wider text-foreground/80 font-bold block pt-2">
-                Grounding Facts / 事实证据卡片
-              </span>
+              <div className="flex items-center justify-between pt-2">
+                <span className="text-xs font-mono uppercase tracking-wider text-foreground/80 font-bold block">
+                  Grounding Facts / 事实证据卡片 ({evidenceList.length})
+                </span>
+                {evidenceList.length > 0 && (
+                  <button
+                    onClick={toggleAllEvidence}
+                    className="text-xs text-emerald-800 dark:text-emerald-300 hover:underline font-serif-academic cursor-pointer font-medium"
+                  >
+                    {expandedEvidenceIds.size === evidenceList.length ? "全部折叠" : "全部展开"}
+                  </button>
+                )}
+              </div>
               {evidenceList.length === 0 ? (
                 <div className="text-xs sm:text-sm text-foreground/75 py-6 text-center">暂无结构化证据记录</div>
               ) : (
-                evidenceList.map((ev) => (
-                  <div
-                    key={ev.evidence_id}
-                    className="p-3.5 rounded-lg border border-border/80 bg-card text-xs sm:text-sm space-y-2 shadow-2xs top-bevel hover:border-emerald-800/40 transition"
-                  >
-                    <div className="flex items-center justify-between text-xs font-mono">
-                      <span className="font-bold text-foreground">{ev.evidence_id}</span>
-                      <span className="text-emerald-800 dark:text-emerald-300 font-semibold">
-                        {ev.locator?.page ? `第 ${ev.locator.page} 页` : ev.locator?.heading || ev.extraction_method || "核验证据"}
-                      </span>
-                    </div>
-                    {(ev.modality === "image" || ev.asset_id) ? (
-                      <div className="space-y-2 pt-1">
-                        <div
-                          className="relative rounded-md overflow-hidden border border-border/70 bg-muted/20 cursor-pointer group flex items-center justify-center p-1 hover:border-emerald-700/60 transition"
-                          onClick={() =>
-                            setPreviewImage({
-                              url: `/api/v1/library/assets/${ev.asset_id}/content`,
-                              title: `视觉实证图片：${ev.evidence_id} (第 ${ev.locator?.page || 1} 页)`,
-                            })
-                          }
-                        >
-                          <img
-                            src={`/api/v1/library/assets/${ev.asset_id}/content?variant=thumbnail`}
-                            alt={ev.quote || "视觉实证图表"}
-                            className="w-full max-h-48 object-contain bg-background/50 rounded transition-transform group-hover:scale-[1.01]"
-                            onError={(e) => {
-                              (e.target as HTMLElement).setAttribute("src", `/api/v1/library/assets/${ev.asset_id}/content`);
-                            }}
-                          />
-                          <div className="absolute bottom-1.5 right-1.5 bg-black/70 text-white text-[10px] px-1.5 py-0.5 rounded font-mono flex items-center space-x-1 opacity-80 group-hover:opacity-100 transition">
-                            <ImageIcon className="h-3 w-3" />
-                            <span>点击放大原图</span>
-                          </div>
+                evidenceList.map((ev) => {
+                  const isExpanded = expandedEvidenceIds.has(ev.evidence_id);
+                  return (
+                    <div
+                      key={ev.evidence_id}
+                      className="rounded-lg border border-border/80 bg-card text-xs sm:text-sm shadow-2xs top-bevel hover:border-emerald-800/40 transition overflow-hidden"
+                    >
+                      <div
+                        onClick={() => toggleEvidenceExpanded(ev.evidence_id)}
+                        className="p-3 flex items-center justify-between cursor-pointer hover:bg-muted/30 transition text-xs font-mono select-none"
+                      >
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          {isExpanded ? (
+                            <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                          ) : (
+                            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                          )}
+                          <span className="font-bold text-foreground truncate">{ev.evidence_id}</span>
+                          {(ev.modality === "image" || ev.asset_id) && (
+                            <Badge variant="outline" className="text-[10px] px-1 py-0 text-emerald-700 dark:text-emerald-300 border-emerald-600/30">
+                              图表
+                            </Badge>
+                          )}
                         </div>
-                        {ev.quote && (
-                          <p className="text-foreground/90 leading-relaxed italic border-l-2 border-emerald-800/60 pl-2.5 my-1 font-serif-academic text-xs">
-                            “{ev.quote}”
-                          </p>
-                        )}
+                        <span className="text-emerald-800 dark:text-emerald-300 font-semibold shrink-0 ml-2">
+                          {ev.locator?.page ? `第 ${ev.locator.page} 页` : ev.locator?.heading || ev.extraction_method || "核验证据"}
+                        </span>
                       </div>
-                    ) : (
-                      <p className="text-foreground/90 leading-relaxed italic border-l-2 border-emerald-800/60 pl-2.5 my-1 font-serif-academic">
-                        “{ev.quote}”
-                      </p>
-                    )}
-                    {ev.source_snapshot_id && (
-                      <div className="text-xs font-mono text-foreground/70 truncate pt-0.5">
-                        来源: {ev.source_snapshot_id.length > 32 ? `${ev.source_snapshot_id.slice(0, 24)}...` : ev.source_snapshot_id}
-                      </div>
-                    )}
-                  </div>
-                ))
+
+                      {isExpanded && (
+                        <div className="p-3 pt-0 border-t border-border/50 space-y-2 mt-1">
+                          {(ev.modality === "image" || ev.asset_id) ? (
+                            <div className="space-y-2 pt-1">
+                              <div
+                                className="relative rounded-md overflow-hidden border border-border/70 bg-muted/20 cursor-pointer group flex items-center justify-center p-1 hover:border-emerald-700/60 transition"
+                                onClick={() =>
+                                  setPreviewImage({
+                                    url: `/api/v1/library/assets/${ev.asset_id}/content`,
+                                    title: `视觉实证图片：${ev.evidence_id} (第 ${ev.locator?.page || 1} 页)`,
+                                  })
+                                }
+                              >
+                                <img
+                                  src={`/api/v1/library/assets/${ev.asset_id}/content?variant=thumbnail`}
+                                  alt={ev.quote || "视觉实证图表"}
+                                  className="w-full max-h-48 object-contain bg-background/50 rounded transition-transform group-hover:scale-[1.01]"
+                                  onError={(e) => {
+                                    (e.target as HTMLElement).setAttribute("src", `/api/v1/library/assets/${ev.asset_id}/content`);
+                                  }}
+                                />
+                                <div className="absolute bottom-1.5 right-1.5 bg-black/70 text-white text-[10px] px-1.5 py-0.5 rounded font-mono flex items-center space-x-1 opacity-80 group-hover:opacity-100 transition">
+                                  <ImageIcon className="h-3 w-3" />
+                                  <span>点击放大原图</span>
+                                </div>
+                              </div>
+                              {ev.quote && (
+                                <p className="text-foreground/90 leading-relaxed italic border-l-2 border-emerald-800/60 pl-2.5 my-1 font-serif-academic text-xs">
+                                  “{ev.quote}”
+                                </p>
+                              )}
+                            </div>
+                          ) : (
+                            <p className="text-foreground/90 leading-relaxed italic border-l-2 border-emerald-800/60 pl-2.5 my-1 font-serif-academic">
+                              “{ev.quote}”
+                            </p>
+                          )}
+                          {ev.source_snapshot_id && (
+                            <div className="text-xs font-mono text-foreground/70 truncate pt-0.5">
+                              来源: {ev.source_snapshot_id.length > 32 ? `${ev.source_snapshot_id.slice(0, 24)}...` : ev.source_snapshot_id}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
               )}
             </TabsContent>
 

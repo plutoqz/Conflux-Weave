@@ -20,6 +20,7 @@ export const TaskDialog: React.FC = () => {
   const [query, setQuery] = useState("");
   const [topics, setTopics] = useState("");
   const [maxResults, setMaxResults] = useState(15);
+  const [maxSubquestions, setMaxSubquestions] = useState(4);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -34,6 +35,12 @@ export const TaskDialog: React.FC = () => {
       if (mode === "fixture") {
         result = await api.createFixtureTask({
           objective: query.trim(),
+        });
+      } else if (mode === "managed") {
+        result = await api.createVerifiedResearchTask({
+          objective: query.trim(),
+          mode: "managed",
+          max_subquestions: maxSubquestions,
         });
       } else {
         const topicList = topics
@@ -125,7 +132,28 @@ export const TaskDialog: React.FC = () => {
             />
           </div>
 
-          {mode !== "fixture" && (
+          {mode === "managed" && (
+            <div className="space-y-2 p-3 rounded-lg border border-border/70 bg-muted/20">
+              <div className="flex justify-between items-center">
+                <label className="text-xs font-medium text-foreground">子问题拆解上限 (Subquestions)</label>
+                <span className="text-xs font-mono font-semibold text-emerald-700 dark:text-emerald-300">{maxSubquestions} 个</span>
+              </div>
+              <input
+                type="range"
+                min={2}
+                max={6}
+                step={1}
+                value={maxSubquestions}
+                onChange={(e) => setMaxSubquestions(Number(e.target.value))}
+                className="w-full h-1.5 bg-muted rounded-lg appearance-none cursor-pointer"
+              />
+              <p className="text-[11px] text-muted-foreground leading-relaxed font-serif-academic">
+                主管智能体将基于目标覆盖范围，自动规划 2~{maxSubquestions} 个递进子问题并并行指派专员调研。
+              </p>
+            </div>
+          )}
+
+          {mode === "single" && (
             <>
               <div className="space-y-1.5">
                 <label className="text-xs font-medium text-foreground">关键词 / 领域焦点 (可选，英文逗号分隔)</label>

@@ -1,14 +1,16 @@
 import React, { useState, useEffect } from "react";
-import { Cpu, Bookmark, Trash2, Server, RefreshCw, Plus, Copy, Check } from "lucide-react";
+import { Cpu, Bookmark, Trash2, Server, RefreshCw, Plus, Copy, Check, Type } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { useWorkbenchStore, type FontSizePreference } from "@/stores/useWorkbenchStore";
 import { api } from "@/services/api";
 import type { MCPServer } from "@/types/workbench";
 
 export const SettingsView: React.FC = () => {
+  const { fontSize, setFontSize } = useWorkbenchStore();
   const [provider, setProvider] = useState("openai");
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
@@ -210,6 +212,60 @@ export const SettingsView: React.FC = () => {
 
   return (
     <div className="max-w-4xl mx-auto p-4 sm:p-6 space-y-8">
+      {/* Appearance & Typography Preferences */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center space-x-2">
+            <Type className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+            <div>
+              <CardTitle className="text-base">界面显示与字体字号偏好</CardTitle>
+              <CardDescription className="text-xs">
+                根据个人阅读习惯与屏幕分辨率自由调整工作台文字字号。设置将即时全站生效并自动记忆。
+              </CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+            {[
+              { id: "normal", label: "标准 (14px)", desc: "紧凑高密度布局" },
+              { id: "medium", label: "舒适 (15.5px)", desc: "推荐日常与精读" },
+              { id: "large", label: "大号 (17px)", desc: "清晰易读护眼" },
+              { id: "xlarge", label: "特大 (18.5px)", desc: "高分大屏无障碍" },
+            ].map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => setFontSize(opt.id as FontSizePreference)}
+                className={`p-3 rounded-xl border text-left transition cursor-pointer flex flex-col justify-between ${
+                  fontSize === opt.id
+                    ? "border-emerald-700 dark:border-emerald-400 bg-emerald-500/10 text-foreground font-semibold shadow-xs"
+                    : "border-border bg-card/60 hover:bg-muted/50 text-foreground/80"
+                }`}
+              >
+                <div className="flex items-center justify-between w-full mb-1">
+                  <span className="text-sm">{opt.label}</span>
+                  {fontSize === opt.id && (
+                    <Badge variant="default" className="text-[10px] px-1 py-0 bg-emerald-700">
+                      当前
+                    </Badge>
+                  )}
+                </div>
+                <span className="text-xs text-muted-foreground">{opt.desc}</span>
+              </button>
+            ))}
+          </div>
+          <div className="p-3.5 rounded-lg border border-border/70 bg-muted/30 flex items-center justify-between text-xs">
+            <span className="text-muted-foreground font-serif-academic">
+              字号实时预览：系统采用确定性沙箱闭环，所有研读分析与项目导学均支持异步并发调度。
+            </span>
+            <span className="font-mono text-emerald-700 dark:text-emerald-400 font-semibold shrink-0 ml-3">
+              当前层级: {fontSize.toUpperCase()}
+            </span>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Provider Config Section */}
       <Card>
         <CardHeader>

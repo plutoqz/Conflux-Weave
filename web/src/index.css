@@ -302,6 +302,62 @@
   margin-bottom: 0;
 }
 
+/* Responsive Tables for all prose & markdown containers */
+.prose table {
+  display: block !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  overflow-x: auto !important;
+  border-collapse: collapse !important;
+  margin: 1rem 0 !important;
+  font-size: 0.85rem !important;
+  border: 1px solid hsl(var(--border)) !important;
+}
+
+.prose thead th {
+  background-color: hsla(var(--muted) / 0.5) !important;
+  font-weight: 600 !important;
+  text-align: left !important;
+  padding: 0.5rem 0.75rem !important;
+  border: 1px solid hsl(var(--border)) !important;
+}
+
+.prose tbody td {
+  padding: 0.5rem 0.75rem !important;
+  border: 1px solid hsl(var(--border)) !important;
+  line-height: 1.5 !important;
+}
+
+.prose tbody tr:nth-child(even) {
+  background-color: hsla(var(--muted) / 0.25) !important;
+}
+
+/* Fix Markdown Code Blocks High Contrast & Readability */
+.prose pre {
+  background-color: #0f172a !important;
+  color: #f8fafc !important;
+  border-radius: 0.5rem !important;
+  padding: 0.875rem 1rem !important;
+  overflow-x: auto !important;
+  max-width: 100% !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+.prose pre code,
+.prose pre code[class*="language-"],
+.prose code[class*="language-"] {
+  background-color: transparent !important;
+  color: #f8fafc !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important;
+  font-size: 0.82rem !important;
+  line-height: 1.6 !important;
+  text-shadow: none !important;
+}
+
+.prose pre span {
+  color: inherit;
+}
+
 /* Academic Tables (Three-line style / 三线学术表) */
 .academic-report table {
   width: 100%;
@@ -450,4 +506,46 @@
 .citation-source-target:target,
 .citation-source-target.highlight-flash {
   background-color: rgba(27, 73, 49, 0.15);
+}
+
+/* Dynamic Font Scaling Preferences */
+html[data-font-size="normal"] {
+  font-size: 14px;
+}
+html[data-font-size="medium"] {
+  font-size: 15.5px;
+}
+html[data-font-size="large"] {
+  font-size: 17px;
+}
+html[data-font-size="xlarge"] {
+  font-size: 18.5px;
+}
+
+/* Academic Figure & Multimodal Image Styling */
+.prose img {
+  max-height: 22rem;
+  max-width: 100%;
+  margin: 1.25rem auto;
+  display: block;
+  border-radius: 0.625rem;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  box-shadow: 0 2px 8px -2px rgba(0, 0, 0, 0.08);
+  cursor: zoom-in;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+  object-fit: contain;
+  background-color: rgba(248, 250, 252, 0.8);
+  padding: 0.25rem;
+}
+
+.dark .prose img {
+  background-color: rgba(15, 23, 42, 0.6);
+  border-color: rgba(71, 85, 105, 0.4);
+  box-shadow: 0 2px 10px -2px rgba(0, 0, 0, 0.4);
+}
+
+.prose img:hover {
+  transform: scale(1.015);
+  border-color: rgba(16, 185, 129, 0.6);
+  box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.15);
 }

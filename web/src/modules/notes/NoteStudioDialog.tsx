@@ -10,6 +10,7 @@ import { FileText, Copy, Sparkles, Check, History, Loader2, AlertCircle, Downloa
 import { marked } from "marked";
 import { renderMarkdownWithMath, cleanDocumentNoteText } from "@/lib/math";
 import { api } from "@/services/api";
+import { useWorkbenchStore } from "@/stores/useWorkbenchStore";
 import { cn } from "@/lib/utils";
 import type { DocumentNote } from "@/types/workbench";
 
@@ -40,6 +41,7 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
   open,
   onOpenChange,
 }) => {
+  const { addBackgroundTask, updateBackgroundTask } = useWorkbenchStore();
   const [note, setNote] = useState<DocumentNote | null>(null);
   const [activeTab, setActiveTab] = useState<"html" | "md" | "source">("html");
   const [patchPrompt, setPatchPrompt] = useState("");
@@ -92,10 +94,24 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
     // A2：加载原文分段（页码定位），供阅读窗格与选择引用使用
     api.getDocumentSegments(documentId).then((res) => setSegments(res.segments || [])).catch(() => setSegments([]));
 
+    const taskId = `task-reading-${documentId}`;
+    addBackgroundTask({
+      id: taskId,
+      title: `研读分析: ${documentId}`,
+      type: "reading",
+      status: "running",
+      startTime: Date.now(),
+      targetId: documentId,
+    });
+
     // Call analyzeDocument (which gets existing or builds new)
     api.analyzeDocument(documentId)
       .then(async (res) => {
         setNote(res);
+        updateBackgroundTask(taskId, {
+          status: "succeeded",
+          message: `研读完成：《${res.title}》`,
+        });
         if (res.note_id) {
           try {
             const revRes = await api.getDocumentNoteRevisions(res.note_id);
@@ -108,6 +124,10 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
       .catch((err) => {
         console.error("Failed to analyze document:", err);
         setError(err.message || "文档研读失败，请检查文件是否存在全文。");
+        updateBackgroundTask(taskId, {
+          status: "failed",
+          message: err.message || "研读失败",
+        });
       })
       .finally(() => setLoading(false));
   }, [open, documentId]);
@@ -182,6 +202,7 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
       setSavingToResearch(true);
       const res = await api.saveNoteToResearch(note.note_id);
       setSavedResearchRunId(res.run_id);
+      useWorkbenchStore.getState().refreshRuns();
     } catch (err: any) {
       alert(`保存报告到研究失败: ${err.message || err}`);
     } finally {
@@ -296,7 +317,7 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl h-[85vh] flex flex-col p-0 gap-0 overflow-hidden bg-background">
+      <DialogContent className="max-w-6xl w-[94vw] h-[90vh] flex flex-col p-0 gap-0 overflow-hidden bg-background">
         {/* Note Studio Header */}
         <div className="p-4 border-b border-border/70 flex items-center justify-between bg-card/60">
           <div className="flex items-center space-x-3 min-w-0">
@@ -327,9 +348,38 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
                   );
                 })()}
               </div>
-              <p className="text-xs text-foreground/75 font-mono truncate max-w-sm mt-0.5">
-                Doc: {documentId}
-              </p>
+              {(() => {
+                const noteMeta = (note?.metadata || {}) as Record<string, any>;
+                const noteChars = noteMeta.character_count || ((note?.markdown_content || "").length) || (note?.executive_summary || "").length;
+                const noteWords = noteMeta.word_count || ((note?.markdown_content || "").match(/[\u4e00-\u9fff]|[a-zA-Z0-9_-]+/g) || []).length;
+                const noteTokens = noteMeta.tokens_consumed ?? ((noteMeta.input_tokens ?? 0) + (noteMeta.output_tokens ?? 0));
+                const noteElapsed = noteMeta.elapsed_seconds ?? 0;
+                return (
+                  <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-xs text-foreground/75 font-mono mt-0.5">
+                    <span className="truncate max-w-[200px]" title={documentId || ""}>Doc: {documentId}</span>
+                    {note && (
+                      <>
+                        <span>·</span>
+                        <span className="text-foreground/90 font-medium">
+                          字数: {noteChars.toLocaleString()} 字 ({noteWords.toLocaleString()} 词)
+                        </span>
+                        {noteTokens > 0 && (
+                          <>
+                            <span>·</span>
+                            <span>Token: {noteTokens.toLocaleString()}</span>
+                          </>
+                        )}
+                        {noteElapsed > 0 && (
+                          <>
+                            <span>·</span>
+                            <span>耗时: {noteElapsed}s</span>
+                          </>
+                        )}
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           </div>
 
@@ -442,15 +492,25 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
         {/* Note Body */}
         <div className="flex-1 overflow-hidden bg-background relative">
           {loading ? (
-            <div className="flex flex-col items-center justify-center h-full text-center space-y-3 p-6">
-              <Loader2 className="h-7 w-7 animate-spin text-emerald-800 dark:text-emerald-400" />
+            <div className="flex flex-col items-center justify-center h-full text-center space-y-4 p-6">
+              <Loader2 className="h-8 w-8 animate-spin text-emerald-800 dark:text-emerald-400" />
               <div className="space-y-1">
-                <p className="text-sm font-serif-academic font-medium text-foreground">
+                <p className="text-base font-serif-academic font-medium text-foreground">
                   DocumentAgent 正在研读文档...
                 </p>
-                <p className="text-xs sm:text-sm font-serif-academic text-foreground/75 max-w-sm">
-                  正在解析长文档切片、提炼核心概念与推导脉络，请稍候。
+                <p className="text-xs sm:text-sm font-serif-academic text-muted-foreground max-w-sm">
+                  正在解析长文档切片、提炼核心概念与推导脉络。研读任务支持全异步执行。
                 </p>
+              </div>
+              <div className="pt-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onOpenChange(false)}
+                  className="font-serif-academic text-xs gap-1.5 border-border hover:border-emerald-700/50"
+                >
+                  <span>转入后台运行 (关闭弹窗不中断)</span>
+                </Button>
               </div>
             </div>
           ) : error ? (
@@ -470,12 +530,12 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
               未找到此文档的研读笔记。
             </div>
           ) : activeTab === "html" ? (
-            <iframe
-              title="Note HTML Preview"
-              srcDoc={displayHtml}
-              sandbox="allow-same-origin allow-scripts"
-              className="w-full h-full border-0 bg-transparent"
-            />
+            <div className="w-full h-full overflow-y-auto px-6 sm:px-12 py-8 select-text bg-background/50">
+              <div
+                className="max-w-5xl mx-auto prose prose-stone dark:prose-invert max-w-none font-serif-academic leading-relaxed text-foreground [&_table]:w-full [&_table]:border-collapse [&_table]:my-5 [&_table]:text-xs sm:[&_table]:text-sm [&_th]:border [&_th]:border-border/80 [&_th]:p-3 [&_th]:bg-muted/40 [&_th]:font-semibold [&_th]:break-words [&_td]:border [&_td]:border-border/60 [&_td]:p-3 [&_.katex-display]:my-4 [&_.katex-display]:overflow-x-auto [&_.katex-display]:text-center"
+                dangerouslySetInnerHTML={{ __html: renderMarkdownWithMath(mdContent || rawHtml) }}
+              />
+            </div>
           ) : activeTab === "source" ? (
             <div className="w-full h-full flex flex-col">
               <div className="px-4 py-2 border-b border-border/60 bg-muted/30 text-[11px] text-muted-foreground flex items-center justify-between shrink-0">
