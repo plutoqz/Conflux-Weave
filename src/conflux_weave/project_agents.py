@@ -222,26 +222,38 @@ class ProjectAgent:
                 context_snippets.append(f"### [pyproject.toml]\n```toml\n{c[:1500]}\n```")
             except Exception:
                 pass
-        # Find files matching question keywords
-        q_words = [w.lower() for w in re.split(r"[\s,._\-\\/]+", question) if len(w) > 2]
-        all_files: list[str] = []
-        for d in [root] + [Path(root, "src"), Path(root, "docs")]:
-            if d.is_dir():
-                for p in d.glob("*"):
-                    if p.is_file() and not p.name.startswith("."):
-                        try:
-                            rel = str(p.relative_to(root)).replace("\\", "/")
-                            all_files.append(rel)
-                        except ValueError:
-                            pass
+        # Find files matching question keywords recursively
+        q_words = [w.lower() for w in re.split(r"[\s,._\-\\/]+", question) if len(w) >= 2]
+        all_files: list[tuple[str, Path]] = []
+        ignored_dirs = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", ".next", ".pytest_cache"}
 
-        for rel in all_files:
-            if any(w in rel.lower() for w in q_words):
+        try:
+            for p in root.rglob("*"):
+                if p.is_file() and not any(part in ignored_dirs or part.startswith(".") for part in p.parts):
+                    try:
+                        rel = str(p.relative_to(root)).replace("\\", "/")
+                        all_files.append((rel, p))
+                    except ValueError:
+                        pass
+                    if len(all_files) >= 1500:
+                        break
+        except Exception:
+            pass
+
+        scored_files: list[tuple[int, str, Path]] = []
+        for rel, p in all_files:
+            rel_lower = rel.lower()
+            score = sum(1 for w in q_words if w in rel_lower)
+            if score > 0:
+                scored_files.append((score, rel, p))
+
+        scored_files.sort(key=lambda item: item[0], reverse=True)
+        for _, rel, p in scored_files[:6]:
+            if rel not in cited_files:
                 cited_files.append(rel)
-                content, _, _ = ProjectScanner.read_file_safe(root, rel, max_size_bytes=4096)
-                context_snippets.append(f"--- File: {rel} ---\n{content[:1500]}")
-                if len(cited_files) >= 5:
-                    break
+                content, _, _ = ProjectScanner.read_file_safe(root, rel, max_size_bytes=16384)
+                lang_tag = p.suffix.lstrip(".") or "text"
+                context_snippets.append(f"--- File: {rel} ---\n```{lang_tag}\n{content[:3000]}\n```")
 
         # If no specific matches, include directory structure
         if not context_snippets:
@@ -281,22 +293,25 @@ class ProjectAgent:
                 f"项目上下文信息:\n" + "\n\n".join(context_snippets) + f"\n\n用户问题: {question}"
             )
             try:
-                chat_resp = self.provider.chat(
-                    system_prompt=system_prompt,
-                    user_prompt=user_msg,
-                    temperature=0.2,
-                )
-                if chat_resp and chat_resp.content:
-                    return ProjectAnswer(
-                        answer_markdown=chat_resp.content.strip(),
-                        cited_files=cited_files,
-                        git_evidence=git_status.to_dict(),
-                        risks_and_recommendations=risks,
+                chat_func = getattr(self.provider, "complete", None) or getattr(self.provider, "chat", None)
+                if chat_func is not None:
+                    chat_resp = chat_func(
+                        system_prompt=system_prompt,
+                        user_prompt=user_msg,
+                        temperature=0.2,
                     )
+                    content = getattr(chat_resp, "content", None) or (str(chat_resp) if isinstance(chat_resp, str) else None)
+                    if content and content.strip():
+                        return ProjectAnswer(
+                            answer_markdown=content.strip(),
+                            cited_files=cited_files,
+                            git_evidence=git_status.to_dict(),
+                            risks_and_recommendations=risks,
+                        )
             except Exception:
                 pass
 
-        # Offline deterministic fallback
+        # Offline deterministic fallback tailored to target project
         report_lines = [
             f"## 项目分析报告：{project.name}",
             "",
@@ -305,23 +320,35 @@ class ProjectAgent:
             "",
             "### 一、 项目结构概览",
             f"- 探测到顶级资源：{', '.join(n.name for n in tree_nodes[:8])} 等",
-            f"- 核心引用文件：{', '.join(f'`{f}`' for f in cited_files) if cited_files else '根目录配置'}",
+            f"- 核心引用文件：{', '.join(f'`{f}`' for f in cited_files) if cited_files else '项目根目录配置'}",
             "",
             "### 二、 针对问题的分析",
         ]
 
-        if "实现" in question or "功能" in question or "架构" in question:
+        if "实现" in question or "功能" in question or "架构" in question or "怎么" in question or "如何" in question:
+            overview_desc = f"项目《{project.name}》"
+            if readme_path.is_file():
+                try:
+                    c, _, _ = ProjectScanner.read_file_safe(root, "README.md", max_size_bytes=4096)
+                    lines = [l.strip() for l in c.splitlines() if l.strip() and not l.startswith("#")]
+                    if lines:
+                        overview_desc += f" 主要定位为：{lines[0]}"
+                except Exception:
+                    pass
+            if "主要定位" not in overview_desc:
+                overview_desc += f" 包含 {len(tree_nodes)} 个主要探测目录/文件节点，提供模块化功能实现。"
+
             report_lines.extend([
                 f"基于对 `{project.name}` 仓库源码与配置的静态解析：",
-                "1. **核心定位**：系统设计为具备确定性 Harness、多模态图表抽取与检索 (P2) 及双向 Lineage 闭包的可信多智能体系统；",
-                "2. **模块组成**：涵盖 FastAPI 服务边界、SQLite 状态权威持久化、LanceDB 混合向量索引与多模态 RAG；",
-                "3. **当前状态**：所有既有核心能力均通过离线与基准测试（545+ 用例全绿）。",
+                f"1. **核心定位**：{overview_desc}",
+                f"2. **模块与目录组成**：包含 {', '.join(f'`{n.name}`' for n in tree_nodes[:6])} 等核心模块划分；",
+                f"3. **关键实现入口**：建议从核心文件 {', '.join(f'`{f}`' for f in cited_files[:3]) if cited_files else '根目录入口文件'} 开始追踪业务调用链路与执行逻辑。",
             ])
         elif "git" in question.lower() or "提交" in question or "变更" in question or "diff" in question.lower():
             report_lines.extend([
                 f"当前 Git 状态分析：",
                 f"- **分支**：`{git_status.branch}`",
-                f"- **HEAD**：`{git_status.commit_hash[:10]}` - {git_status.commit_message}",
+                f"- **HEAD**：`{git_status.commit_hash[:10] if git_status.commit_hash else 'none'}` - {git_status.commit_message}",
                 f"- **改动文件数**：{len(git_status.modified_files)} 个修改，{len(git_status.untracked_files)} 个未跟踪。",
             ])
             if git_status.recent_commits:
@@ -331,8 +358,8 @@ class ProjectAgent:
         else:
             report_lines.extend([
                 f"针对提问 “{question}”：",
-                f"已索引项目上下文并检索相关文件：{', '.join(f'`{f}`' for f in cited_files) if cited_files else '项目根目录'}。",
-                f"如需更深入的局部逻辑剖析，可指定具体文件路径（如 `src/conflux_weave/retrieval.py`）进行定向提问。",
+                f"已索引 `{project.name}` 上下文并检索相关文件：{', '.join(f'`{f}`' for f in cited_files) if cited_files else '项目根目录'}。",
+                f"如需更深入的局部逻辑剖析，可指定具体文件路径进行定向提问。",
             ])
 
         if risks:
@@ -361,7 +388,7 @@ class ProjectAgent:
             except Exception:
                 pass
 
-        is_conflux = (project.name == "Conflux-Weave") or (root / "src" / "conflux_weave").is_dir()
+        is_conflux = (project.project_id == "proj-conflux-weave" or project.name.lower() == "conflux-weave") and (root / "src" / "conflux_weave").is_dir()
 
         if is_conflux:
             components = [
@@ -516,7 +543,7 @@ class ProjectAgent:
 
     def get_theory_mappings(self, project: Project) -> list[TheoryMappingItem]:
         root = Path(project.root_path).resolve()
-        is_conflux = (project.name == "Conflux-Weave") or (root / "src" / "conflux_weave").is_dir()
+        is_conflux = (project.project_id == "proj-conflux-weave" or project.name.lower() == "conflux-weave") and (root / "src" / "conflux_weave").is_dir()
 
         if is_conflux:
             return [
@@ -833,6 +860,224 @@ class ProjectAgent:
             "runtime_environment": "Python 3.12+ (Virtualenv Isolated)",
         }
 
+    def generate_learning_guide(self, project: Project) -> dict[str, Any]:
+        """Generate structured dissection and progressive learning roadmap for cloned & vibecoding projects."""
+        root = Path(project.root_path).resolve()
+        scanner = ProjectScanner
+        tree_nodes = scanner.scan_tree(root, max_depth=3, max_files=200)
+
+        # 1. Project classification & ecosystem detection
+        is_python = (root / "pyproject.toml").is_file() or (root / "requirements.txt").is_file() or any(root.glob("*.py"))
+        is_node = (root / "package.json").is_file() or (root / "tsconfig.json").is_file()
+        is_rust = (root / "Cargo.toml").is_file()
+        is_go = (root / "go.mod").is_file()
+
+        stack_tags = []
+        if is_python: stack_tags.append("Python")
+        if is_node: stack_tags.append("TypeScript/JavaScript")
+        if is_rust: stack_tags.append("Rust")
+        if is_go: stack_tags.append("Go")
+        if not stack_tags: stack_tags.append("Multi-Language")
+
+        # 2. Extract description from README or package config
+        readme_text = ""
+        for readme_name in ["README.md", "README.MD", "readme.md", "README"]:
+            if (root / readme_name).is_file():
+                try:
+                    c, _, _ = scanner.read_file_safe(root, readme_name, max_size_bytes=32768)
+                    readme_text = c
+                    break
+                except Exception:
+                    pass
+
+        # 3. Categorize files into architectural roles
+        configs: list[str] = []
+        entrypoints: list[str] = []
+        models_and_types: list[str] = []
+        core_logic: list[str] = []
+        test_files: list[str] = []
+        doc_files: list[str] = []
+
+        all_rel_paths: list[str] = []
+        def _collect_files(nodes):
+            for n in nodes:
+                if not n.is_dir:
+                    all_rel_paths.append(n.path)
+                if getattr(n, "children", None):
+                    _collect_files(n.children)
+        _collect_files(tree_nodes)
+
+        for p in all_rel_paths:
+            p_lower = p.lower()
+            name = Path(p).name.lower()
+            if any(t in p_lower for t in ["test", "tests", "spec", "__tests__"]):
+                test_files.append(p)
+            elif name in ["readme.md", "contributing.md", "architecture.md", "license"] or p_lower.startswith("docs/"):
+                doc_files.append(p)
+            elif name in ["pyproject.toml", "package.json", "tsconfig.json", "cargo.toml", "go.mod", "requirements.txt", ".env.example", "dockerfile", "docker-compose.yml"]:
+                configs.append(p)
+            elif name in ["main.py", "app.py", "server.py", "cli.py", "index.ts", "index.js", "app.tsx", "main.rs", "main.go"]:
+                entrypoints.append(p)
+            elif any(k in p_lower for k in ["model", "type", "schema", "contract", "entity", "dto", "interface"]):
+                models_and_types.append(p)
+            elif any(k in p_lower for k in ["core", "service", "agent", "workflow", "engine", "pipeline", "controller", "handler", "util", "lib"]):
+                core_logic.append(p)
+
+        # 4. Synthesize project mission
+        first_readme_lines = [l.strip().lstrip("#").strip() for l in readme_text.splitlines() if l.strip() and not l.startswith("```")][:4]
+        purpose_and_value = (
+            " ".join(first_readme_lines[:2])
+            if first_readme_lines
+            else f"{project.name} 是一个基于 {' / '.join(stack_tags)} 构建的代码工程，提供了模块化的业务功能与架构设计。"
+        )
+
+        # 5. Progressive Reading Roadmap (5 Steps)
+        roadmap = [
+            {
+                "step_number": 1,
+                "stage": "认知底座",
+                "title": "项目规范、运行环境与核心配置契约",
+                "files": (configs[:3] or [all_rel_paths[0]] if all_rel_paths else []),
+                "focus": "从环境声明与依赖列表快速切入，掌握项目所需的外部服务、中间件版本与整体构建运行方式。",
+                "tip": "重点关注依赖项列表中的核心三方库，它直接决定了系统的技术选型与底层驱动机制。",
+                "difficulty": "入门 (Easy)",
+            },
+            {
+                "step_number": 2,
+                "stage": "数据形态",
+                "title": "领域实体、数据模型与通信契约定义",
+                "files": models_and_types[:4] or [p for p in all_rel_paths if "type" in p or "model" in p][:3],
+                "focus": "理清系统在不同模块之间传递的核心状态与数据结构，掌握输入输出 schema 与核心枚举。",
+                "tip": "在阅读执行逻辑之前，先看懂数据结构（Data Structures），后续的逻辑控制流将一目了然。",
+                "difficulty": "基础 (Easy)",
+            },
+            {
+                "step_number": 3,
+                "stage": "生命周期",
+                "title": "系统主入口、初始化引导与控制流中枢",
+                "files": entrypoints[:3] or [p for p in all_rel_paths if "server" in p or "app" in p or "main" in p][:2],
+                "focus": "跟踪应用程序的 Bootstrapping 流程：从参数解析、服务容器注入、路由挂载到优雅退出机制。",
+                "tip": "标记出入口处创建的全局单例与生命周期钩子，注意上下文（Context）如何向下层模块传递。",
+                "difficulty": "进阶 (Medium)",
+            },
+            {
+                "step_number": 4,
+                "stage": "业务内核",
+                "title": "核心业务逻辑、算子管线与编排状态机",
+                "files": core_logic[:5] or all_rel_paths[1:6],
+                "focus": "深入核心领域服务或业务 Agent 链路，跟踪一个完整业务请求或任务从接收、调度到产出的全过程。",
+                "tip": "关注异常处理分支与状态流转条件，体会该项目在并发、重试或缓存上的权衡设计。",
+                "difficulty": "核心 (Medium-Hard)",
+            },
+            {
+                "step_number": 5,
+                "stage": "工程保障",
+                "title": "测试套件、防御性边界与工程治理",
+                "files": test_files[:4] or [p for p in all_rel_paths if "test" in p][:3],
+                "focus": "查看关键模块的单元测试与集成验证逻辑，通过测试用例反推模块的预期行为与边界用例。",
+                "tip": "测试代码是最具真实性的“活文档”，重点观察断言（Assertions）检验了哪些边缘输入。",
+                "difficulty": "精通 (Medium)",
+            },
+        ]
+
+        # 6. Vibecoding & Prototype Hygiene Audit
+        total_files_count = len(all_rel_paths)
+        test_ratio = len(test_files) / max(total_files_count, 1)
+        has_tests = len(test_files) > 0
+        has_docs = len(doc_files) > 0
+
+        maturity_score = 60
+        if has_tests: maturity_score += 15
+        if has_docs: maturity_score += 10
+        if len(models_and_types) > 0: maturity_score += 10
+        if len(configs) > 0: maturity_score += 5
+        maturity_score = min(100, maturity_score)
+
+        strengths = [
+            f"工程模块结构清晰，代码组织围绕 {' / '.join(stack_tags)} 标准规范展开",
+            f"已建立明确的目录分层，包含 {len(all_rel_paths)} 个主要源文件",
+        ]
+        if has_docs:
+            strengths.append("具备完整的文档说明（README/Docs），便于新人开发者快速建立宏观理解")
+        if models_and_types:
+            strengths.append(f"具备专门的类型/契约层定义（共收录 {len(models_and_types)} 个契约文件），降低了跨模块耦合度")
+
+        vibecoding_risks = []
+        if not has_tests:
+            vibecoding_risks.append("【缺乏测试屏障】：未检测到单元测试或集成测试用例，重构时缺乏自动化安全网")
+        elif test_ratio < 0.1:
+            vibecoding_risks.append(f"【测试覆盖偏低】：测试文件仅占整体代码的 {test_ratio*100:.1f}%，核心链路边界可能缺少防护")
+
+        if len(models_and_types) == 0:
+            vibecoding_risks.append("【契约弱化/隐式类型】：核心数据字典未建立严格的 Schema 校验，存在潜在的空值访问风险")
+
+        vibecoding_risks.append("【防御性边界校验】：建议审查关键 IO 调用（如网络请求、外部工具、文件系统）的异常捕获与重试机制")
+
+        production_roadmap = [
+            "1. 补齐核心契约与严格类型定义：为主要输入输出建立严格的模型契约，避免字典魔法键访问；",
+            "2. 建立端到端 Golden 单元测试用例：为入口和关键算子编写核心回归测试，锁定功能预期；",
+            "3. 解耦硬编码与增加环境配置：将代码中的固定配置、超时常数提取至环境配置文件或配置单例；",
+            "4. 引入可观测性与防御熔断：关键算子增加耗时日志、Trace 追踪与安全异常隔离边界。",
+        ]
+
+        # 7. Recommended questions for interactive Q&A
+        suggested_questions = [
+            "请用简洁清晰的步骤梳理本项目的核心执行链路从入口到产出经历了哪些阶段？",
+            "请深入解读本项目最核心的 2-3 个类或函数，它们分别承担什么职责，如何协作？",
+            "如果我想基于当前代码扩展一个自定义算子或功能插件，应该在哪个目录下遵循什么契约编写？",
+            "分析本项目代码中的并发控制、状态持久化或异常防御机制，有哪些值得借鉴或需要改进的地方？",
+        ]
+
+        ecosystem = {
+            "primary_stack": stack_tags[0] if stack_tags else "Multi-Language",
+            "languages": stack_tags,
+            "package_manager": "uv / pip" if is_python else "pnpm / npm" if is_node else "cargo" if is_rust else "go" if is_go else "standard",
+        }
+        mission = {
+            "purpose_and_value": purpose_and_value,
+            "summary": purpose_and_value,
+        }
+        vibecoding_hygiene_audit = {
+            "maturity_score": maturity_score,
+            "strengths": strengths,
+            "risks_and_anti_patterns": vibecoding_risks,
+            "vibecoding_risks": vibecoding_risks,
+            "production_roadmap": production_roadmap,
+        }
+        lexicon = []
+        for p in (models_and_types[:3] + entrypoints[:2]):
+            stem = Path(p).stem
+            lexicon.append({
+                "name": stem,
+                "kind": "module/schema",
+                "file_path": p,
+                "line": 1,
+                "summary": f"{project.name} 的核心组件与定义文件",
+            })
+
+        return {
+            "project_id": project.project_id,
+            "project_name": project.name,
+            "mission": mission,
+            "ecosystem": ecosystem,
+            "progressive_reading_roadmap": roadmap,
+            "reading_roadmap": roadmap,
+            "lexicon": lexicon,
+            "vibecoding_hygiene_audit": vibecoding_hygiene_audit,
+            "vibecoding_audit": vibecoding_hygiene_audit,
+            "stack_tags": stack_tags,
+            "purpose_and_value": purpose_and_value,
+            "file_counts": {
+                "total": total_files_count,
+                "configs": len(configs),
+                "entrypoints": len(entrypoints),
+                "models_and_types": len(models_and_types),
+                "core_logic": len(core_logic),
+                "tests": len(test_files),
+            },
+            "suggested_questions": suggested_questions,
+        }
+
 
 class CodingAgent:
     """Agent that analyzes code and proposes structured, reviewed code patches with conflict protection."""
@@ -864,6 +1109,7 @@ class CodingAgent:
         target_file: str,
         custom_replacement: str | None = None,
     ) -> CodeProposal:
+        target_file = re.sub(r"[:#]L?\d+$", "", target_file).strip()
         root = Path(project.root_path).resolve()
         safe_target = ProjectScanner.resolve_safe_path(root, target_file)
 
@@ -874,13 +1120,45 @@ class CodingAgent:
 
         if custom_replacement is not None:
             proposed_content = custom_replacement
+        elif self.provider is not None:
+            try:
+                system_prompt = (
+                    "你是一位资深高级工程师。请根据用户的治理或重构指令，对目标文件进行严谨、完整、高质量的代码修改与改进。\n"
+                    "严格输出要求：\n"
+                    "1. 仅输出修改后的完整文件源代码内容。\n"
+                    "2. 绝对不要包含任何 Markdown 代码块包裹符号（如 ```python ），不要包含任何前置解释或后置说明。\n"
+                    "3. 保持原有代码架构和编码风格，准确实现指令中的要求。"
+                )
+                user_prompt = f"目标文件: {target_file}\n重构与治理指令:\n{instruction}\n\n当前完整文件内容如下:\n{original_content}"
+                completion = self.provider.complete(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    temperature=0.2,
+                    max_output_tokens=4096,
+                )
+                content = (completion.content or "").strip()
+                if content.startswith("```"):
+                    lines = content.splitlines()
+                    if lines[0].startswith("```"):
+                        lines = lines[1:]
+                    if lines and lines[-1].startswith("```"):
+                        lines = lines[:-1]
+                    content = "\n".join(lines)
+                commented_instruction = "\n".join(f"# {line}" if line.strip() else "#" for line in instruction.splitlines())
+                proposed_content = content if content else (original_content.rstrip() + f"\n\n# Patch proposed:\n{commented_instruction}\n")
+            except Exception:
+                commented_instruction = "\n".join(f"# {line}" if line.strip() else "#" for line in instruction.splitlines())
+                if original_content:
+                    proposed_content = original_content.rstrip() + f"\n\n# Patch proposed:\n{commented_instruction}\n"
+                else:
+                    proposed_content = f'"""New file created for:\n{instruction}\n"""\n\n'
         else:
-            # Simple deterministic / LLM patch generator
+            # Deterministic fallback
+            commented_instruction = "\n".join(f"# {line}" if line.strip() else "#" for line in instruction.splitlines())
             if original_content:
-                # Append or add comment by default in deterministic fallback
-                proposed_content = original_content.rstrip() + f"\n\n# Patch proposed for: {instruction}\n"
+                proposed_content = original_content.rstrip() + f"\n\n# Patch proposed:\n{commented_instruction}\n"
             else:
-                proposed_content = f'"""New file created for: {instruction}"""\n\n'
+                proposed_content = f'"""New file created for:\n{instruction}\n"""\n\n'
 
         # Generate Unified Diff
         from_lines = original_content.splitlines(keepends=True)
@@ -912,12 +1190,14 @@ class CodingAgent:
 
     def apply_patch(self, project: Project, proposal: CodeProposal) -> tuple[bool, str]:
         """Atomically apply proposal after verifying optimistic revision hash."""
+        clean_target = re.sub(r"[:#]L?\d+$", "", proposal.target_file).strip()
+        proposal.target_file = clean_target
         root = Path(project.root_path).resolve()
-        safe_target = ProjectScanner.resolve_safe_path(root, proposal.target_file)
+        safe_target = ProjectScanner.resolve_safe_path(root, clean_target)
 
         # Optimistic concurrency check
         if safe_target.is_file():
-            _, current_hash, _ = ProjectScanner.read_file_safe(root, proposal.target_file)
+            _, current_hash, _ = ProjectScanner.read_file_safe(root, clean_target)
             if proposal.original_hash and current_hash != proposal.original_hash:
                 return False, f"revision_conflict: 目标文件基准哈希不匹配 (预期 {proposal.original_hash[:8]}, 当前为 {current_hash[:8]})，已被外部修改。"
         elif proposal.original_hash:

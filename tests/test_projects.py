@@ -258,3 +258,34 @@ def test_multi_folder_project_scanning(tmp_path: Path) -> None:
     assert "hello frontend" in content2
 
 
+def test_project_agent_patch_target_file_sanitization(tmp_path: Path) -> None:
+    from conflux_weave.project_agents import CodingAgent
+    from conflux_weave.projects import Project
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    target = repo / "main.py"
+    target.write_text("def run():\n    pass\n", encoding="utf-8")
+
+    proj = Project(
+        project_id="p-test",
+        name="test",
+        root_path=str(repo),
+        root_paths=[str(repo)],
+    )
+
+    agent = CodingAgent()
+    proposal = agent.propose_patch(
+        project=proj,
+        instruction="Fix bug\n目标文件：main.py:10",
+        target_file="main.py:10",
+        custom_replacement="def run():\n    return 42\n",
+    )
+    assert proposal.target_file == "main.py"
+
+    proposal.target_file = "main.py:10"
+    success, msg = agent.apply_patch(proj, proposal)
+    assert success is True
+    assert "return 42" in target.read_text(encoding="utf-8")
+
+
+

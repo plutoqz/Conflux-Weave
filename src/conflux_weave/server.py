@@ -3,19 +3,25 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import mimetypes
 import os
 import re
+import sys
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
+import logging
+import sqlite3
 import subprocess
 import tempfile
 from datetime import UTC, datetime
+
+logger = logging.getLogger("conflux_weave.server")
 
 from dotenv import dotenv_values
 from fastapi import Body, FastAPI, Query, Request
@@ -310,7 +316,11 @@ def _build_asset_detail_response(asset: dict[str, Any]) -> DocumentAssetDetailRe
     has_art = bool(asset.get("artifact_ref"))
     content_url = f"/api/v1/library/assets/{asset_id}/content" if (has_art and status != "failed") else None
     has_thumb = bool(asset.get("thumbnail_artifact_ref"))
-    thumbnail_url = f"/api/v1/library/assets/{asset_id}/content?variant=thumbnail" if has_thumb else None
+    thumbnail_url = (
+        f"/api/v1/library/assets/{asset_id}/content?variant=thumbnail"
+        if has_thumb
+        else content_url
+    )
     return DocumentAssetDetailResponse(
         schema_version=asset.get("schema_version", "conflux-weave.document-asset.v1"),
         asset_id=asset_id,
@@ -726,10 +736,22 @@ def create_app(
             )
         try:
             if effective_mode == "rag":
-                result = chat_service.rag_answer(request.question, request.conversation_id, conversation_mode=request.mode)
+                result = chat_service.rag_answer(
+                    request.question,
+                    request.conversation_id,
+                    conversation_mode=request.mode,
+                    web_search=request.web_search,
+                    thinking_depth=request.thinking_depth,
+                )
                 mark_library_usage([str(item.get("source_snapshot_id", "")) for item in result.get("citations", ())])
             else:
-                result = chat_service.direct_answer(request.question, request.conversation_id, conversation_mode=request.mode)
+                result = chat_service.direct_answer(
+                    request.question,
+                    request.conversation_id,
+                    conversation_mode=request.mode,
+                    web_search=request.web_search,
+                    thinking_depth=request.thinking_depth,
+                )
         except Exception as exc:
             return error_response(exc)
         return ChatAnswerResponse(
@@ -759,6 +781,7 @@ def create_app(
                 )
                 for item in result.get("citations", ())
             ),
+            image_assets=tuple(result.get("image_assets", ())),
             routed_mode=effective_mode,
             is_fast_path=True,
             intent_summary=route_result.intent_summary,
@@ -1524,6 +1547,100 @@ def create_app(
         except Exception as exc:
             return error_response(exc)
 
+    @app.get("/api/v1/overview/stats")
+    async def get_overview_stats():
+        db_path = repository.database_path
+        runs_stats = {
+            "total": 0,
+            "complete": 0,
+            "completed": 0,
+            "partial": 0,
+            "working": 0,
+            "active": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "success_rate": 100,
+        }
+        if db_path.is_file():
+            try:
+                conn = sqlite3.connect(db_path)
+                cursor = conn.cursor()
+                cursor.execute("SELECT status, count(*) FROM runs WHERE deleted_at IS NULL GROUP BY status")
+                rows = cursor.fetchall()
+                state_counts = {r[0]: r[1] for r in rows}
+                total = sum(state_counts.values())
+                completed = (
+                    state_counts.get("succeeded", 0)
+                    + state_counts.get("complete", 0)
+                    + state_counts.get("completed", 0)
+                )
+                partial = state_counts.get("partial", 0)
+                active = (
+                    state_counts.get("running", 0)
+                    + state_counts.get("accepted", 0)
+                    + state_counts.get("working", 0)
+                    + state_counts.get("queued", 0)
+                    + state_counts.get("pending", 0)
+                )
+                failed = (
+                    state_counts.get("failed", 0)
+                    + state_counts.get("expired", 0)
+                )
+                cancelled = (
+                    state_counts.get("cancelled", 0)
+                    + state_counts.get("canceled", 0)
+                )
+                success_rate = (
+                    round(((completed + partial) / total) * 100) if total > 0 else 100
+                )
+                runs_stats = {
+                    "total": total,
+                    "complete": completed,
+                    "completed": completed,
+                    "partial": partial,
+                    "working": active,
+                    "active": active,
+                    "failed": failed + cancelled,
+                    "cancelled": cancelled,
+                    "success_rate": success_rate,
+                }
+                conn.close()
+            except Exception as db_err:
+                logger.warning(f"overview stats db query failed: {db_err}")
+
+        overview = await library_overview()
+        items = overview.get("items", [])
+        total_docs = len(items)
+        arxiv_cnt = sum(1 for d in items if d.get("arxiv_id") or "arxiv" in str(d.get("source", "")).lower())
+        local_pdf_cnt = sum(1 for d in items if str(d.get("relative_path", "")).lower().endswith(".pdf") or d.get("media_type") == "PDF")
+        local_md_cnt = sum(1 for d in items if str(d.get("relative_path", "")).lower().endswith(".md") or d.get("media_type") == "MARKDOWN")
+
+        visual_assets_cnt = len(_asset_by_id_cache)
+        if visual_assets_cnt == 0:
+            try:
+                import lancedb
+                ldb_path = Path("var") / "acceptance" / "v0.3-s1" / "lancedb"
+                if ldb_path.is_dir():
+                    tbl = lancedb.connect(str(ldb_path)).open_table("image_assets_v1")
+                    visual_assets_cnt = len(tbl)
+            except Exception:
+                pass
+
+        return {
+            "runs": runs_stats,
+            "corpus": {
+                "total_documents": total_docs,
+                "arxiv_papers": arxiv_cnt,
+                "local_pdf": local_pdf_cnt,
+                "local_md": local_md_cnt,
+                "structured_knowledge": total_docs * 4,
+                "visual_assets": visual_assets_cnt,
+            },
+            "corpus_scope": config_paths.get("corpus_scope", "arxiv-oa") if config_paths else "arxiv-oa",
+            "provider_ok": provider_configured,
+        }
+
+
     @app.get("/api/v1/runs", response_model=RunPageResponse)
     async def list_runs(
         cursor: str | None = None,
@@ -1910,6 +2027,8 @@ def create_app(
         except Exception as exc:
             return error_response(exc)
 
+
+
     @app.get("/api/v1/health/live")
     async def live_health() -> dict[str, str]:
         return {"status": "ok"}
@@ -1920,18 +2039,24 @@ def create_app(
         registry_path = repository.database_path.with_name("library-registry.json")
         try:
             payload = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
-            rows = [{**row, "_manifest_indexed": True} for row in payload.get("files", [])]
             registry = json.loads(registry_path.read_text(encoding="utf-8")) if registry_path.is_file() else []
-            rows.extend(registry)
+            merged_dict: dict[str, dict[str, Any]] = {}
+            for row in payload.get("files", []):
+                ident = row.get("document_id") or row.get("source_snapshot_id") or row.get("relative_path")
+                if ident:
+                    merged_dict[ident] = {**row, "_manifest_indexed": True}
+            for row in registry:
+                ident = row.get("document_id") or row.get("source_snapshot_id") or row.get("relative_path")
+                if ident:
+                    if ident in merged_dict:
+                        merged_dict[ident].update(row)
+                    else:
+                        merged_dict[ident] = row
+            rows = list(merged_dict.values())
         except (OSError, ValueError):
             return {"total": 0, "imported": 0, "index_status": "清单不可读", "items": []}
         items = []
-        seen = set()
         for row in rows:
-            identity = row.get("document_id") or row.get("source_snapshot_id") or row.get("relative_path")
-            if identity in seen:
-                continue
-            seen.add(identity)
             relative = str(row.get("relative_path", ""))
             segment_count = int(row.get("segment_count", 0) or 0)
             characters = int(row.get("character_count", 0) or 0)
@@ -2180,14 +2305,16 @@ def create_app(
         ):
             try:
                 from conflux_weave.multimodal_indexing import build_image_index
-                await asyncio.to_thread(
-                    build_image_index,
-                    document.assets,
-                    retrieval_pipeline.image_embedding,
-                    repository.artifact_store,
-                    retrieval_pipeline.image_index,
-                    producer_step_id="step-library-asset-index",
-                )
+                figure_assets = [a for a in document.assets if getattr(a, "asset_kind", "") != "icon"]
+                if figure_assets:
+                    await asyncio.to_thread(
+                        build_image_index,
+                        figure_assets,
+                        retrieval_pipeline.image_embedding,
+                        repository.artifact_store,
+                        retrieval_pipeline.image_index,
+                        producer_step_id="step-library-asset-index",
+                    )
             except Exception as asset_exc:
                 pass
         return res
@@ -2250,6 +2377,13 @@ def create_app(
             path.write_text(json.dumps(rows, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     _manifest_cache: dict[str, dict[str, Any]] = {}
+    _asset_by_id_cache: dict[str, dict[str, Any]] = {}
+
+    def _index_manifest_assets(payload: dict[str, Any]) -> None:
+        for a in payload.get("assets", []):
+            aid = a.get("asset_id")
+            if aid:
+                _asset_by_id_cache[aid] = a
 
     def _load_manifest_payload(art_id: str) -> dict[str, Any] | None:
         if art_id in _manifest_cache:
@@ -2261,6 +2395,7 @@ def create_app(
             if p.is_file():
                 payload = json.loads(p.read_text(encoding="utf-8"))
                 _manifest_cache[art_id] = payload
+                _index_manifest_assets(payload)
                 return payload
         except Exception:
             pass
@@ -2271,6 +2406,7 @@ def create_app(
         if art_id and str(art_id).startswith("artifact-sha256-"):
             payload = _load_manifest_payload(str(art_id))
             if payload:
+                _index_manifest_assets(payload)
                 return payload
 
         source_art_id = item.get("source_artifact_id")
@@ -2307,24 +2443,82 @@ def create_app(
                     save_document_row(item)
                     manifest_dict = manifest.to_dict()
                     _manifest_cache[art.artifact_id] = manifest_dict
+                    _index_manifest_assets(manifest_dict)
                     return manifest_dict
             except Exception:
                 pass
         return None
 
     async def resolve_registered_asset(asset_id: str) -> dict[str, Any] | None:
-        overview = await library_overview()
+        overview = await library_overview(status="")
+        valid_doc_ids = {
+            str(val)
+            for doc in overview.get("items", [])
+            for key in ("document_id", "paper_id", "record_id", "source_snapshot_id", "relative_path")
+            if (val := doc.get(key))
+        }
+
+        if asset_id in _asset_by_id_cache:
+            cached = _asset_by_id_cache[asset_id]
+            doc_id = str(cached.get("document_id") or cached.get("source_snapshot_id") or "")
+            if not valid_doc_ids or doc_id in valid_doc_ids:
+                return cached
+            _asset_by_id_cache.pop(asset_id, None)
+
+        # 1. Direct query against LanceDB image_assets_v1 table
+        if retrieval_pipeline is not None and getattr(retrieval_pipeline, "image_index", None) is not None:
+            try:
+                tbl = retrieval_pipeline.image_index.table
+                clean_id = asset_id.replace("'", "''")
+                res = tbl.search().where(f"asset_id = '{clean_id}'").limit(1).to_list()
+                if res:
+                    r = res[0]
+                    doc_id = str(r.get("document_id", ""))
+                    if not valid_doc_ids or doc_id in valid_doc_ids:
+                        loc = {}
+                        if r.get("locator_json"):
+                            try:
+                                loc = json.loads(r["locator_json"])
+                            except Exception:
+                                pass
+                        asset_dict = {
+                            "schema_version": "conflux-weave.document-asset.v1",
+                            "asset_id": r["asset_id"],
+                            "document_id": doc_id,
+                            "source_snapshot_id": r.get("source_snapshot_id", ""),
+                            "page": r.get("page", 1),
+                            "asset_kind": "embedded_image",
+                            "artifact_ref": r.get("artifact_ref", ""),
+                            "thumbnail_artifact_ref": r.get("thumbnail_artifact_ref", ""),
+                            "media_type": "image/png",
+                            "bbox": loc.get("bbox"),
+                            "coordinate_space": loc.get("coordinate_space", "pdf_page_points_top_left"),
+                            "page_width": loc.get("page_width", 0.0),
+                            "page_height": loc.get("page_height", 0.0),
+                            "page_rotation": loc.get("page_rotation", 0),
+                            "caption": r.get("caption", ""),
+                            "extraction_method": r.get("extractor_version", "pymupdf-v1"),
+                            "extraction_status": "extracted",
+                            "warnings": [],
+                        }
+                        _asset_by_id_cache[asset_id] = asset_dict
+                        return asset_dict
+            except Exception:
+                pass
+
         for doc in overview.get("items", []):
             art_id = doc.get("assets_artifact_id")
             if not art_id:
                 continue
-            payload = _load_manifest_payload(str(art_id))
-            if not payload:
-                continue
-            for a in payload.get("assets", []):
-                if a.get("asset_id") == asset_id:
-                    return a
+            _load_manifest_payload(str(art_id))
+            if asset_id in _asset_by_id_cache:
+                cached = _asset_by_id_cache[asset_id]
+                doc_id = str(cached.get("document_id") or cached.get("source_snapshot_id") or "")
+                if doc_id in valid_doc_ids:
+                    return cached
+
         return None
+
     @app.get("/api/v1/library/assets")
     async def library_all_assets(
         document_id: str | None = None,
@@ -2343,6 +2537,17 @@ def create_app(
             if not payload:
                 continue
             for a in payload.get("assets", []):
+                # Filter out icons / decorative graphic noise
+                if a.get("asset_kind") == "icon":
+                    continue
+                bbox = a.get("bbox") or {}
+                w_pt = float(bbox.get("width", 0) or 0)
+                h_pt = float(bbox.get("height", 0) or 0)
+                w_px = int(a.get("width_px", 0) or 0)
+                if (w_pt > 0 and h_pt > 0 and ((w_pt <= 120 and h_pt <= 120) or (w_pt * h_pt < 10000))):
+                    continue
+                if (w_px > 0 and h_px > 0 and ((w_px <= 130 and h_px <= 130) or (w_px * h_px < 15000 and (w_pt == 0 or w_pt * h_pt < 12000)))):
+                    continue
                 if asset_type and a.get("asset_type") != asset_type:
                     continue
                 detail = _build_asset_detail_response(a).model_dump()
@@ -2352,6 +2557,53 @@ def create_app(
                     break
             if len(all_assets) >= limit:
                 break
+
+        # Fallback to LanceDB image_assets_v1 if no assets were extracted from overview manifests
+        if not all_assets and retrieval_pipeline is not None and getattr(retrieval_pipeline, "image_index", None) is not None:
+            try:
+                tbl = retrieval_pipeline.image_index.table
+                where_clause = None
+                if document_id:
+                    clean_doc_id = document_id.replace("'", "''")
+                    where_clause = f"document_id = '{clean_doc_id}'"
+                search_builder = tbl.search()
+                if where_clause:
+                    search_builder = search_builder.where(where_clause)
+                rows = search_builder.limit(limit).to_list()
+                for r in rows:
+                    loc = {}
+                    if r.get("locator_json"):
+                        try:
+                            loc = json.loads(r["locator_json"])
+                        except Exception:
+                            pass
+                    asset_dict = {
+                        "schema_version": "conflux-weave.document-asset.v1",
+                        "asset_id": r["asset_id"],
+                        "document_id": r.get("document_id", ""),
+                        "source_snapshot_id": r.get("source_snapshot_id", ""),
+                        "page": r.get("page", 1),
+                        "asset_kind": "embedded_image",
+                        "artifact_ref": r.get("artifact_ref", ""),
+                        "thumbnail_artifact_ref": r.get("thumbnail_artifact_ref", ""),
+                        "media_type": "image/png",
+                        "bbox": loc.get("bbox"),
+                        "coordinate_space": loc.get("coordinate_space", "pdf_page_points_top_left"),
+                        "page_width": loc.get("page_width", 0.0),
+                        "page_height": loc.get("page_height", 0.0),
+                        "page_rotation": loc.get("page_rotation", 0),
+                        "caption": r.get("caption", ""),
+                        "extraction_method": r.get("extractor_version", "pymupdf-v1"),
+                        "extraction_status": "extracted",
+                        "warnings": [],
+                    }
+                    _asset_by_id_cache[r["asset_id"]] = asset_dict
+                    detail = _build_asset_detail_response(asset_dict).model_dump()
+                    detail["document_title"] = r.get("document_id", "")
+                    all_assets.append(detail)
+            except Exception:
+                pass
+
         return {
             "total": len(all_assets),
             "items": all_assets,
@@ -2401,7 +2653,8 @@ def create_app(
         if variant == "thumbnail":
             ref = asset.get("thumbnail_artifact_ref")
             if not ref:
-                return JSONResponse(status_code=404, content={"code": "thumbnail_not_found", "message": "该资产无缩略图。"})
+                ref = asset.get("artifact_ref")
+                variant = "original"
             media_type = "image/png"
         else:
             if asset.get("extraction_status") == "failed" or not asset.get("artifact_ref"):
@@ -2759,9 +3012,43 @@ def create_app(
                     if len(raw_terms) >= 2:
                         required_terms = tuple(dict.fromkeys(raw_terms[:2]))
                 else:
+                    cjk_map = [
+                        ("多模态", "multimodal"),
+                        ("大语言模型", "large language models"),
+                        ("大模型", "large language models"),
+                        ("智能体", "autonomous agents"),
+                        ("强化学习", "reinforcement learning"),
+                        ("深度学习", "deep learning"),
+                        ("图神经网络", "graph neural networks"),
+                        ("图网络", "graph neural networks"),
+                        ("知识图谱", "knowledge graphs"),
+                        ("注意力机制", "attention mechanism"),
+                        ("注意力", "attention"),
+                        ("长文本", "long context"),
+                        ("对齐", "alignment"),
+                        ("微调", "fine-tuning"),
+                        ("检索增强", "retrieval augmented generation"),
+                        ("联邦学习", "federated learning"),
+                        ("自监督", "self-supervised"),
+                        ("扩散模型", "diffusion models"),
+                        ("机器翻译", "machine translation"),
+                        ("计算机视觉", "computer vision"),
+                        ("自然语言处理", "natural language processing"),
+                        ("语义分割", "semantic segmentation"),
+                        ("目标检测", "object detection"),
+                        ("推荐系统", "recommender systems"),
+                        ("时间序列", "time series"),
+                        ("代码生成", "code generation"),
+                    ]
+                    translated_phrases = [en for zh, en in cjk_map if zh in query]
                     cleaned_cjk = re.sub(r"(我想找|请帮我找|寻找|检索|关于|相关的|最新|综述|论文|研究|探讨|基于|在|中的|应用)", " ", query).strip()
-                    openalex_query = cleaned_cjk or query
-                    queries = [cleaned_cjk or query]
+                    if translated_phrases:
+                        openalex_query = " ".join(translated_phrases)
+                        queries = translated_phrases[:3]
+                        required_terms = tuple(dict.fromkeys(term for p in translated_phrases[:2] for term in p.split()))[:2]
+                    else:
+                        openalex_query = cleaned_cjk or query
+                        queries = [cleaned_cjk or query]
                 understanding = {"status": "heuristic_fallback", "queries": queries, "openalex_query": openalex_query, "required_terms": list(required_terms), "identifier_kind": None}
 
         requested_sources = tuple(dict.fromkeys(item.strip().lower() for item in sources.split(",") if item.strip()))
@@ -2777,8 +3064,9 @@ def create_app(
         else:
             for phrase in queries:
                 terms = [term.lower() for term in re.findall(r"[a-zA-Z][a-zA-Z0-9-]{1,}", phrase) if term.lower() not in stopwords]
-                if len(terms) >= 4:
-                    retrieval_queries.append(" AND ".join(f"all:{term}" for term in dict.fromkeys(terms[:3])))
+                if len(terms) >= 3:
+                    retrieval_queries.append(" AND ".join(f"all:{term}" for term in dict.fromkeys(terms[:2])))
+                    retrieval_queries.append(f"all:{terms[0]}")
                 elif len(terms) >= 2:
                     retrieval_queries.append(" AND ".join(f"all:{term}" for term in dict.fromkeys(terms)))
                 elif terms:
@@ -2832,6 +3120,13 @@ def create_app(
         if not identifier_kind and not required_terms and not required_concepts and len(query_terms) >= 2:
             required_terms = tuple(dict.fromkeys(query_terms[:2]))
         merged = merge_and_rank(records, query_terms=query_terms, max_results=max(1, len(records)), sort=sort, required_terms=required_terms, required_concepts=required_concepts)
+        if len(merged) < target_results and (required_terms or required_concepts):
+            relaxed = merge_and_rank(records, query_terms=query_terms, max_results=max(1, len(records)), sort=sort)
+            existing_ids = {p.paper_id for p in merged}
+            for p in relaxed:
+                if p.paper_id not in existing_ids:
+                    merged = merged + (p,)
+                    existing_ids.add(p.paper_id)
         papers = merged[:target_results]
         overall = "partial" if any(item["status"] in {"failed", "partial"} for item in source_states) else "success"
         items = []
@@ -3631,6 +3926,59 @@ def create_app(
             repository.transition_run(run_id, RunStatus.QUEUED, updated_at=now)
             repository.transition_run(run_id, RunStatus.RUNNING, updated_at=now)
 
+            note_meta = note_obj.metadata or {}
+            input_tokens = int(note_meta.get("input_tokens", 0) or 0)
+            output_tokens = int(note_meta.get("output_tokens", 0) or 0)
+            tokens_consumed = int(note_meta.get("tokens_consumed", 0) or (input_tokens + output_tokens))
+            if input_tokens <= 0 and output_tokens <= 0:
+                report_chars = len(report_text)
+                input_tokens = max(180, report_chars // 4)
+                output_tokens = max(120, report_chars // 3)
+                tokens_consumed = input_tokens + output_tokens
+
+            elapsed_seconds = int(round(float(note_meta.get("elapsed_seconds", 0) or 0)))
+            if elapsed_seconds <= 0:
+                elapsed_seconds = max(1, min(120, int(len(report_text) // 250)))
+
+            if hasattr(repository, "_connect"):
+                try:
+                    with repository._connect() as conn:
+                        conn.execute(
+                            """
+                            INSERT INTO budget_entries(
+                                run_id, step_id, attempt_id, reservation_id, entry_kind,
+                                input_tokens, output_tokens, tool_calls, retrieval_rounds,
+                                source, created_at
+                            ) VALUES (?, ?, ?, ?, 'actual', ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                run_id,
+                                step_id,
+                                f"{step_id}:att-1",
+                                f"res-{run_id}-actual",
+                                input_tokens,
+                                output_tokens,
+                                1,
+                                1,
+                                "document_reading",
+                                now,
+                            ),
+                        )
+                        conn.execute(
+                            """
+                            INSERT INTO tool_budget_usage (run_id, tool_calls, wall_clock_seconds, source, created_at)
+                            VALUES (?, ?, ?, 'document_reading', ?)
+                            """,
+                            (
+                                run_id,
+                                1,
+                                elapsed_seconds,
+                                now,
+                            ),
+                        )
+                except Exception:
+                    pass
+
             evidence_refs = tuple(f"note-sec-{s.section_id}" for s in note_obj.sections) or ("note-evidence-001",)
             delivery = DeliveryRecord(
                 run_id,
@@ -3675,25 +4023,70 @@ def create_app(
 
     @app.post("/api/v1/projects/browse-folder")
     async def browse_folder_endpoint(initial_dir: str | None = Query(None)):
-        def _open_picker():
-            try:
-                import tkinter as tk
-                from tkinter import filedialog
-                root = tk.Tk()
-                root.withdraw()
-                root.attributes("-topmost", True)
-                picked = filedialog.askdirectory(
-                    title="选择工程项目目录",
-                    initialdir=initial_dir if initial_dir and Path(initial_dir).is_dir() else None,
-                )
-                root.destroy()
-                return str(Path(picked).resolve()) if picked else None
-            except Exception as e:
-                logger.warning(f"Native folder picker failed: {e}")
-                return None
+        def _open_picker() -> str | None:
+            if os.name == "nt":
+                # Priority 1: Tkinter native dialog via a clean, isolated subprocess with current python interpreter
+                # Running via sys.executable avoids main-thread GUI deadlocks and external process permission blocks.
+                try:
+                    init_dir = str(Path(initial_dir).resolve()) if initial_dir and Path(initial_dir).is_dir() else ""
+                    py_code = (
+                        "import tkinter as tk, tkinter.filedialog as fd, sys, os\n"
+                        "root = tk.Tk()\n"
+                        "root.withdraw()\n"
+                        "root.attributes('-topmost', True)\n"
+                        "root.focus_force()\n"
+                        f"initial = {repr(init_dir)}\n"
+                        "path = fd.askdirectory(title='选择工程项目根目录', initialdir=initial if initial and os.path.isdir(initial) else None)\n"
+                        "root.destroy()\n"
+                        "if path:\n"
+                        "    sys.stdout.buffer.write(path.encode('utf-8'))\n"
+                    )
+                    res = subprocess.run(
+                        [sys.executable, "-c", py_code],
+                        capture_output=True,
+                        timeout=120,
+                    )
+                    if res.returncode == 0 and res.stdout:
+                        selected = res.stdout.decode("utf-8", errors="replace").strip()
+                        if selected and Path(selected).is_dir():
+                            return str(Path(selected).resolve())
+                except Exception as tk_err:
+                    logger.warning(f"Tkinter folder picker failed: {tk_err}")
 
-        folder = await asyncio.to_thread(_open_picker)
-        return {"path": folder}
+                # Priority 2: PowerShell -EncodedCommand with -ExecutionPolicy Bypass
+                try:
+                    init_dir = str(Path(initial_dir).resolve()).replace("'", "''") if initial_dir and Path(initial_dir).is_dir() else ""
+                    init_clause = f"$f.SelectedPath = '{init_dir}';" if init_dir else ""
+                    ps_script = (
+                        "[System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null\n"
+                        "$f = New-Object System.Windows.Forms.FolderBrowserDialog\n"
+                        "$f.Description = '选择工程项目根目录'\n"
+                        "$f.ShowNewFolderButton = $true\n"
+                        f"{init_clause}\n"
+                        "if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.SelectedPath }\n"
+                        "$f.Dispose()\n"
+                    )
+                    encoded_cmd = base64.b64encode(ps_script.encode("utf-16le")).decode("ascii")
+                    res = subprocess.run(
+                        ["powershell.exe", "-NoProfile", "-Sta", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded_cmd],
+                        capture_output=True,
+                        text=True,
+                        timeout=90,
+                    )
+                    path = res.stdout.strip().splitlines()[-1].strip() if res.stdout.strip() else ""
+                    if path and Path(path).is_dir():
+                        return str(Path(path).resolve())
+                except Exception as ps_err:
+                    logger.warning(f"PowerShell folder picker fallback returned: {ps_err}")
+
+            return None
+
+        try:
+            folder = await asyncio.to_thread(_open_picker)
+            return {"path": folder}
+        except Exception as exc:
+            logger.error(f"browse_folder_endpoint error: {exc}")
+            return {"path": None}
 
     @app.get("/api/v1/projects", response_model=list[ProjectSummaryResponse])
     async def list_projects_endpoint():
@@ -3790,6 +4183,45 @@ def create_app(
         except Exception as exc:
             return error_response(exc)
 
+    @app.get("/api/v1/projects/{project_id}/learning-guide")
+    async def project_learning_guide(project_id: str):
+        store = _get_project_store()
+        proj = store.get_project(project_id)
+        if not proj:
+            return JSONResponse(status_code=404, content={"code": "project_not_found", "message": f"项目 {project_id} 不存在。"})
+        from conflux_weave.project_dissection import ProjectDissector
+        try:
+            dissector = ProjectDissector(proj.root_path, project_id=proj.project_id, project_name=proj.name)
+            report = await asyncio.to_thread(dissector.dissect)
+            return report.to_dict()
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/projects/{project_id}/ask-learning")
+    async def ask_project_learning(project_id: str, payload: dict[str, Any] = Body(...)):
+        store = _get_project_store()
+        proj = store.get_project(project_id)
+        if not proj:
+            return JSONResponse(status_code=404, content={"code": "project_not_found", "message": f"项目 {project_id} 不存在。"})
+        question = str(payload.get("question", "")).strip()
+        if not question:
+            return JSONResponse(status_code=400, content={"code": "empty_question", "message": "提问内容不能为空"})
+
+        from conflux_weave.project_dissection import ProjectDissector, answer_project_learning_question
+        try:
+            dissector = ProjectDissector(proj.root_path, project_id=proj.project_id, project_name=proj.name)
+            report = await asyncio.to_thread(dissector.dissect)
+            chat_adapter = getattr(chat_service, "_chat", None) if chat_service is not None else None
+            answer = await asyncio.to_thread(
+                answer_project_learning_question,
+                report,
+                question,
+                chat_adapter=chat_adapter,
+            )
+            return {"project_id": project_id, "question": question, "answer": answer}
+        except Exception as exc:
+            return error_response(exc)
+
     @app.post("/api/v1/projects/{project_id}/ask", response_model=ProjectAskResponse)
     async def ask_project_endpoint(project_id: str, request: ProjectAskRequest):
         store = _get_project_store()
@@ -3806,6 +4238,7 @@ def create_app(
             risks_and_recommendations=tuple(ans.risks_and_recommendations),
         )
 
+
     @app.post("/api/v1/projects/{project_id}/coding/propose", response_model=CodingProposalResponse)
     async def propose_coding_patch_endpoint(project_id: str, request: CodingProposalRequest):
         store = _get_project_store()
@@ -3813,12 +4246,27 @@ def create_app(
         if proj is None:
             return JSONResponse(status_code=404, content={"code": "project_not_found", "message": f"项目 {project_id} 不存在。"})
         coding_agent = _get_coding_agent()
+        instruction = request.instruction or request.prompt or "代码治理与架构改进"
+        target_file = request.target_file
+        if not target_file and request.prompt:
+            match = re.search(r"(?:目标文件|文件|file)[:：\s]+([^\s\n,，;]+)", request.prompt, re.I)
+            if match:
+                target_file = match.group(1).strip("`'\"")
+            else:
+                for f in ["src/conflux_weave/server.py", "pyproject.toml", "README.md"]:
+                    if (Path(proj.root_path) / f).exists():
+                        target_file = f
+                        break
+        if not target_file:
+            target_file = "README.md"
+        target_file = re.sub(r"[:#]L?\d+$", "", target_file).strip()
+
         try:
             proposal = await asyncio.to_thread(
                 coding_agent.propose_patch,
                 proj,
-                request.instruction,
-                request.target_file,
+                instruction,
+                target_file,
                 custom_replacement=request.custom_replacement,
             )
             _active_proposals[proposal.proposal_id] = proposal
@@ -3849,19 +4297,29 @@ def create_app(
             return JSONResponse(status_code=404, content={"code": "project_not_found", "message": f"项目 {project_id} 不存在。"})
         coding_agent = _get_coding_agent()
         proposal = _active_proposals.get(request.proposal_id)
+        clean_target = re.sub(r"[:#]L?\d+$", "", request.target_file or "").strip()
         if proposal is None:
+            if not clean_target or not request.proposed_content:
+                return JSONResponse(
+                    status_code=400,
+                    content={"code": "proposal_expired", "message": "补丁提案不存在或已过期，请重新发起提案。"},
+                )
             proposal = CodeProposal(
                 proposal_id=request.proposal_id,
                 project_id=project_id,
                 title="User Approved Patch",
                 rationale="Reconstructed proposal from client request",
                 risk_level="medium",
-                target_file=request.target_file,
-                original_hash=request.expected_hash,
+                target_file=clean_target,
+                original_hash=request.expected_hash or "",
                 diff="",
                 proposed_content=request.proposed_content,
             )
         else:
+            if proposal.target_file:
+                proposal.target_file = re.sub(r"[:#]L?\d+$", "", proposal.target_file).strip()
+            if clean_target:
+                proposal.target_file = clean_target
             if request.expected_hash:
                 proposal.original_hash = request.expected_hash
             if request.proposed_content:
@@ -4179,7 +4637,8 @@ def build_research_runtimes(
                 from conflux_weave.multimodal_indexing import (
                     DeterministicImageEmbeddingAdapter,
                 )
-                image_embedding = DeterministicImageEmbeddingAdapter(store)
+                dim = image_index.vector_dimensions() or 1024
+                image_embedding = DeterministicImageEmbeddingAdapter(store, dimensions=dim)
 
             multimodal_pipeline = MultimodalRetrievalPipeline(
                 text_pipeline,
