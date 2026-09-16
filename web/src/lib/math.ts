@@ -1,5 +1,41 @@
 import katex from "katex";
 import { marked } from "marked";
+import DOMPurify from "dompurify";
+
+/**
+ * Sanitize HTML with strict allowlists for typography, KaTeX math symbols, and citation badges.
+ */
+export function sanitizeHtml(rawHtml: string): string {
+  if (typeof window !== "undefined") {
+    const purifier = typeof (DOMPurify as any).sanitize === "function" ? DOMPurify : (DOMPurify as any)(window);
+    return purifier.sanitize(rawHtml, {
+      USE_PROFILES: { html: true, mathMl: true, svg: true },
+      ADD_TAGS: [
+        "math",
+        "annotation",
+        "semantics",
+        "mrow",
+        "mo",
+        "mi",
+        "mn",
+        "mspace",
+        "mover",
+        "munder",
+        "msubsup",
+        "mfrac",
+        "mroot",
+        "msqrt",
+        "mstyle",
+        "mtext",
+      ],
+      ADD_ATTR: ["target", "data-cite", "aria-hidden", "class", "id", "href"],
+    });
+  }
+  return rawHtml
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
+    .replace(/on\w+\s*=\s*(?:["'][^"']*["']|[^\s>]+)/gi, "")
+    .replace(/javascript\s*:/gi, "");
+}
 
 /**
  * Remove legacy repetitive template titles like 【本节研读与核心论点】
@@ -151,5 +187,5 @@ export function renderMarkdownWithMath(
     html = html.split(token.id).join(token.html);
   }
 
-  return html;
+  return sanitizeHtml(html);
 }

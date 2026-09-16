@@ -572,8 +572,9 @@ def create_app(
                     )
                 )
                 conv_id = request.conversation_id or f"conv-{uuid4().hex}"
-                content = f"已为您启动深度研究任务（Run ID: {sub_result.run_id}），正在后台持续执行文献检索与多源交叉论证..."
                 now = datetime.now(UTC).isoformat()
+                content = f"已为您启动深度研究任务（Run ID: {sub_result.run_id}），正在后台持续执行文献检索与多源交叉论证..."
+                assistant_msg_id = f"msg-{uuid4().hex}"
                 if chat_service is not None:
                     try:
                         chat_service.record_research_message(
@@ -584,7 +585,7 @@ def create_app(
                             mode="deep",
                             conversation_mode=request.mode,
                         )
-                        chat_service.record_research_message(
+                        record = chat_service.record_research_message(
                             conversation_id=conv_id,
                             role="assistant",
                             content=content,
@@ -592,10 +593,12 @@ def create_app(
                             mode="deep",
                             conversation_mode=request.mode,
                         )
+                        if record and getattr(record, "message_id", None):
+                            assistant_msg_id = record.message_id
                     except Exception:
                         pass
                 return ChatAnswerResponse(
-                    message_id=f"msg-{uuid4().hex}",
+                    message_id=assistant_msg_id,
                     conversation_id=conv_id,
                     role="assistant",
                     mode="deep",
@@ -630,16 +633,17 @@ def create_app(
                 content = "\n".join(summary_lines)
                 conv_id = request.conversation_id or f"conv-{uuid4().hex}"
                 now = datetime.now(UTC).isoformat()
+                assistant_msg_id = f"msg-{uuid4().hex}"
                 if chat_service is not None:
                     try:
                         chat_service._ensure_conversation(conv_id, request.question, request.mode)
                         turn_id, seq = chat_service._next_turn(conv_id)
                         chat_service._append(ChatMessage(f"msg-{uuid4().hex}", conv_id, "user", "memory", request.question, now, turn_id=turn_id, sequence=seq), conversation_mode=request.mode)
-                        chat_service._append(ChatMessage(f"msg-{uuid4().hex}", conv_id, "assistant", "memory", content, now, turn_id=turn_id, sequence=seq), conversation_mode=request.mode)
+                        chat_service._append(ChatMessage(assistant_msg_id, conv_id, "assistant", "memory", content, now, turn_id=turn_id, sequence=seq), conversation_mode=request.mode)
                     except Exception:
                         pass
                 return ChatAnswerResponse(
-                    message_id=f"msg-{uuid4().hex}",
+                    message_id=assistant_msg_id,
                     conversation_id=conv_id,
                     role="assistant",
                     mode="memory",
@@ -661,16 +665,17 @@ def create_app(
                 content = f"已识别到项目治理意图（项目：{proj_id}）。建议前往「项目工作台」查看深度架构拓扑、理论映射与代码健康度契约体检结果。"
                 conv_id = request.conversation_id or f"conv-{uuid4().hex}"
                 now = datetime.now(UTC).isoformat()
+                assistant_msg_id = f"msg-{uuid4().hex}"
                 if chat_service is not None:
                     try:
                         chat_service._ensure_conversation(conv_id, request.question, request.mode)
                         turn_id, seq = chat_service._next_turn(conv_id)
                         chat_service._append(ChatMessage(f"msg-{uuid4().hex}", conv_id, "user", "project", request.question, now, turn_id=turn_id, sequence=seq), conversation_mode=request.mode)
-                        chat_service._append(ChatMessage(f"msg-{uuid4().hex}", conv_id, "assistant", "project", content, now, turn_id=turn_id, sequence=seq), conversation_mode=request.mode)
+                        chat_service._append(ChatMessage(assistant_msg_id, conv_id, "assistant", "project", content, now, turn_id=turn_id, sequence=seq), conversation_mode=request.mode)
                     except Exception:
                         pass
                 return ChatAnswerResponse(
-                    message_id=f"msg-{uuid4().hex}",
+                    message_id=assistant_msg_id,
                     conversation_id=conv_id,
                     role="assistant",
                     mode="project",
@@ -692,16 +697,17 @@ def create_app(
                 content = f"已识别到文档研读与权威笔记意图（目标：{target_doc}）。建议前往「资料库」查看单篇精读解析、多模态图表与段落证据链。"
                 conv_id = request.conversation_id or f"conv-{uuid4().hex}"
                 now = datetime.now(UTC).isoformat()
+                assistant_msg_id = f"msg-{uuid4().hex}"
                 if chat_service is not None:
                     try:
                         chat_service._ensure_conversation(conv_id, request.question, request.mode)
                         turn_id, seq = chat_service._next_turn(conv_id)
                         chat_service._append(ChatMessage(f"msg-{uuid4().hex}", conv_id, "user", "document", request.question, now, turn_id=turn_id, sequence=seq), conversation_mode=request.mode)
-                        chat_service._append(ChatMessage(f"msg-{uuid4().hex}", conv_id, "assistant", "document", content, now, turn_id=turn_id, sequence=seq), conversation_mode=request.mode)
+                        chat_service._append(ChatMessage(assistant_msg_id, conv_id, "assistant", "document", content, now, turn_id=turn_id, sequence=seq), conversation_mode=request.mode)
                     except Exception:
                         pass
                 return ChatAnswerResponse(
-                    message_id=f"msg-{uuid4().hex}",
+                    message_id=assistant_msg_id,
                     conversation_id=conv_id,
                     role="assistant",
                     mode="document",
@@ -1690,6 +1696,22 @@ def create_app(
     async def resume_run(run_id: str, request: RecoveryRequest | None = None):
         try:
             orchestrator.resume(run_id, request.decision if request else None)
+            return query_service.get_run(run_id)
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/runs/{run_id}/retry_unknown_external", response_model=RunDetailResponse)
+    async def retry_unknown_external_run(run_id: str):
+        try:
+            orchestrator.resume(run_id, RecoveryDecision.RETRY_UNKNOWN_EXTERNAL)
+            return query_service.get_run(run_id)
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/runs/{run_id}/fail_unknown_external", response_model=RunDetailResponse)
+    async def fail_unknown_external_run(run_id: str):
+        try:
+            orchestrator.resume(run_id, RecoveryDecision.FAIL_UNKNOWN_EXTERNAL)
             return query_service.get_run(run_id)
         except Exception as exc:
             return error_response(exc)
@@ -3695,6 +3717,67 @@ def create_app(
         except Exception as exc:
             return error_response(exc)
 
+    @app.get("/api/v1/documents/{document_id}/note", response_model=DocumentNoteResponse)
+    async def get_document_latest_note_endpoint(document_id: str):
+        store = getattr(repository, "artifact_store", None)
+        if store is None:
+            return JSONResponse(status_code=503, content={"code": "service_unavailable", "message": "笔记存储服务未就绪。"})
+        try:
+            entries = [item for item in load_notes_registry() if item.get("document_id") == document_id]
+            if not entries:
+                entries = [
+                    item for item in load_notes_registry()
+                    if item.get("document_id") and (
+                        Path(item.get("document_id", "")).stem == Path(document_id).stem
+                        or item.get("document_id") == Path(document_id).name
+                    )
+                ]
+            if not entries:
+                return JSONResponse(status_code=404, content={"code": "note_not_found", "message": f"文档 {document_id} 尚未生成分析笔记。"})
+
+            tip_entry = max(entries, key=lambda x: int(x.get("version") or 0))
+            note_id = tip_entry.get("note_id")
+            if not note_id:
+                return JSONResponse(status_code=404, content={"code": "note_not_found", "message": f"文档 {document_id} 笔记索引异常。"})
+
+            try:
+                note_obj = load_note_artifact(note_id, store)
+            except (KeyError, ValueError):
+                note_obj = None
+
+            if note_obj is None:
+                return JSONResponse(status_code=404, content={"code": "note_not_found", "message": f"笔记产物 {note_id} 不存在。"})
+
+            return DocumentNoteResponse(
+                note_id=note_obj.note_id,
+                document_id=note_obj.document_id,
+                title=note_obj.title,
+                version=note_obj.version,
+                parent_note_id=note_obj.parent_note_id,
+                applied_patch_id=note_obj.applied_patch_id,
+                executive_summary=note_obj.executive_summary,
+                sections=tuple(
+                    DocumentNoteSectionResponse(
+                        section_id=s.section_id,
+                        title=s.title,
+                        level=s.level,
+                        content=s.content,
+                        source_segments=s.source_segments,
+                        citations=s.citations,
+                        asset_refs=s.asset_refs,
+                    )
+                    for s in note_obj.sections
+                ),
+                key_concepts=note_obj.key_concepts,
+                visual_assets=note_obj.visual_assets,
+                metadata=note_obj.metadata,
+                markdown_content=note_obj.markdown_content,
+                html_content=note_obj.html_content,
+                created_at=note_obj.created_at,
+            )
+        except Exception as exc:
+            return error_response(exc)
+
     @app.post("/api/v1/notes/{note_id}/patch", response_model=DocumentNoteResponse)
     async def patch_note_endpoint(note_id: str, request: NotePatchRequest):
         store = getattr(repository, "artifact_store", None)
@@ -3713,14 +3796,18 @@ def create_app(
             # 对旧修订（非 tip）发起 patch 会通过版本校验并以同 ID 新产物静默覆盖
             # 较新修订，409 永不可达。此处将"非 tip 修订"显式判为版本冲突，
             # latest_version 指向真实 tip，前端据此刷新基线后重应用。
-            tip_version = max(
-                (
-                    int(item.get("version") or 0)
-                    for item in load_notes_registry()
-                    if item.get("document_id") == note_obj.document_id
-                ),
-                default=note_obj.version,
+            entries = [
+                item for item in load_notes_registry()
+                if item.get("document_id") == note_obj.document_id
+            ]
+            tip_entry = (
+                max(entries, key=lambda x: int(x.get("version") or 0))
+                if entries
+                else None
             )
+            tip_version = int(tip_entry.get("version") or 0) if tip_entry else note_obj.version
+            tip_note_id = str(tip_entry.get("note_id") or note_obj.note_id) if tip_entry else note_obj.note_id
+
             if note_obj.version < tip_version:
                 return JSONResponse(
                     status_code=409,
@@ -3728,6 +3815,7 @@ def create_app(
                         "code": "version_conflict",
                         "message": f"笔记 {note_obj.note_id} 已不是最新修订（当前最新版本 {tip_version}），已拒绝以避免静默覆盖。",
                         "latest_version": tip_version,
+                        "latest_note_id": tip_note_id,
                     },
                 )
 
@@ -3737,8 +3825,9 @@ def create_app(
                     content={
                         "code": "version_conflict",
                         "message": f"目标版本 {request.target_version} 与当前笔记版本 {note_obj.version} 不一致。",
-                        # A5：附最新版本号，前端可据此刷新基线并自动重应用一次。
-                        "latest_version": note_obj.version,
+                        # A5：附最新版本号与最新笔记 ID，前端可据此刷新基线并自动重应用一次。
+                        "latest_version": tip_version,
+                        "latest_note_id": tip_note_id,
                     },
                 )
 
@@ -4636,7 +4725,7 @@ def build_research_runtimes(
         research_runtime = UnavailableTaskRuntime(
             repository,
             executor_id="durable_verified_research@v1",
-            task_kinds=("verified_paper_research", "managed_verified_research"),
+            task_kinds=("verified_paper_research", "managed_verified_research", "deep_research"),
             message="Provider configuration is incomplete",
         )
         chat_service = None
@@ -4757,7 +4846,7 @@ def build_research_runtimes(
             research_runtime = UnavailableTaskRuntime(
                 repository,
                 executor_id="durable_verified_research@v1",
-                task_kinds=("verified_paper_research", "managed_verified_research"),
+                task_kinds=("verified_paper_research", "managed_verified_research", "deep_research"),
                 message=f"Research corpus or LanceDB is unavailable: {exc}",
             )
         chat_service = ChatService(

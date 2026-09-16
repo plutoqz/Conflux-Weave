@@ -29,11 +29,18 @@ import type { SkillSummary, SkillDetail, SkillExecuteResult } from "@/types/work
 
 const CATEGORIES = [
   { id: "all", label: "全部技能" },
-  { id: "academic", label: "学术研究" },
-  { id: "engineering", label: "工程架构" },
+  { id: "research", label: "学术研究" },
+  { id: "governance", label: "工程架构" },
   { id: "writing", label: "学术写作" },
-  { id: "custom", label: "自定义技能" },
+  { id: "utility", label: "实用工具" },
 ];
+
+const CATEGORY_MAP: Record<string, string> = {
+  research: "学术研究",
+  governance: "工程架构",
+  writing: "学术写作",
+  utility: "实用工具",
+};
 
 export const SkillsView: React.FC = () => {
   const [skills, setSkills] = useState<SkillSummary[]>([]);
@@ -218,7 +225,7 @@ export const SkillsView: React.FC = () => {
                       {skill.name}
                     </h3>
                     <Badge variant="outline" className="text-xs font-mono shrink-0">
-                      {skill.category}
+                      {CATEGORY_MAP[skill.category] || skill.category}
                     </Badge>
                   </div>
                   <p

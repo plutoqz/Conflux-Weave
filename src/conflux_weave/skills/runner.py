@@ -59,7 +59,6 @@ class SkillRunner:
 {rules_text}
 """
 
-        # Execute through provider or deterministic offline fallback
         if self._provider is not None:
             try:
                 response = self._provider.complete(
@@ -68,11 +67,13 @@ class SkillRunner:
                 )
                 content = response.content
                 tokens = response.total_tokens
+                status = "completed"
+                summary = f"成功执行 Skill: {skill.name}"
             except Exception as exc:
                 return SkillExecutionResult(
                     skill_id=request.skill_id,
                     status="failed",
-                    summary=f"Skill execution exception: {exc}",
+                    summary=f"Skill 执行异常: {exc}",
                     content="",
                     error=str(exc),
                     elapsed_seconds=time.monotonic() - start_time,
@@ -80,19 +81,22 @@ class SkillRunner:
         else:
             # Deterministic offline execution representation
             content = self._generate_offline_skill_response(skill.skill_id, request.inputs)
-            tokens = len(content) // 4
+            tokens = max(1, len(content) // 4)
+            status = "completed"
+            summary = f"成功执行 Skill (离线模式): {skill.name}"
 
         elapsed = time.monotonic() - start_time
         return SkillExecutionResult(
             skill_id=skill.skill_id,
-            status="completed",
-            summary=f"成功执行 Skill: {skill.name}",
+            status=status,
+            summary=summary,
             content=content,
             structured_data={
                 "skill_id": skill.skill_id,
                 "version": skill.version,
                 "category": skill.category.value,
                 "inputs": request.inputs,
+                "demonstration_only": (self._provider is None),
             },
             elapsed_seconds=elapsed,
             tokens_consumed=tokens,
@@ -108,6 +112,10 @@ class SkillRunner:
 
     def _generate_offline_skill_response(self, skill_id: str, inputs: dict[str, Any]) -> str:
         """Produce rich deterministic output for testing and zero-network environments."""
+        demo_banner = (
+            "> ⚠️ **【离线样例声明】**：当前环境未配置大模型 Provider，以下输出为离线确定性演示样例，"
+            "不代表对目标对象（项目/论文）的真实分析与实际评分结果。\n\n"
+        )
         if skill_id == "literature_comparative_survey":
             papers = inputs.get("paper_ids", ["2606.08702", "2606.10209"])
             dims = inputs.get("focus_dimensions") or ["理论假设", "架构创新", "关键指标", "计算开销", "局限性"]
@@ -118,7 +126,7 @@ class SkillRunner:
                 cols = [f"`{p}`"] + [f"{dim}分析结果({p})" for dim in dims]
                 table_rows += "| " + " | ".join(cols) + " |\n"
 
-            return f"""# 学术文献多源对比分析综述报告
+            return f"""{demo_banner}# 学术文献多源对比分析综述报告 (离线演示)
 
 ## 1. 结构化横向对比矩阵
 {table_header}{table_sep}{table_rows}
@@ -134,12 +142,12 @@ class SkillRunner:
         elif skill_id == "code_architecture_audit":
             project_id = inputs.get("project_id", "current_project")
             threshold = inputs.get("severity_threshold", "medium")
-            return f"""# 项目架构治理与契约审计体检报告 · {project_id}
+            return f"""{demo_banner}# 项目架构治理与契约审计体检报告 (离线演示) · {project_id}
 
 ## 1. 架构健康度综合评估
-- **总体得分**: 92 / 100 (健康状态良好)
+- **体检状态**: 离线样例（未接入真实代码分析引擎，无真实健康度打分）
 - **告警过滤阈值**: {threshold}
-- **模块依赖拓扑**: 层次清晰，无循环依赖。
+- **模块依赖拓扑**: 结构清晰，未检测到循环依赖（演示样例）。
 
 ## 2. 发现的代码坏味道与潜在隐患
 1. `src/conflux_weave/server.py`: 单一文件行数超 2000 行，承担了路由、静态资产与依赖装配多重职责，建议分拆。

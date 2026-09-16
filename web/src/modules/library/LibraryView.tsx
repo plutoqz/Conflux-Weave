@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   Archive,
   Trash2,
@@ -41,11 +41,40 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
   const [activeTab, setActiveTab] = useState<"documents" | "multimodal" | "assets" | "papers">("documents");
   const [documents, setDocuments] = useState<LibraryDocument[]>([]);
   const [docFilter, setDocFilter] = useState<"active" | "archived" | "deleted">("active");
+  const [overviewStats, setOverviewStats] = useState<{
+    total: number;
+    imported: number;
+    processing: number;
+    failed: number;
+    character_count: number;
+    size_bytes: number;
+    source_counts: Record<string, number>;
+    index_status: string;
+  }>({
+    total: 0,
+    imported: 0,
+    processing: 0,
+    failed: 0,
+    character_count: 0,
+    size_bytes: 0,
+    source_counts: {},
+    index_status: "未建立索引",
+  });
 
   const refreshDocuments = async (filter = docFilter) => {
     try {
       const res = await api.getDocuments(filter);
       setDocuments(res.items || []);
+      setOverviewStats({
+        total: res.total ?? (res.items || []).length,
+        imported: res.imported ?? 0,
+        processing: res.processing ?? 0,
+        failed: res.failed ?? 0,
+        character_count: res.character_count ?? 0,
+        size_bytes: res.size_bytes ?? 0,
+        source_counts: res.source_counts ?? {},
+        index_status: res.index_status || (res.imported ? `${res.imported} 份资料可用` : "未就绪"),
+      });
     } catch {
       // keep current list
     }
@@ -208,19 +237,65 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
     alert(`批量入库完成：已成功入库 ${successCount} / ${selected.length} 篇论文，本地文献库已自动刷新！`);
   };
 
-  // Mock data for charts
-  const sourceSegments = [
-    { label: "PDF 预印本", value: Math.max(documents.length, 120), color: "#1b4931" },
-    { label: "arXiv 聚合", value: 65, color: "#2d7a52" },
-    { label: "Markdown 笔记", value: 37, color: "#d97706" },
-  ];
+  // Dynamic data for charts based on real documents and overviewStats
+  const sourceSegments = useMemo(() => {
+    if (documents.length === 0) {
+      return [{ label: "暂无收录", value: 1, color: "#94a3b8" }];
+    }
+    const pdfCount = documents.filter((d) => (d.media_type || "").includes("pdf") || (d.source_type || "").includes("pdf") || (d.relative_path || "").endsWith(".pdf")).length;
+    const arxivCount = documents.filter((d) => Boolean(d.arxiv_id) || (d.source_type || "") === "arxiv").length;
+    const mdCount = documents.filter((d) => (d.media_type || "").includes("markdown") || (d.relative_path || "").endsWith(".md")).length;
+    const otherCount = Math.max(0, documents.length - pdfCount - arxivCount - mdCount);
 
-  const lengthHistogramData = [
-    { label: "<5k字", value: 42 },
-    { label: "5k-15k", value: 98 },
-    { label: "15k-30k", value: 64 },
-    { label: ">30k长篇", value: 18 },
-  ];
+    const segments = [];
+    if (pdfCount > 0) segments.push({ label: "PDF 预印本", value: pdfCount, color: "#1b4931" });
+    if (arxivCount > 0) segments.push({ label: "arXiv 聚合", value: arxivCount, color: "#2d7a52" });
+    if (mdCount > 0) segments.push({ label: "Markdown 笔记", value: mdCount, color: "#d97706" });
+    if (otherCount > 0) segments.push({ label: "其他格式", value: otherCount, color: "#64748b" });
+    return segments.length > 0 ? segments : [{ label: "本地文档", value: documents.length, color: "#1b4931" }];
+  }, [documents]);
+
+  const lengthHistogramData = useMemo(() => {
+    if (documents.length === 0) {
+      return [
+        { label: "<5k字", value: 0 },
+        { label: "5k-15k", value: 0 },
+        { label: "15k-30k", value: 0 },
+        { label: ">30k长篇", value: 0 },
+      ];
+    }
+    let c1 = 0, c2 = 0, c3 = 0, c4 = 0;
+    for (const d of documents) {
+      const chars = d.character_count || 0;
+      if (chars < 5000) c1++;
+      else if (chars < 15000) c2++;
+      else if (chars < 30000) c3++;
+      else c4++;
+    }
+    return [
+      { label: "<5k字", value: c1 },
+      { label: "5k-15k", value: c2 },
+      { label: "15k-30k", value: c3 },
+      { label: ">30k长篇", value: c4 },
+    ];
+  }, [documents]);
+
+  const totalCount = overviewStats.total;
+  const importedCount = overviewStats.imported;
+  const availabilityPercent = totalCount > 0 ? `${Math.round((importedCount / totalCount) * 100)}%` : "0%";
+  const charDisplay = overviewStats.character_count >= 1_000_000
+    ? `${(overviewStats.character_count / 1_000_000).toFixed(2)}M`
+    : overviewStats.character_count >= 1_000
+    ? `${(overviewStats.character_count / 1_000).toFixed(1)}k`
+    : `${overviewStats.character_count}`;
+  const sizeDisplay = overviewStats.size_bytes >= 1024 * 1024
+    ? `${(overviewStats.size_bytes / (1024 * 1024)).toFixed(1)} MB`
+    : overviewStats.size_bytes >= 1024
+    ? `${(overviewStats.size_bytes / 1024).toFixed(1)} KB`
+    : `${overviewStats.size_bytes} B`;
+  const sourcesDisplay = Object.keys(overviewStats.source_counts).length > 0
+    ? Object.keys(overviewStats.source_counts).join(" + ")
+    : (totalCount > 0 ? "本地导入" : "无");
 
   return (
     <div className="max-w-6xl mx-auto p-4 sm:p-8 space-y-6 animate-in fade-in-50">
@@ -285,27 +360,27 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         <div className="p-3 rounded-xl border border-border/70 bg-card shadow-2xs">
           <span className="text-xs sm:text-sm font-serif-academic font-medium text-foreground/80 block">资料总数</span>
-          <strong className="text-base sm:text-lg font-mono font-bold text-foreground">{documents.length || 222}</strong>
+          <strong className="text-base sm:text-lg font-mono font-bold text-foreground">{totalCount}</strong>
         </div>
         <div className="p-3 rounded-xl border border-border/70 bg-card shadow-2xs">
           <span className="text-xs sm:text-sm font-serif-academic font-medium text-foreground/80 block">知识库可用</span>
-          <strong className="text-base sm:text-lg font-mono font-bold text-emerald-800 dark:text-emerald-300">100%</strong>
+          <strong className="text-base sm:text-lg font-mono font-bold text-emerald-800 dark:text-emerald-300">{availabilityPercent}</strong>
         </div>
         <div className="p-3 rounded-xl border border-border/70 bg-card shadow-2xs">
           <span className="text-xs sm:text-sm font-serif-academic font-medium text-foreground/80 block">向量索引状态</span>
-          <strong className="text-base sm:text-lg font-mono font-bold text-foreground">LanceDB 就绪</strong>
+          <strong className="text-base sm:text-lg font-mono font-bold text-foreground">{overviewStats.index_status}</strong>
         </div>
         <div className="p-3 rounded-xl border border-border/70 bg-card shadow-2xs">
           <span className="text-xs sm:text-sm font-serif-academic font-medium text-foreground/80 block">正文字符数</span>
-          <strong className="text-base sm:text-lg font-mono font-bold text-foreground">1.84M</strong>
+          <strong className="text-base sm:text-lg font-mono font-bold text-foreground">{charDisplay}</strong>
         </div>
         <div className="p-3 rounded-xl border border-border/70 bg-card shadow-2xs">
           <span className="text-xs sm:text-sm font-serif-academic font-medium text-foreground/80 block">本地存储量</span>
-          <strong className="text-base sm:text-lg font-mono font-bold text-foreground">42.8 MB</strong>
+          <strong className="text-base sm:text-lg font-mono font-bold text-foreground">{sizeDisplay}</strong>
         </div>
         <div className="p-3 rounded-xl border border-border/70 bg-card shadow-2xs">
           <span className="text-xs sm:text-sm font-serif-academic font-medium text-foreground/80 block">多源覆盖</span>
-          <strong className="text-base sm:text-lg font-mono font-bold text-foreground">arXiv + OA</strong>
+          <strong className="text-base sm:text-lg font-mono font-bold text-foreground">{sourcesDisplay}</strong>
         </div>
       </div>
 
@@ -323,7 +398,7 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
                 <DonutChart
                   segments={sourceSegments}
                   centerTitle="总收录"
-                  centerValue={String(documents.length || 222)}
+                  centerValue={String(totalCount)}
                 />
               </CardContent>
             </Card>

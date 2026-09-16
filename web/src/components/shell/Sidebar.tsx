@@ -79,8 +79,9 @@ export const Sidebar: React.FC = () => {
   }, [toggleZenMode]);
 
   const filteredRuns = runs.filter((run) => {
-    if (filter === "completed" && run.status !== "complete" && run.status !== "partial") return false;
-    if (filter === "active" && (run.status === "complete" || run.status === "failed" || run.status === "cancelled")) return false;
+    const st = run.state || run.status;
+    if (filter === "completed" && st !== "complete" && st !== "partial") return false;
+    if (filter === "active" && (st === "complete" || st === "failed" || st === "cancelled")) return false;
     if (search.trim()) {
       const q = search.toLowerCase();
       const matchTitle = (run.title || run.query || run.run_id).toLowerCase().includes(q);
@@ -89,7 +90,7 @@ export const Sidebar: React.FC = () => {
     return true;
   });
 
-  const getStatusColor = (status: RunStatus) => {
+  const getStatusColor = (status?: RunStatus | string) => {
     switch (status) {
       case "complete":
         return "bg-emerald-500 ring-emerald-500/20";
@@ -140,7 +141,7 @@ export const Sidebar: React.FC = () => {
                 activeRunId === run.run_id ? "bg-accent border border-emerald-500" : ""
               )}
             >
-              <span className={cn("h-2.5 w-2.5 rounded-full ring-2", getStatusColor(run.status))} />
+              <span className={cn("h-2.5 w-2.5 rounded-full ring-2", getStatusColor(run.state || run.status))} />
             </button>
           ))}
         </div>
@@ -262,7 +263,7 @@ export const Sidebar: React.FC = () => {
                 <div className="flex items-start justify-between space-x-2">
                   <div className="flex items-center space-x-2 min-w-0">
                     <span
-                      className={cn("h-2 w-2 rounded-full shrink-0 ring-2", getStatusColor(run.status))}
+                      className={cn("h-2 w-2 rounded-full shrink-0 ring-2", getStatusColor(run.state || run.status))}
                     />
                     <h4 className="text-sm font-serif-academic font-semibold text-foreground truncate">
                       {run.title || run.query || run.run_id}

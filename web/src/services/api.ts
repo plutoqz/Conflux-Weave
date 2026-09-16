@@ -5,6 +5,7 @@ import type {
   ChatMessage,
   ConversationSummary,
   LibraryDocument,
+  LibraryOverview,
   PaperItem,
   ProjectSummary,
   DocumentNote,
@@ -203,11 +204,22 @@ export const api = {
       method: "POST",
       body: JSON.stringify(data),
     }),
-  retryRun: (runId: string) => request(`/api/v1/runs/${runId}/retry_unknown_external`, { method: "POST" }),
-  failRun: (runId: string) => request(`/api/v1/runs/${runId}/fail_unknown_external`, { method: "POST" }),
-  rerunRun: (runId: string) => request(`/api/v1/runs/${runId}/rerun`, { method: "POST" }),
+  retryRun: (runId: string) =>
+    request<RunDetail>(`/api/v1/runs/${encodeURIComponent(runId)}/resume`, {
+      method: "POST",
+      body: JSON.stringify({ decision: "retry_unknown_external" }),
+    }),
+  failRun: (runId: string) =>
+    request<RunDetail>(`/api/v1/runs/${encodeURIComponent(runId)}/resume`, {
+      method: "POST",
+      body: JSON.stringify({ decision: "fail_unknown_external" }),
+    }),
+  rerunRun: (runId: string) => request(`/api/v1/runs/${encodeURIComponent(runId)}/rerun`, { method: "POST" }),
   followUpRun: (runId: string, query: string) =>
-    request(`/api/v1/runs/${runId}/follow-up`, { method: "POST", body: JSON.stringify({ query }) }),
+    request(`/api/v1/runs/${encodeURIComponent(runId)}/follow-up`, {
+      method: "POST",
+      body: JSON.stringify({ question: query, query }),
+    }),
 
   // Export (P6-A1)
   exportRun: (runId: string, format: "markdown" | "bibtex" | "json" | "zip") =>
@@ -329,11 +341,16 @@ export const api = {
     request<{ query: string; items: any[]; semantic_available: boolean }>(
       `/api/v1/memories/recall?query=${encodeURIComponent(query)}${projectId ? `&project_id=${encodeURIComponent(projectId)}` : ""}`
     ),
+  actOnMemoryCandidate: (candidateId: string, action: "approve" | "reject") =>
+    request<{ ok: boolean; action: string; memory_id?: string; memory?: any; candidate_id?: string }>(
+      `/api/v1/memories/candidates/${encodeURIComponent(candidateId)}/action`,
+      { method: "POST", body: JSON.stringify({ action }) }
+    ),
   deleteMemory: (memoryId: string) => request(`/api/v1/memories/${memoryId}`, { method: "DELETE" }),
 
   // Library
   getDocuments: (status = "active") =>
-    request<{ items: LibraryDocument[]; total: number }>(`/api/v1/library?status=${encodeURIComponent(status)}`),
+    request<LibraryOverview>(`/api/v1/library?status=${encodeURIComponent(status)}`),
   setDocumentLifecycle: (documentId: string, action: "archive" | "delete" | "restore") =>
     request<{ document_id: string; lifecycle: string }>(
       `/api/v1/library/documents/${encodeURIComponent(documentId)}/lifecycle`,
@@ -375,6 +392,7 @@ export const api = {
 
   // Document Notes
   getDocumentNote: (noteId: string) => request<DocumentNote>(`/api/v1/notes/${encodeURIComponent(noteId)}`),
+  getLatestDocumentNote: (docId: string) => request<DocumentNote>(`/api/v1/documents/${encodeURIComponent(docId)}/note`),
   getDocumentNoteRevisions: (noteId: string) => request<{ note_id: string; revisions: any[] }>(`/api/v1/notes/${encodeURIComponent(noteId)}/revisions`),
   analyzeDocument: (docId: string, options?: { path?: string; focus?: string; title?: string }) =>
     request<DocumentNote>("/api/v1/documents/analyze", {

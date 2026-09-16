@@ -38,6 +38,7 @@ __all__ = [
     "LegacyPaperRuntimeAdapter",
     "OrchestratorPort",
     "TaskRuntimePort",
+    "TaskRuntimeUnavailable",
     "UnavailableTaskRuntime",
     "ToolResult",
     "ToolResultStatus",
@@ -63,6 +64,7 @@ def __getattr__(name: str):
         "LegacyPaperRuntimeAdapter",
         "OrchestratorPort",
         "TaskRuntimePort",
+        "TaskRuntimeUnavailable",
         "UnavailableTaskRuntime",
     }:
         from conflux_weave.harness import orchestration

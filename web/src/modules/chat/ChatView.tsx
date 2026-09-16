@@ -183,22 +183,80 @@ const DeepResearchMessageBubble: React.FC<{
     };
   }, [message.run_id, isPending]);
 
-  const isFailed = runState === "failed" || runState === "waiting_for_user" || runState === "cancelled" || runState === "expired";
+  const isCancelled = runState === "cancelled";
+  const isWaitingForUser = runState === "waiting_for_user";
+  const isFailed = runState === "failed" || runState === "expired";
 
   return (
     <div className="space-y-3">
-      {isFailed ? (
+      {isCancelled ? (
+        <div className="rounded-xl border border-border/80 bg-muted/40 p-4 space-y-2.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2 text-muted-foreground font-semibold text-sm">
+              <span>⏹️ 研究任务已主动取消</span>
+            </div>
+            <Badge variant="outline" className="text-xs font-mono text-muted-foreground">
+              已取消
+            </Badge>
+          </div>
+          <p className="text-xs text-muted-foreground leading-relaxed font-sans">
+            用户已主动终止此深度研究流水线。未生成最终研究报告。
+          </p>
+          <div className="flex items-center justify-between pt-1 border-t border-border/40 text-xs">
+            <span className="font-mono text-muted-foreground">Run ID: {message.run_id}</span>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 text-xs text-muted-foreground hover:text-foreground gap-1 px-2"
+              onClick={() => {
+                window.location.hash = `#/research?run_id=${encodeURIComponent(message.run_id!)}`;
+              }}
+            >
+              <span>在研究中心查看记录</span>
+              <ExternalLink className="h-3 w-3" />
+            </Button>
+          </div>
+        </div>
+      ) : isWaitingForUser ? (
+        <div className="rounded-xl border border-amber-600/30 bg-amber-50/50 dark:bg-amber-950/20 p-4 space-y-2.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2 text-amber-800 dark:text-amber-300 font-semibold text-sm">
+              <span>⏸️ 研究任务暂停：待人工确认</span>
+            </div>
+            <Badge variant="outline" className="text-xs font-mono border-amber-600/40 text-amber-800 dark:text-amber-300">
+              待用户决策
+            </Badge>
+          </div>
+          <p className="text-xs text-foreground/80 leading-relaxed font-sans">
+            研究流水线在推进到第 {stepCount} 阶段时暂停，遇到了需要确认决策的外部调用或恢复检查点。
+          </p>
+          <div className="flex items-center justify-between pt-1 border-t border-amber-600/20 text-xs">
+            <span className="font-mono text-muted-foreground">Run ID: {message.run_id}</span>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 text-xs text-amber-900 dark:text-amber-200 hover:bg-amber-600/10 gap-1 px-2"
+              onClick={() => {
+                window.location.hash = `#/research?run_id=${encodeURIComponent(message.run_id!)}`;
+              }}
+            >
+              <span>在研究中心查看并恢复</span>
+              <ExternalLink className="h-3 w-3" />
+            </Button>
+          </div>
+        </div>
+      ) : isFailed ? (
         <div className="rounded-xl border border-rose-600/30 bg-rose-50/50 dark:bg-rose-950/20 p-4 space-y-2.5">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-2 text-rose-800 dark:text-rose-300 font-semibold text-sm">
-              <span>⚠️ 深度研究任务中断或需人工介入</span>
+              <span>⚠️ 深度研究任务执行异常</span>
             </div>
             <Badge variant="outline" className="text-xs font-mono border-rose-600/40 text-rose-800 dark:text-rose-300">
               {runState}
             </Badge>
           </div>
           <p className="text-xs text-foreground/80 leading-relaxed font-sans">
-            研究流水线在推进到第 {stepCount} 阶段时暂停。您可以前往研究中心查看具体阶段错误日志或重试该任务。
+            研究流水线在推进到第 {stepCount} 阶段时发生错误。您可以前往研究中心查看具体阶段错误日志或重试该任务。
           </p>
           <div className="flex items-center justify-between pt-1 border-t border-rose-600/20 text-xs">
             <span className="font-mono text-muted-foreground">Run ID: {message.run_id}</span>
@@ -210,7 +268,7 @@ const DeepResearchMessageBubble: React.FC<{
                 window.location.hash = `#/research?run_id=${encodeURIComponent(message.run_id!)}`;
               }}
             >
-              <span>在研究中心查看与恢复</span>
+              <span>在研究中心查看错误与重试</span>
               <ExternalLink className="h-3 w-3" />
             </Button>
           </div>
@@ -347,6 +405,21 @@ export const ChatView: React.FC = () => {
   const [webSearch, setWebSearch] = useState<boolean>(false);
   const [thinkingDepth, setThinkingDepth] = useState<"quick" | "deep" | "rigorous">("deep");
   const [lightboxImage, setLightboxImage] = useState<{ url: string; caption?: string } | null>(null);
+  const [candidateActions, setCandidateActions] = useState<Record<string, "approved" | "rejected" | "loading">>({});
+
+  const handleCandidateAction = async (candidateId: string, action: "approve" | "reject") => {
+    setCandidateActions((prev) => ({ ...prev, [candidateId]: "loading" }));
+    try {
+      await api.actOnMemoryCandidate(candidateId, action);
+      setCandidateActions((prev) => ({ ...prev, [candidateId]: action === "approve" ? "approved" : "rejected" }));
+    } catch {
+      setCandidateActions((prev) => {
+        const next = { ...prev };
+        delete next[candidateId];
+        return next;
+      });
+    }
+  };
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -509,6 +582,7 @@ export const ChatView: React.FC = () => {
 
       const replyContent = res.answer || res.content || res.text || "已完成分析回答。";
       const assistantMsg: ChatMessage = {
+        message_id: res.message_id || res.id,
         role: "assistant",
         content: replyContent,
         mode: res.routed_mode || res.mode || mode,
@@ -843,17 +917,31 @@ export const ChatView: React.FC = () => {
                             <BookmarkPlus className="h-3.5 w-3.5 text-amber-700 dark:text-amber-400" />
                             识别出长期学术事实记忆:
                           </span>
-                          {msg.memory_candidates.map((mem) => (
-                            <div
-                              key={mem.candidate_id}
-                              className="bg-muted/60 p-2.5 rounded-md text-xs sm:text-sm flex items-center justify-between border border-border/50"
-                            >
-                              <span className="text-foreground font-medium">{mem.key}: {mem.value}</span>
-                              <Badge variant="outline" className="text-xs font-mono cursor-pointer hover:bg-primary/10">
-                                沉淀入库
-                              </Badge>
-                            </div>
-                          ))}
+                          {msg.memory_candidates.map((mem) => {
+                            const displayText = mem.statement || (mem.key ? `${mem.key}: ${mem.value}` : "学术事实记忆");
+                            const actionState = candidateActions[mem.candidate_id];
+                            return (
+                              <div
+                                key={mem.candidate_id}
+                                className="bg-muted/60 p-2.5 rounded-md text-xs sm:text-sm flex items-center justify-between border border-border/50 gap-2"
+                              >
+                                <span className="text-foreground font-medium">{displayText}</span>
+                                {actionState === "approved" ? (
+                                  <Badge variant="outline" className="text-xs font-mono text-emerald-600 border-emerald-500/40 bg-emerald-50/50 dark:bg-emerald-950/20 shrink-0">
+                                    已沉淀入库
+                                  </Badge>
+                                ) : (
+                                  <Badge
+                                    variant="outline"
+                                    className="text-xs font-mono cursor-pointer hover:bg-primary/10 shrink-0"
+                                    onClick={() => handleCandidateAction(mem.candidate_id, "approve")}
+                                  >
+                                    {actionState === "loading" ? "保存中…" : "沉淀入库"}
+                                  </Badge>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
 

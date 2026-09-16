@@ -6,7 +6,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { FileText, Copy, Sparkles, Check, History, Loader2, AlertCircle, Download, BookOpen, Quote } from "lucide-react";
+import { FileText, Copy, Sparkles, Check, History, Loader2, AlertCircle, Download, BookOpen, Quote, RotateCw } from "lucide-react";
 import { marked } from "marked";
 import { renderMarkdownWithMath, cleanDocumentNoteText } from "@/lib/math";
 import { api } from "@/services/api";
@@ -72,18 +72,8 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
     }
   };
 
-  useEffect(() => {
-    if (!open || !documentId) {
-      setNote(null);
-      setError(null);
-      setConflictMsg(null);
-      setRevisions([]);
-      setSavedResearchRunId(null);
-      setSegments([]);
-      setAnchor(null);
-      setAnchorNote(null);
-      return;
-    }
+  const loadNote = async (forceReanalyze = false) => {
+    if (!documentId) return;
     setLoading(true);
     setError(null);
     setConflictMsg(null);
@@ -97,39 +87,63 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
     const taskId = `task-reading-${documentId}`;
     addBackgroundTask({
       id: taskId,
-      title: `研读分析: ${documentId}`,
+      title: forceReanalyze ? `重新研读: ${documentId}` : `研读分析: ${documentId}`,
       type: "reading",
       status: "running",
       startTime: Date.now(),
       targetId: documentId,
     });
 
-    // Call analyzeDocument (which gets existing or builds new)
-    api.analyzeDocument(documentId)
-      .then(async (res) => {
-        setNote(res);
-        updateBackgroundTask(taskId, {
-          status: "succeeded",
-          message: `研读完成：《${res.title}》`,
-        });
-        if (res.note_id) {
-          try {
-            const revRes = await api.getDocumentNoteRevisions(res.note_id);
-            setRevisions(revRes.revisions || []);
-          } catch {
-            // ignore
-          }
+    try {
+      let resNote: DocumentNote | null = null;
+      if (!forceReanalyze) {
+        try {
+          resNote = await api.getLatestDocumentNote(documentId);
+        } catch {
+          resNote = null;
         }
-      })
-      .catch((err) => {
-        console.error("Failed to analyze document:", err);
-        setError(err.message || "文档研读失败，请检查文件是否存在全文。");
-        updateBackgroundTask(taskId, {
-          status: "failed",
-          message: err.message || "研读失败",
-        });
-      })
-      .finally(() => setLoading(false));
+      }
+      if (!resNote) {
+        resNote = await api.analyzeDocument(documentId);
+      }
+      setNote(resNote);
+      updateBackgroundTask(taskId, {
+        status: "succeeded",
+        message: `研读完成：《${resNote.title}》`,
+      });
+      if (resNote.note_id) {
+        try {
+          const revRes = await api.getDocumentNoteRevisions(resNote.note_id);
+          setRevisions(revRes.revisions || []);
+        } catch {
+          // ignore
+        }
+      }
+    } catch (err: any) {
+      console.error("Failed to analyze or load document note:", err);
+      setError(err.message || "文档研读失败，请检查文件是否存在全文。");
+      updateBackgroundTask(taskId, {
+        status: "failed",
+        message: err.message || "研读失败",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!open || !documentId) {
+      setNote(null);
+      setError(null);
+      setConflictMsg(null);
+      setRevisions([]);
+      setSavedResearchRunId(null);
+      setSegments([]);
+      setAnchor(null);
+      setAnchorNote(null);
+      return;
+    }
+    loadNote(false);
   }, [open, documentId]);
 
   const handleSelectRevision = async (noteId: string) => {
@@ -163,19 +177,27 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
       setAnchor(null); // 锚点随修订成功持久化进新版本；失败时保留供重试
       setAnchorNote(null);
     } catch (err: any) {
-      // A5：409 版本冲突 → 基线自动刷新并重应用一次；再次冲突转人工，不循环重试。
+      // A5 / U08：409 版本冲突 → 基线自动刷新并重应用一次；使用服务端返回的 latest_note_id 和 latest_version
       if (err?.status === 409) {
-        const latest: number | null =
-          typeof err?.payload?.latest_version === "number"
-            ? err.payload.latest_version
-            : await api
-                .getDocumentNote(note.note_id)
-                .then((n) => (typeof n?.version === "number" ? n.version : null))
-                .catch(() => null);
-        if (latest != null && latest !== note.version) {
-          setConflictMsg(`检测到版本冲突（目标 v${note.version}，服务端已到 v${latest}），已基于最新版本自动重应用一次…`);
+        let latestNoteId: string | null = err?.payload?.latest_note_id || null;
+        let latestVersion: number | null = typeof err?.payload?.latest_version === "number" ? err.payload.latest_version : null;
+
+        if (!latestNoteId || latestVersion == null) {
           try {
-            await finish(await api.patchDocumentNote(note.note_id, patchPrompt.trim(), latest, anchor ?? undefined));
+            if (documentId) {
+              const latestNote = await api.getLatestDocumentNote(documentId);
+              latestNoteId = latestNote.note_id;
+              latestVersion = latestNote.version;
+            }
+          } catch {
+            // fallback
+          }
+        }
+
+        if (latestNoteId && latestVersion != null && (latestNoteId !== note.note_id || latestVersion !== note.version)) {
+          setConflictMsg(`检测到版本冲突（目标 v${note.version}，服务端已到 v${latestVersion}），已基于最新版本自动重应用一次…`);
+          try {
+            await finish(await api.patchDocumentNote(latestNoteId, patchPrompt.trim(), latestVersion, anchor ?? undefined));
             setAnchor(null);
             setAnchorNote(null);
           } catch (retryErr: any) {
@@ -439,6 +461,18 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
                 原文
               </button>
             </div>
+
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => loadNote(true)}
+              disabled={loading || patching}
+              title="放弃当前修改，从源文档重新提取生成初始分析笔记"
+              className="h-7 px-2 text-xs font-serif-academic gap-1 text-muted-foreground hover:text-foreground"
+            >
+              <RotateCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
+              <span>重新分析</span>
+            </Button>
 
             <Button
               variant="ghost"

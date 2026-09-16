@@ -9,10 +9,11 @@ import json
 import os
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from conflux_weave.core import RunStatus, StepStatus
 from conflux_weave.evidence import ArtifactRef
+from conflux_weave.harness.orchestration import TaskRuntimeUnavailable
 from conflux_weave.runtime.artifacts import ArtifactIntegrityError
 from conflux_weave.runtime.durable_paper_shared import RANK_CHECKPOINT
 from conflux_weave.runtime.durable_research import DURABLE_RESEARCH_EVIDENCE_SCHEMA
@@ -209,14 +210,18 @@ class DeepResearchTaskRequest(_ApiModel):
 
 
 class FollowUpResearchTaskRequest(_ApiModel):
-    question: str = Field(min_length=1, max_length=2_000)
+    question: str = Field(default="", max_length=2_000)
+    query: str | None = Field(default=None, max_length=2_000)
 
-    @field_validator("question")
+    @model_validator(mode="before")
     @classmethod
-    def require_nonblank_question(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("question must not be blank")
-        return value.strip()
+    def resolve_question_or_query(cls, values: Any) -> Any:
+        if isinstance(values, dict):
+            q = values.get("question") or values.get("query") or ""
+            if not str(q).strip():
+                raise ValueError("question or query must not be blank")
+            values["question"] = str(q).strip()
+        return values
 
 
 class ResearchTaskAcceptedResponse(_ApiModel):
@@ -1117,6 +1122,13 @@ def map_exception(exc: Exception) -> tuple[int, ApiErrorResponse]:
             code="artifact_unavailable",
             message="交付文件无法通过完整性检查。",
             recovery_action="保留当前运行并查看技术详情。",
+        )
+    if isinstance(exc, TaskRuntimeUnavailable):
+        task_suffix = f"（任务类型：{exc.task_kind}）" if exc.task_kind else ""
+        return 503, ApiErrorResponse(
+            code="service_unavailable",
+            message=f"研究任务执行引擎当前不可用{task_suffix}：{exc.message}。",
+            recovery_action="请在设置中心配置大模型 Provider 或切换为支持的执行模式。",
         )
     if isinstance(exc, ValueError):
         return 422, ApiErrorResponse(

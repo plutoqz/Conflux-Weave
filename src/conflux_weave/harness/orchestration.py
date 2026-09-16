@@ -229,6 +229,15 @@ class DurableResearchRuntimeAdapter:
         return self.runtime.resume(run_id, decision, now=now)
 
 
+class TaskRuntimeUnavailable(RuntimeError):
+    """Raised when submitting a task to a runtime that is not configured or unavailable."""
+
+    def __init__(self, message: str, *, task_kind: str | None = None) -> None:
+        super().__init__(message)
+        self.message = message
+        self.task_kind = task_kind
+
+
 class UnavailableTaskRuntime:
     def __init__(
         self,
@@ -244,7 +253,7 @@ class UnavailableTaskRuntime:
         self.message = message
 
     def submit(self, submission: TaskSubmission) -> Any:
-        raise ValueError(self.message)
+        raise TaskRuntimeUnavailable(self.message, task_kind=submission.task_kind)
 
     def work_once(self, *, now: str | None = None) -> None:
         return None
@@ -270,5 +279,6 @@ __all__ = [
     "LegacyPaperRuntimeAdapter",
     "OrchestratorPort",
     "TaskRuntimePort",
+    "TaskRuntimeUnavailable",
     "UnavailableTaskRuntime",
 ]

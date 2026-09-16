@@ -21,9 +21,13 @@ export type RunStatus =
 export interface RunSummary {
   run_id: string;
   task_id: string;
+  task_family?: string;
   kind?: string;
   title?: string;
-  status: RunStatus;
+  state?: RunStatus;
+  status?: RunStatus;
+  status_message?: string;
+  is_terminal?: boolean;
   user_state?: string;
   workflow_version?: string;
   query?: string;
@@ -31,6 +35,7 @@ export interface RunSummary {
   updated_at: string;
   evidence_count?: number;
   duration_seconds?: number;
+  lifecycle?: "active" | "archived" | "deleted";
 }
 
 export interface DeliveryRecord {
@@ -126,9 +131,12 @@ export interface ChatMessage {
   run_id?: string;
   memory_candidates?: Array<{
     candidate_id: string;
-    key: string;
-    value: string;
-    reason: string;
+    statement?: string;
+    key?: string;
+    value?: string;
+    scope?: string;
+    category?: string;
+    reason?: string;
   }>;
   image_assets?: Array<{
     asset_id: string;
@@ -169,7 +177,29 @@ export interface LibraryDocument {
   created_at: string;
   relative_path?: string;
   chunk_count?: number;
+  segment_count?: number;
+  character_count?: number;
+  size_bytes?: number;
   asset_count?: number;
+  status?: string;
+  media_type?: string;
+  lifecycle?: "active" | "archived" | "deleted";
+  doi?: string;
+  arxiv_id?: string;
+  error?: string;
+}
+
+export interface LibraryOverview {
+  total: number;
+  imported: number;
+  processing?: number;
+  failed?: number;
+  character_count: number;
+  size_bytes: number;
+  source_counts?: Record<string, number>;
+  index_status: string;
+  manifest?: string;
+  items: LibraryDocument[];
 }
 
 export interface PaperItem {

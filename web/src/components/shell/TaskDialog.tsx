@@ -16,7 +16,7 @@ export const TaskDialog: React.FC = () => {
   const { isNewTaskOpen, setIsNewTaskOpen, setRuns, setActiveRunId, setSection } =
     useWorkbenchStore();
 
-  const [mode, setMode] = useState<"single" | "managed" | "fixture">("single");
+  const [mode, setMode] = useState<"single" | "managed" | "discovery" | "fixture">("single");
   const [query, setQuery] = useState("");
   const [topics, setTopics] = useState("");
   const [maxResults, setMaxResults] = useState(15);
@@ -41,6 +41,11 @@ export const TaskDialog: React.FC = () => {
           objective: query.trim(),
           mode: "managed",
           max_subquestions: maxSubquestions,
+        });
+      } else if (mode === "single") {
+        result = await api.createVerifiedResearchTask({
+          objective: query.trim(),
+          mode: "single",
         });
       } else {
         const topicList = topics
@@ -78,56 +83,73 @@ export const TaskDialog: React.FC = () => {
         <DialogHeader>
           <DialogTitle>新建研究任务</DialogTitle>
           <DialogDescription>
-            提交新的学术探索或论文检索任务，系统将自动化执行检索、排序与证据归纳。
+            提交新的学术探索、论文检索或深度验证任务，系统将按选定模式编排执行。
           </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4 py-2">
           {/* Mode switch */}
-          <div className="flex bg-muted/60 p-1 rounded-lg text-xs">
+          <div className="grid grid-cols-4 bg-muted/60 p-1 rounded-lg text-xs gap-1">
             <button
               type="button"
               onClick={() => setMode("single")}
-              className={`flex-1 py-1 rounded-md font-medium transition ${
+              className={`py-1 px-1 rounded-md font-medium text-center transition ${
                 mode === "single"
-                  ? "bg-background text-foreground shadow-xs"
+                  ? "bg-background text-foreground shadow-xs font-semibold"
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              单 Agent 探索
+              单 Agent
             </button>
             <button
               type="button"
               onClick={() => setMode("managed")}
-              className={`flex-1 py-1 rounded-md font-medium transition ${
+              className={`py-1 px-1 rounded-md font-medium text-center transition ${
                 mode === "managed"
-                  ? "bg-background text-foreground shadow-xs"
+                  ? "bg-background text-foreground shadow-xs font-semibold"
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              主管协同管理
+              主管协同
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("discovery")}
+              className={`py-1 px-1 rounded-md font-medium text-center transition ${
+                mode === "discovery"
+                  ? "bg-background text-foreground shadow-xs font-semibold"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              文献检索
             </button>
             <button
               type="button"
               onClick={() => setMode("fixture")}
-              className={`flex-1 py-1 rounded-md font-medium transition ${
+              className={`py-1 px-1 rounded-md font-medium text-center transition ${
                 mode === "fixture"
-                  ? "bg-background text-foreground shadow-xs"
+                  ? "bg-background text-foreground shadow-xs font-semibold"
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              离线桩基测试
+              桩基测试
             </button>
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-xs font-medium text-foreground">研究目标 / 核心问题</label>
+            <label className="text-xs font-medium text-foreground">
+              {mode === "fixture" ? "验证目标" : mode === "discovery" ? "检索主题 / 问题" : "研究目标 / 核心问题"}
+            </label>
             <textarea
               required
               rows={3}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="例如：量子纠错码在拓扑量子计算中的最新容错阈值与实验突破..."
+              placeholder={
+                mode === "discovery"
+                  ? "例如：DeepSeek-R1 架构分析与推理能力测评..."
+                  : "例如：量子纠错码在拓扑量子计算中的最新容错阈值与实验突破..."
+              }
               className="w-full text-xs p-2.5 rounded-md border border-input bg-transparent focus:outline-none focus:ring-1 focus:ring-ring"
             />
           </div>
@@ -154,6 +176,12 @@ export const TaskDialog: React.FC = () => {
           )}
 
           {mode === "single" && (
+            <p className="text-[11px] text-muted-foreground leading-relaxed font-serif-academic p-2 rounded bg-muted/20 border border-border/60">
+              由单一深度 Agent 闭环执行多源文献检索、关键陈述提取与事实可信度交叉核验。
+            </p>
+          )}
+
+          {mode === "discovery" && (
             <>
               <div className="space-y-1.5">
                 <label className="text-xs font-medium text-foreground">关键词 / 领域焦点 (可选，英文逗号分隔)</label>
@@ -177,6 +205,12 @@ export const TaskDialog: React.FC = () => {
                 />
               </div>
             </>
+          )}
+
+          {mode === "fixture" && (
+            <p className="text-[11px] text-muted-foreground leading-relaxed font-serif-academic p-2 rounded bg-muted/20 border border-border/60">
+              使用本地确定性离线桩基与模拟运行环境，验证流水线调度完整性与证据链一致性。
+            </p>
           )}
 
           {error && <div className="text-xs text-rose-500 bg-rose-500/10 p-2 rounded-md">{error}</div>}
