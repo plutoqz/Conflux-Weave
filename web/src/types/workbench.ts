@@ -301,13 +301,45 @@ export interface SkillDetail extends SkillSummary {
 }
 
 export interface SkillExecuteResult {
-  run_id: string;
+  run_id?: string;
   skill_id: string;
-  status: "success" | "failed";
+  status: "completed" | "success" | "failed" | "needs_input";
+  summary?: string;
   content: string;
   tokens_consumed: number;
   elapsed_seconds: number;
+  structured_data?: Record<string, any>;
+  artifacts?: Array<{ artifact_id: string; name: string; media_type?: string }>;
+  tool_traces?: Array<{ tool: string; status: string; summary: string; [key: string]: any }>;
+  error?: string | null;
   error_message?: string | null;
+}
+
+export interface ProjectMessage {
+  message_id: string;
+  project_id: string;
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+  target_tab?: string | null;
+  cited_files?: string[];
+  selected_snippet?: string | null;
+}
+
+export interface CodingVerifyResult {
+  proposal_id: string;
+  command: string;
+  success: boolean;
+  exit_code: number;
+  stdout: string;
+  stderr: string;
+  duration_seconds: number;
+}
+
+export interface CodingRevertResult {
+  proposal_id: string;
+  success: boolean;
+  message: string;
 }
 
 export interface MCPTool {

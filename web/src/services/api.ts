@@ -15,6 +15,9 @@ import type {
   MCPServer,
   DAGExecutionPlan,
   AgentEvent,
+  ProjectMessage,
+  CodingVerifyResult,
+  CodingRevertResult,
 } from "@/types/workbench";
 
 const API_BASE = "";
@@ -544,6 +547,25 @@ export const api = {
       body: JSON.stringify(payload),
     });
   },
+  verifyProjectCoding: (projectId: string, proposalId: string, command?: string) =>
+    request<CodingVerifyResult>(`/api/v1/projects/${encodeURIComponent(projectId)}/coding/verify`, {
+      method: "POST",
+      body: JSON.stringify({ proposal_id: proposalId, command }),
+    }),
+  revertProjectCoding: (projectId: string, proposalId: string) =>
+    request<CodingRevertResult>(`/api/v1/projects/${encodeURIComponent(projectId)}/coding/revert`, {
+      method: "POST",
+      body: JSON.stringify({ proposal_id: proposalId }),
+    }),
+  getProjectMessages: (projectId: string) =>
+    request<{ project_id: string; items: ProjectMessage[] }>(
+      `/api/v1/projects/${encodeURIComponent(projectId)}/messages`
+    ),
+  saveProjectMessage: (projectId: string, message: Partial<ProjectMessage>) =>
+    request<ProjectMessage>(`/api/v1/projects/${encodeURIComponent(projectId)}/messages`, {
+      method: "POST",
+      body: JSON.stringify(message),
+    }),
   getProjectWalkthrough: (projectId: string) =>
     request<{
       project_id: string;
@@ -589,7 +611,11 @@ export const api = {
         implementation_status: string;
       }>;
     }>(`/api/v1/projects/${encodeURIComponent(projectId)}/audit`),
-  askProject: (projectId: string, question: string) =>
+  askProject: (
+    projectId: string,
+    question: string,
+    context?: { current_file?: string; selected_snippet?: string; source_version?: string }
+  ) =>
     request<{
       project_id: string;
       answer_markdown: string;
@@ -598,7 +624,12 @@ export const api = {
       risks_and_recommendations: string[];
     }>(`/api/v1/projects/${encodeURIComponent(projectId)}/ask`, {
       method: "POST",
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({
+        question,
+        current_file: context?.current_file,
+        selected_snippet: context?.selected_snippet,
+        source_version: context?.source_version,
+      }),
     }),
   getProjectLearningGuide: (projectId: string) =>
     request<{

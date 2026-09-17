@@ -141,6 +141,7 @@ class CodeProposal:
     original_hash: str
     diff: str
     proposed_content: str
+    original_content: str = ""
     verification_commands: list[str] = field(default_factory=list)
     status: str = "proposed"  # proposed | applied | rejected
     created_at: str = field(default_factory=_utc_now)
@@ -160,6 +161,7 @@ class CodeProposal:
             original_hash=str(data.get("original_hash", "")),
             diff=str(data.get("diff", "")),
             proposed_content=str(data.get("proposed_content", "")),
+            original_content=str(data.get("original_content", "")),
             verification_commands=list(data.get("verification_commands", [])),
             status=str(data.get("status", "proposed")),
             created_at=str(data.get("created_at", _utc_now())),
@@ -194,7 +196,14 @@ class ProjectAgent:
         self.provider = provider
         self.memory_agent = memory_agent
 
-    def ask(self, project: Project, question: str) -> ProjectAnswer:
+    def ask(
+        self,
+        project: Project,
+        question: str,
+        current_file: str | None = None,
+        selected_snippet: str | None = None,
+        source_version: str | None = None,
+    ) -> ProjectAnswer:
         root = Path(project.root_path).resolve()
         git_status = GitInspector.get_status(root)
         tree_nodes = ProjectScanner.scan_tree(root, max_depth=2, max_files=100)
@@ -203,9 +212,25 @@ class ProjectAgent:
         cited_files: list[str] = []
         context_snippets: list[str] = []
 
+        # If current_file is specified, prioritize it as primary context
+        if current_file:
+            clean_curr = re.sub(r"[:#]L?\d+$", "", current_file).replace("\\", "/").strip("/")
+            if clean_curr:
+                try:
+                    c, _, _ = ProjectScanner.read_file_safe(root, clean_curr, max_size_bytes=65536)
+                    if clean_curr not in cited_files:
+                        cited_files.append(clean_curr)
+                    lang = Path(clean_curr).suffix.lstrip(".") or "text"
+                    snippet_block = ""
+                    if selected_snippet and selected_snippet.strip():
+                        snippet_block = f"\n> **用户选中的代码片段/关注行**:\n```{lang}\n{selected_snippet.strip()[:4000]}\n```\n"
+                    context_snippets.append(f"### [当前查看文件: {clean_curr}]\n{snippet_block}完整文件上下文:\n```{lang}\n{c[:3000]}\n```")
+                except Exception:
+                    pass
+
         # Check README.md
         readme_path = root / "README.md"
-        if readme_path.is_file():
+        if readme_path.is_file() and "README.md" not in cited_files:
             try:
                 c, _, _ = ProjectScanner.read_file_safe(root, "README.md", max_size_bytes=65536)
                 cited_files.append("README.md")
@@ -356,11 +381,19 @@ class ProjectAgent:
                 for c in git_status.recent_commits[:5]:
                     report_lines.append(f"- `{c.sha[:7]}` ({c.author}, {c.date[:10]}): {c.subject}")
         else:
-            report_lines.extend([
-                f"针对提问 “{question}”：",
-                f"已索引 `{project.name}` 上下文并检索相关文件：{', '.join(f'`{f}`' for f in cited_files) if cited_files else '项目根目录'}。",
-                f"如需更深入的局部逻辑剖析，可指定具体文件路径进行定向提问。",
-            ])
+            if selected_snippet and selected_snippet.strip():
+                report_lines.extend([
+                    f"针对当前选中的代码片段分析：",
+                    f"```\n{selected_snippet.strip()[:400]}\n```",
+                    f"关于针对该片段的提问 “{question}”：该代码片段位于 `{current_file or '当前文件'}`，属于关键逻辑分支。",
+                    f"关联上下文文件：{', '.join(f'`{f}`' for f in cited_files)}。",
+                ])
+            else:
+                report_lines.extend([
+                    f"针对提问 “{question}”：",
+                    f"已索引 `{project.name}` 上下文并检索相关文件：{', '.join(f'`{f}`' for f in cited_files) if cited_files else '项目根目录'}。",
+                    f"如需更深入的局部逻辑剖析，可指定具体文件路径或选中代码片段进行定向提问。",
+                ])
 
         if risks:
             report_lines.append("\n### 三、 风险与工程建议")
@@ -1110,6 +1143,7 @@ class CodingAgent:
         custom_replacement: str | None = None,
     ) -> CodeProposal:
         target_file = re.sub(r"[:#]L?\d+$", "", target_file).strip()
+        ProjectScanner.validate_editable_file(target_file)
         root = Path(project.root_path).resolve()
         safe_target = ProjectScanner.resolve_safe_path(root, target_file)
 
@@ -1174,6 +1208,14 @@ class CodingAgent:
         diff_text = "".join(diff_lines) or f"# No diff detected for {target_file}"
 
         proposal_id = f"prop-{hashlib.sha256((target_file + instruction + _utc_now()).encode()).hexdigest()[:10]}"
+        stem = Path(target_file).stem
+        v_cmds = []
+        if (root / "tests" / f"test_{stem}.py").is_file():
+            v_cmds.append(f"pytest tests/test_{stem}.py -q")
+        else:
+            v_cmds.append(f"pytest tests/ -k {stem} -q")
+        v_cmds.append("pytest -q")
+
         return CodeProposal(
             proposal_id=proposal_id,
             project_id=project.project_id,
@@ -1184,7 +1226,8 @@ class CodingAgent:
             original_hash=original_hash,
             diff=diff_text,
             proposed_content=proposed_content,
-            verification_commands=[f"pytest tests/ -k {Path(target_file).stem}"],
+            original_content=original_content,
+            verification_commands=v_cmds,
             status="proposed",
         )
 
@@ -1207,7 +1250,7 @@ class CodingAgent:
         safe_target.parent.mkdir(parents=True, exist_ok=True)
         tmp_target = safe_target.with_suffix(f".tmp.{os.getpid()}")
         try:
-            tmp_target.write_text(proposal.proposed_content, encoding="utf-8")
+            tmp_target.write_text(proposal.proposed_content, encoding="utf-8", newline="\n")
             tmp_target.replace(safe_target)
         except Exception as exc:
             if tmp_target.exists():
@@ -1216,3 +1259,39 @@ class CodingAgent:
 
         proposal.status = "applied"
         return True, "补丁已成功原子应用。"
+
+    def revert_patch(self, project: Project, proposal: CodeProposal) -> tuple[bool, str]:
+        """Atomically revert an applied proposal after verifying concurrency hash."""
+        clean_target = re.sub(r"[:#]L?\d+$", "", proposal.target_file).strip()
+        proposal.target_file = clean_target
+        root = Path(project.root_path).resolve()
+        safe_target = ProjectScanner.resolve_safe_path(root, clean_target)
+
+        if not safe_target.is_file():
+            return False, "revert_failed: 目标文件不存在，无法执行回滚。"
+
+        # Concurrency safety: Verify current hash matches the patch's proposed content hash
+        expected_applied_hash = hashlib.sha256(proposal.proposed_content.replace("\r\n", "\n").encode("utf-8")).hexdigest()
+        _, current_hash, _ = ProjectScanner.read_file_safe(root, clean_target)
+        if current_hash != expected_applied_hash:
+            return False, f"revision_conflict: 目标文件自补丁应用后已被外部修改 (预期 {expected_applied_hash[:8]}, 当前为 {current_hash[:8]})，已阻断回滚以防代码覆盖。"
+
+        if not proposal.original_hash and not proposal.original_content:
+            try:
+                safe_target.unlink()
+                proposal.status = "proposed"
+                return True, "补丁创建的文件已成功撤销并移除。"
+            except Exception as exc:
+                return False, f"回滚移除文件失败: {exc}"
+
+        tmp_target = safe_target.with_suffix(f".tmp.{os.getpid()}")
+        try:
+            tmp_target.write_text(proposal.original_content, encoding="utf-8", newline="\n")
+            tmp_target.replace(safe_target)
+        except Exception as exc:
+            if tmp_target.exists():
+                tmp_target.unlink(missing_ok=True)
+            return False, f"回滚写入失败: {exc}"
+
+        proposal.status = "proposed"
+        return True, "补丁已成功原子回滚至原版本。"

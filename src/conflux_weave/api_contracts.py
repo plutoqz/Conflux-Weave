@@ -405,6 +405,10 @@ class ProjectFileContentResponse(_ApiModel):
 
 class ProjectAskRequest(_ApiModel):
     question: str = Field(min_length=1, max_length=2_000)
+    current_file: str | None = None
+    selected_snippet: str | None = None
+    source_version: str | None = None
+    conversation_id: str | None = None
 
 
 class ProjectAskResponse(_ApiModel):
@@ -413,6 +417,22 @@ class ProjectAskResponse(_ApiModel):
     cited_files: tuple[str, ...] = ()
     git_evidence: dict[str, Any] = Field(default_factory=dict)
     risks_and_recommendations: tuple[str, ...] = ()
+
+
+class ProjectMessageRecord(_ApiModel):
+    message_id: str
+    project_id: str
+    role: str
+    content: str
+    created_at: str
+    target_tab: str | None = None
+    cited_files: tuple[str, ...] = ()
+    selected_snippet: str | None = None
+
+
+class ProjectMessagesResponse(_ApiModel):
+    project_id: str
+    items: tuple[ProjectMessageRecord, ...] = ()
 
 
 class CodingProposalRequest(_ApiModel):
@@ -448,6 +468,31 @@ class CodingApplyResponse(_ApiModel):
     success: bool
     message: str
     proposal_id: str
+
+
+class CodingVerifyRequest(_ApiModel):
+    proposal_id: str
+    command: str | None = None
+
+
+class CodingVerifyResponse(_ApiModel):
+    proposal_id: str
+    command: str
+    success: bool
+    exit_code: int
+    stdout: str
+    stderr: str
+    duration_seconds: float
+
+
+class CodingRevertRequest(_ApiModel):
+    proposal_id: str
+
+
+class CodingRevertResponse(_ApiModel):
+    proposal_id: str
+    success: bool
+    message: str
 
 
 class SemanticBranchDiffResponse(_ApiModel):
@@ -646,6 +691,8 @@ class SkillExecuteApiResponse(_ApiModel):
     summary: str
     content: str
     structured_data: dict[str, Any] = Field(default_factory=dict)
+    artifacts: tuple[dict[str, Any], ...] = ()
+    tool_traces: tuple[dict[str, Any], ...] = ()
     elapsed_seconds: float = 0.0
     tokens_consumed: int = 0
     error: str | None = None

@@ -86,10 +86,16 @@ from conflux_weave.api_contracts import (
     ProjectFileContentResponse,
     ProjectAskRequest,
     ProjectAskResponse,
+    ProjectMessageRecord,
+    ProjectMessagesResponse,
     CodingProposalRequest,
     CodingProposalResponse,
     CodingApplyRequest,
     CodingApplyResponse,
+    CodingVerifyRequest,
+    CodingVerifyResponse,
+    CodingRevertRequest,
+    CodingRevertResponse,
     SemanticBranchDiffResponse,
     TheoryMappingItem,
     ArchitectureComponentItem,
@@ -416,7 +422,18 @@ def create_app(
     memory_agent = MemoryAgent(memory_store, chat_adapter=chat_adapter, recall_service=memory_recall_service)
     conversation_router = ConversationRouter(chat_adapter=chat_adapter)
     skill_registry = SkillRegistry(db_path if db_path and db_path != ":memory:" else None)
-    skill_runner = SkillRunner(skill_registry, provider=chat_adapter)
+    _base_dir = Path(db_path).parent if db_path and db_path != ":memory:" else Path("var") / "data"
+    _reg_path = _base_dir / "projects-registry.json"
+    _ws_root = Path(config_paths["workspace_root"]) if config_paths and config_paths.get("workspace_root") else None
+    project_store = ProjectStore(_reg_path, default_workspace=_ws_root)
+    skill_runner = SkillRunner(
+        skill_registry,
+        provider=chat_adapter,
+        project_store=project_store,
+        artifact_store=getattr(repository, "artifact_store", getattr(repository, "store", None)),
+        retrieval_pipeline=retrieval_pipeline,
+        repository=repository,
+    )
     mcp_manager = MCPServerManager(db_path if db_path and db_path != ":memory:" else None)
     project_root = Path(db_path).parent if db_path and db_path != ":memory:" else None
     mcp_server_core = MCPServerCore(
@@ -1278,12 +1295,15 @@ def create_app(
                         "skill_id": skill_id,
                     },
                 )
+            tool_traces = tuple(result.structured_data.get("tool_traces", ()))
             return SkillExecuteApiResponse(
                 skill_id=result.skill_id,
                 status=result.status,
                 summary=result.summary,
                 content=result.content,
                 structured_data=result.structured_data,
+                artifacts=tuple(result.artifacts),
+                tool_traces=tool_traces,
                 elapsed_seconds=result.elapsed_seconds,
                 tokens_consumed=result.tokens_consumed,
                 error=result.error,
@@ -4094,13 +4114,7 @@ def create_app(
             return error_response(exc)
 
     def _get_project_store() -> ProjectStore:
-        db_path = getattr(repository, "database_path", None)
-        base_dir = Path(db_path).parent if db_path is not None else Path("var") / "data"
-        reg_path = base_dir / "projects-registry.json"
-        ws_root = None
-        if config_paths and config_paths.get("workspace_root"):
-            ws_root = Path(config_paths["workspace_root"])
-        return ProjectStore(reg_path, default_workspace=ws_root)
+        return project_store
 
     def _get_project_agent() -> ProjectAgent:
         chat_adapter = getattr(chat_service, "_chat", None) if chat_service is not None else None
@@ -4374,6 +4388,46 @@ def create_app(
         except Exception as exc:
             return error_response(exc)
 
+    @app.get("/api/v1/projects/{project_id}/messages", response_model=ProjectMessagesResponse)
+    async def get_project_messages_endpoint(project_id: str):
+        store = _get_project_store()
+        proj = store.get_project(project_id)
+        if proj is None:
+            return JSONResponse(status_code=404, content={"code": "project_not_found", "message": f"项目 {project_id} 不存在。"})
+        raw_msgs = store.get_project_messages(project_id)
+        items = tuple(
+            ProjectMessageRecord(
+                message_id=m.get("message_id", f"pmsg-{uuid4().hex[:10]}"),
+                project_id=project_id,
+                role=m.get("role", "user"),
+                content=m.get("content", ""),
+                created_at=m.get("created_at", datetime.now(UTC).isoformat().replace("+00:00", "Z")),
+                target_tab=m.get("target_tab"),
+                cited_files=tuple(m.get("cited_files", ())),
+                selected_snippet=m.get("selected_snippet"),
+            )
+            for m in raw_msgs
+        )
+        return ProjectMessagesResponse(project_id=project_id, items=items)
+
+    @app.post("/api/v1/projects/{project_id}/messages", response_model=ProjectMessageRecord)
+    async def append_project_message_endpoint(project_id: str, payload: dict[str, Any] = Body(...)):
+        store = _get_project_store()
+        proj = store.get_project(project_id)
+        if proj is None:
+            return JSONResponse(status_code=404, content={"code": "project_not_found", "message": f"项目 {project_id} 不存在。"})
+        saved = store.append_project_message(project_id, payload)
+        return ProjectMessageRecord(
+            message_id=saved["message_id"],
+            project_id=project_id,
+            role=saved.get("role", "user"),
+            content=saved.get("content", ""),
+            created_at=saved.get("created_at", datetime.now(UTC).isoformat().replace("+00:00", "Z")),
+            target_tab=saved.get("target_tab"),
+            cited_files=tuple(saved.get("cited_files", ())),
+            selected_snippet=saved.get("selected_snippet"),
+        )
+
     @app.post("/api/v1/projects/{project_id}/ask", response_model=ProjectAskResponse)
     async def ask_project_endpoint(project_id: str, request: ProjectAskRequest):
         store = _get_project_store()
@@ -4381,7 +4435,28 @@ def create_app(
         if proj is None:
             return JSONResponse(status_code=404, content={"code": "project_not_found", "message": f"项目 {project_id} 不存在。"})
         agent = _get_project_agent()
-        ans = await asyncio.to_thread(agent.ask, proj, request.question)
+        ans = await asyncio.to_thread(
+            agent.ask,
+            proj,
+            request.question,
+            request.current_file,
+            request.selected_snippet,
+            request.source_version,
+        )
+
+        # Durable Q&A persistence
+        store.append_project_message(project_id, {
+            "role": "user",
+            "content": request.question,
+            "cited_files": [request.current_file] if request.current_file else [],
+            "selected_snippet": request.selected_snippet,
+        })
+        store.append_project_message(project_id, {
+            "role": "assistant",
+            "content": ans.answer_markdown,
+            "cited_files": list(ans.cited_files),
+        })
+
         return ProjectAskResponse(
             project_id=project_id,
             answer_markdown=ans.answer_markdown,
@@ -4389,7 +4464,6 @@ def create_app(
             git_evidence=ans.git_evidence,
             risks_and_recommendations=tuple(ans.risks_and_recommendations),
         )
-
 
     @app.post("/api/v1/projects/{project_id}/coding/propose", response_model=CodingProposalResponse)
     async def propose_coding_patch_endpoint(project_id: str, request: CodingProposalRequest):
@@ -4404,13 +4478,17 @@ def create_app(
             match = re.search(r"(?:目标文件|文件|file)[:：\s]+([^\s\n,，;]+)", request.prompt, re.I)
             if match:
                 target_file = match.group(1).strip("`'\"")
-            else:
-                for f in ["src/conflux_weave/server.py", "pyproject.toml", "README.md"]:
-                    if (Path(proj.root_path) / f).exists():
-                        target_file = f
-                        break
+
+        # Gate 4: Strictly prohibit silent fallback when target_file is missing
         if not target_file:
-            target_file = "README.md"
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "code": "target_file_required",
+                    "message": "未能确定补丁目标文件，请显式指定或在文件树中选中目标文件后再发起提案。",
+                },
+            )
+
         target_file = re.sub(r"[:#]L?\d+$", "", target_file).strip()
 
         try:
@@ -4438,6 +4516,8 @@ def create_app(
             )
         except PermissionError as pe:
             return JSONResponse(status_code=403, content={"code": "path_escape_rejected", "message": str(pe)})
+        except ValueError as ve:
+            return JSONResponse(status_code=400, content={"code": "invalid_file_type", "message": str(ve)})
         except Exception as exc:
             return error_response(exc)
 
@@ -4490,6 +4570,102 @@ def create_app(
             success=True,
             message=msg,
             proposal_id=proposal.proposal_id,
+        )
+
+    @app.post("/api/v1/projects/{project_id}/coding/verify", response_model=CodingVerifyResponse)
+    async def verify_coding_patch_endpoint(project_id: str, request: CodingVerifyRequest):
+        store = _get_project_store()
+        proj = store.get_project(project_id)
+        if proj is None:
+            return JSONResponse(status_code=404, content={"code": "project_not_found", "message": f"项目 {project_id} 不存在。"})
+
+        proposal = _active_proposals.get(request.proposal_id)
+        cmd = (request.command or "").strip()
+        if not cmd and proposal and proposal.verification_commands:
+            cmd = proposal.verification_commands[0]
+        if not cmd:
+            cmd = "pytest -q"
+
+        # Security check: whitelist safe verification commands
+        allowed_prefixes = (
+            "pytest",
+            "python -m pytest",
+            "python -m unittest",
+            "ruff",
+            "mypy",
+            "npm test",
+            "npm run test",
+            "node --test",
+            "tsc --noEmit",
+        )
+        clean_cmd = cmd.strip()
+        if not any(clean_cmd.startswith(p) for p in allowed_prefixes):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "code": "disallowed_command",
+                    "message": f"不支持执行非受信任的验证命令: {cmd}。仅允许 pytest, python -m unittest, ruff, mypy, npm test 等验证指令。",
+                },
+            )
+
+        start = time.monotonic()
+        root = Path(proj.root_path).resolve()
+        try:
+            res = await asyncio.to_thread(
+                subprocess.run,
+                cmd,
+                shell=True,
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=45.0,
+            )
+            dur = time.monotonic() - start
+            return CodingVerifyResponse(
+                proposal_id=request.proposal_id,
+                command=cmd,
+                success=(res.returncode == 0),
+                exit_code=res.returncode,
+                stdout=res.stdout,
+                stderr=res.stderr,
+                duration_seconds=round(dur, 3),
+            )
+        except subprocess.TimeoutExpired:
+            return JSONResponse(
+                status_code=408,
+                content={"code": "verification_timeout", "message": f"验证命令执行超时 (45s): {cmd}"},
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/projects/{project_id}/coding/revert", response_model=CodingRevertResponse)
+    async def revert_coding_patch_endpoint(project_id: str, request: CodingRevertRequest):
+        store = _get_project_store()
+        proj = store.get_project(project_id)
+        if proj is None:
+            return JSONResponse(status_code=404, content={"code": "project_not_found", "message": f"项目 {project_id} 不存在。"})
+
+        proposal = _active_proposals.get(request.proposal_id)
+        if proposal is None:
+            return JSONResponse(
+                status_code=400,
+                content={"code": "proposal_not_found", "message": "未找到待回滚的补丁提案，可能已失效或被清理。"},
+            )
+
+        coding_agent = _get_coding_agent()
+        success, msg = await asyncio.to_thread(coding_agent.revert_patch, proj, proposal)
+        if not success:
+            if "revision_conflict" in msg:
+                return JSONResponse(
+                    status_code=409,
+                    content={"code": "version_conflict", "message": msg},
+                )
+            return JSONResponse(status_code=400, content={"code": "revert_failed", "message": msg})
+
+        return CodingRevertResponse(
+            proposal_id=proposal.proposal_id,
+            success=True,
+            message=msg,
         )
 
     @app.get("/api/v1/projects/{project_id}/walkthrough", response_model=ArchitectureWalkthroughResponse)

@@ -24,8 +24,15 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import { renderMarkdownWithMath } from "@/lib/math";
 import { api } from "@/services/api";
-import type { SkillSummary, SkillDetail, SkillExecuteResult } from "@/types/workbench";
+import type {
+  SkillSummary,
+  SkillDetail,
+  SkillExecuteResult,
+  ProjectSummary,
+  LibraryDocument,
+} from "@/types/workbench";
 
 const CATEGORIES = [
   { id: "all", label: "全部技能" },
@@ -49,6 +56,10 @@ export const SkillsView: React.FC = () => {
   const [activeSkill, setActiveSkill] = useState<SkillDetail | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
 
+  // Object selector data sources (U20)
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [documents, setDocuments] = useState<LibraryDocument[]>([]);
+
   // View Skill Detail State
   const [viewDetailSkill, setViewDetailSkill] = useState<SkillDetail | null>(null);
   const [viewDialogOpen, setViewDialogOpen] = useState(false);
@@ -62,7 +73,25 @@ export const SkillsView: React.FC = () => {
 
   useEffect(() => {
     fetchSkills();
+    loadProjectsAndDocs();
   }, []);
+
+  const loadProjectsAndDocs = async () => {
+    try {
+      const [projRes, docRes] = await Promise.allSettled([
+        api.getProjects(),
+        api.getDocuments("active"),
+      ]);
+      if (projRes.status === "fulfilled") {
+        setProjects(projRes.value || []);
+      }
+      if (docRes.status === "fulfilled") {
+        setDocuments(docRes.value?.items || []);
+      }
+    } catch {
+      // ignore
+    }
+  };
 
   const fetchSkills = async () => {
     setLoading(true);
@@ -475,6 +504,91 @@ export const SkillsView: React.FC = () => {
               Object.entries(activeSkill.input_schema?.properties || {}).map(([key, schema]) => {
                 const isReq = (activeSkill.input_schema?.required || []).includes(key);
                 const desc = schema.description || "";
+
+                // Project selector (U20)
+                if (key === "project_id") {
+                  return (
+                    <div key={key} className="space-y-1.5 text-xs sm:text-sm">
+                      <label className="font-semibold text-foreground flex items-center gap-1">
+                        目标工程项目 (project_id) {isReq && <span className="text-rose-500">*</span>}
+                        <span className="text-muted-foreground font-normal text-xs">
+                          ({desc || "选择目标代码库"})
+                        </span>
+                      </label>
+                      <select
+                        required={isReq}
+                        value={formInputs[key] || ""}
+                        onChange={(e) => handleInputChange(key, e.target.value)}
+                        className="w-full h-9 rounded-md border border-input bg-card px-3 py-1 font-mono text-xs sm:text-sm focus:outline-none focus:ring-1 focus:ring-ring text-foreground"
+                      >
+                        <option value="">-- 请选择目标工程 --</option>
+                        {projects.map((p) => (
+                          <option key={p.project_id} value={p.project_id}>
+                            {p.name} ({p.project_id.slice(0, 8)})
+                          </option>
+                        ))}
+                      </select>
+                      {projects.length === 0 && (
+                        <p className="text-[11px] text-amber-600 font-serif-academic">
+                          提示：当前暂无工程项目，可先在“项目与代码”模块添加工程根目录。
+                        </p>
+                      )}
+                    </div>
+                  );
+                }
+
+                // Paper / Document selector (U20)
+                if (key === "paper_ids" || key === "paper_id") {
+                  const isArray = key === "paper_ids" || schema.type === "array";
+                  return (
+                    <div key={key} className="space-y-1.5 text-xs sm:text-sm">
+                      <label className="font-semibold text-foreground flex items-center gap-1">
+                        {key === "paper_ids" ? "关联文献列表 (paper_ids)" : "目标文献 (paper_id)"}{" "}
+                        {isReq && <span className="text-rose-500">*</span>}
+                        <span className="text-muted-foreground font-normal text-xs">
+                          ({desc || "从知识库点选或手动输入ID"})
+                        </span>
+                      </label>
+                      {documents.length > 0 && (
+                        <select
+                          value=""
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (!val) return;
+                            if (isArray) {
+                              const cur = formInputs[key];
+                              const parts = typeof cur === "string" && cur.trim()
+                                ? cur.split(",").map((s: string) => s.trim()).filter(Boolean)
+                                : Array.isArray(cur) ? [...cur] : [];
+                              if (!parts.includes(val)) {
+                                handleInputChange(key, [...parts, val].join(", "));
+                              }
+                            } else {
+                              handleInputChange(key, val);
+                            }
+                          }}
+                          className="w-full h-8 rounded border border-input bg-card px-2.5 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-ring text-foreground"
+                        >
+                          <option value="">-- 从文献库快速插入文献 ID --</option>
+                          {documents.map((d) => (
+                            <option key={d.document_id} value={d.document_id}>
+                              {d.title} ({d.document_id.slice(0, 8)})
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                      <input
+                        type="text"
+                        required={isReq}
+                        value={Array.isArray(formInputs[key]) ? formInputs[key].join(", ") : (formInputs[key] || "")}
+                        onChange={(e) => handleInputChange(key, e.target.value)}
+                        placeholder={isArray ? "文献ID列表，逗号分隔，如 doc-1, doc-2" : "输入或点选文献ID"}
+                        className="w-full h-9 rounded-md border border-input bg-transparent px-3 py-1 font-mono text-xs sm:text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                      />
+                    </div>
+                  );
+                }
+
                 return (
                   <div key={key} className="space-y-1.5 text-xs sm:text-sm">
                     <label className="font-semibold text-foreground flex items-center gap-1">
@@ -529,62 +643,142 @@ export const SkillsView: React.FC = () => {
           </form>
 
           {/* Execution Result Area */}
-          {executeResult && (
-            <div className="space-y-3 pt-4 border-t border-border/60">
-              <div
-                className={`p-3 rounded-md flex items-center justify-between text-xs font-mono ${
-                  executeResult.status === "success"
-                    ? "bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-400"
-                    : "bg-rose-500/10 border border-rose-500/30 text-rose-600 dark:text-rose-400"
-                }`}
-              >
-                <div className="flex items-center space-x-3">
-                  {executeResult.status === "success" ? (
-                    <CheckCircle className="h-4 w-4" />
-                  ) : (
-                    <AlertCircle className="h-4 w-4" />
-                  )}
-                  <span>
-                    状态: <strong>{executeResult.status}</strong>
-                  </span>
-                  <span>·</span>
-                  <span>
-                    消耗: <strong>{executeResult.tokens_consumed} tok</strong>
-                  </span>
-                  <span>·</span>
-                  <span>
-                    耗时: <strong>{executeResult.elapsed_seconds}s</strong>
-                  </span>
+          {executeResult && (() => {
+            const isSuccess = executeResult.status === "success" || executeResult.status === "completed";
+            return (
+              <div className="space-y-3 pt-4 border-t border-border/60">
+                <div
+                  className={`p-3 rounded-md flex items-center justify-between text-xs font-mono ${
+                    isSuccess
+                      ? "bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-400"
+                      : "bg-rose-500/10 border border-rose-500/30 text-rose-600 dark:text-rose-400"
+                  }`}
+                >
+                  <div className="flex items-center space-x-3">
+                    {isSuccess ? (
+                      <CheckCircle className="h-4 w-4" />
+                    ) : (
+                      <AlertCircle className="h-4 w-4" />
+                    )}
+                    <span>
+                      状态: <strong>{executeResult.status}</strong>
+                    </span>
+                    <span>·</span>
+                    <span>
+                      消耗: <strong>{executeResult.tokens_consumed} tok</strong>
+                    </span>
+                    <span>·</span>
+                    <span>
+                      耗时: <strong>{executeResult.elapsed_seconds}s</strong>
+                    </span>
+                  </div>
                 </div>
+
+                {/* Tool Traces Section */}
+                {executeResult.tool_traces && executeResult.tool_traces.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                      <Wrench className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-400" />
+                      <span>真实工具调用链路与轨迹 (Tool Traces · {executeResult.tool_traces.length} 步)</span>
+                    </div>
+                    <div className="space-y-1.5 rounded-lg border border-border/70 p-2.5 bg-muted/20 text-xs font-mono">
+                      {executeResult.tool_traces.map((trace: any, idx: number) => {
+                        const toolName = trace.tool || trace.tool_name || "tool";
+                        const summary = trace.summary || trace.input_summary || "";
+                        return (
+                          <div
+                            key={idx}
+                            className="flex flex-wrap items-center justify-between py-1.5 px-2.5 rounded bg-background/70 border border-border/40 gap-2"
+                          >
+                            <div className="flex items-center space-x-2 truncate">
+                              <span className="text-muted-foreground text-[11px]">#{trace.step ?? idx + 1}</span>
+                              <span className="font-semibold text-emerald-800 dark:text-emerald-300">
+                                {toolName}
+                              </span>
+                              {summary && (
+                                <span className="text-muted-foreground truncate max-w-xs sm:max-w-md text-[11px]">
+                                  {summary}
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center space-x-2 shrink-0">
+                              {trace.duration_seconds !== undefined && (
+                                <span className="text-muted-foreground text-[10px]">
+                                  {trace.duration_seconds}s
+                                </span>
+                              )}
+                              <Badge
+                                variant={trace.status === "success" ? "default" : "destructive"}
+                                className="text-[10px] px-1.5 py-0 font-mono"
+                              >
+                                {trace.status}
+                              </Badge>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Artifacts Section */}
+                {executeResult.artifacts && executeResult.artifacts.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                      <FileText className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-400" />
+                      <span>持久化产物与审计报告 (Artifacts · {executeResult.artifacts.length} 份)</span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {executeResult.artifacts.map((art: any, idx: number) => (
+                        <div
+                          key={idx}
+                          className="p-2.5 rounded-lg border border-emerald-500/30 bg-emerald-500/5 text-xs font-mono flex items-center justify-between"
+                        >
+                          <div className="truncate mr-2">
+                            <div className="font-semibold text-foreground truncate">{art.name}</div>
+                            <div className="text-[10px] text-muted-foreground truncate font-mono">
+                              ID: {art.artifact_id || art.path}
+                            </div>
+                          </div>
+                          <Badge variant="outline" className="text-[10px] shrink-0 font-mono">
+                            {art.media_type || art.type || "artifact"}
+                          </Badge>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Content / Report */}
+                {executeResult.content && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs sm:text-sm font-semibold text-foreground">产出成果报告</span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 text-xs"
+                        onClick={handleCopyOutput}
+                      >
+                        {copied ? <Check className="h-3 w-3 mr-1" /> : <Copy className="h-3 w-3 mr-1" />}
+                        {copied ? "已复制" : "复制报告"}
+                      </Button>
+                    </div>
+                    <div
+                      className="p-4 rounded-md border border-border bg-muted/20 font-serif-academic text-xs sm:text-sm leading-relaxed max-h-72 overflow-y-auto whitespace-pre-wrap select-text prose dark:prose-invert max-w-none"
+                      dangerouslySetInnerHTML={{ __html: renderMarkdownWithMath(executeResult.content) }}
+                    />
+                  </div>
+                )}
+
+                {(executeResult.error_message || executeResult.error) && (
+                  <div className="p-3 rounded-md bg-rose-500/10 text-rose-600 text-xs font-mono">
+                    错误信息: {executeResult.error_message || executeResult.error}
+                  </div>
+                )}
               </div>
-
-              {executeResult.content && (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs sm:text-sm font-semibold text-foreground">产出成果报告</span>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 text-xs"
-                      onClick={handleCopyOutput}
-                    >
-                      {copied ? <Check className="h-3 w-3 mr-1" /> : <Copy className="h-3 w-3 mr-1" />}
-                      {copied ? "已复制" : "复制报告"}
-                    </Button>
-                  </div>
-                  <div className="p-4 rounded-md border border-border bg-muted/20 font-serif-academic text-xs sm:text-sm leading-relaxed max-h-72 overflow-y-auto whitespace-pre-wrap select-text">
-                    {executeResult.content}
-                  </div>
-                </div>
-              )}
-
-              {executeResult.error_message && (
-                <div className="p-3 rounded-md bg-rose-500/10 text-rose-600 text-xs font-mono">
-                  错误信息: {executeResult.error_message}
-                </div>
-              )}
-            </div>
-          )}
+            );
+          })()}
         </DialogContent>
       </Dialog>
     </div>

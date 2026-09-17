@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import subprocess
 from typing import Any
+from uuid import uuid4
 
 
 def _utc_now() -> str:
@@ -551,6 +552,14 @@ class ProjectScanner:
     """Safe tree traversal and bounded file reader."""
 
     @staticmethod
+    def validate_editable_file(rel_path: str) -> None:
+        """Ensure file is an editable text/code file, rejecting binaries and prohibited extensions."""
+        p = Path(rel_path)
+        ext = p.suffix.lower()
+        if ext in DEFAULT_IGNORE_EXTS or ext in {".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf", ".zip", ".tar", ".gz"}:
+            raise ValueError(f"不支持修改二进制或非文本文件类型 ({ext or 'unknown'}): {rel_path}")
+
+    @staticmethod
     def resolve_safe_path(root_path: Path, rel_path: str) -> Path:
         """Resolve rel_path against root_path and ensure no path escape."""
         if not rel_path or rel_path.strip() in {"", "."}:
@@ -731,12 +740,12 @@ class ProjectScanner:
             raise ValueError(f"File size {sz} bytes exceeds safety limit of {max_size_bytes} bytes.")
 
         raw_bytes = target.read_bytes()
-        file_sha256 = hashlib.sha256(raw_bytes).hexdigest()
         try:
             text_content = raw_bytes.decode("utf-8")
         except UnicodeDecodeError:
             text_content = raw_bytes.decode("utf-8", errors="replace")
         text_content = text_content.replace("\r\n", "\n")
+        file_sha256 = hashlib.sha256(text_content.encode("utf-8")).hexdigest()
 
         return text_content, file_sha256, sz
 
@@ -945,3 +954,34 @@ class ProjectStore:
             self._save(projects)
             return True
         return False
+
+    def _get_messages_file(self, project_id: str) -> Path:
+        msgs_dir = self.registry_file.parent / "project_messages"
+        msgs_dir.mkdir(parents=True, exist_ok=True)
+        safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", project_id)
+        return msgs_dir / f"{safe_id}.json"
+
+    def get_project_messages(self, project_id: str) -> list[dict[str, Any]]:
+        msg_file = self._get_messages_file(project_id)
+        if not msg_file.exists():
+            return []
+        try:
+            return json.loads(msg_file.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+
+    def append_project_message(self, project_id: str, message: dict[str, Any]) -> dict[str, Any]:
+        msgs = self.get_project_messages(project_id)
+        record = dict(message)
+        if not record.get("message_id"):
+            record["message_id"] = f"pmsg-{uuid4().hex[:10]}"
+        if not record.get("created_at"):
+            record["created_at"] = _utc_now()
+        record["project_id"] = project_id
+        msgs.append(record)
+        if len(msgs) > 200:
+            msgs = msgs[-200:]
+        msg_file = self._get_messages_file(project_id)
+        msg_file.write_text(json.dumps(msgs, ensure_ascii=False, indent=2), encoding="utf-8")
+        return record
+

@@ -64,7 +64,12 @@ import {
 } from "@/components/ui/dialog";
 import { api } from "@/services/api";
 import { cn } from "@/lib/utils";
-import type { ProjectSummary } from "@/types/workbench";
+import type {
+  ProjectSummary,
+  CodingVerifyResult,
+  CodingRevertResult,
+  ProjectMessage,
+} from "@/types/workbench";
 
 function getLanguageFromPath(filePath: string): string {
   const ext = filePath.split(".").pop()?.toLowerCase() || "";
@@ -232,6 +237,7 @@ interface CopilotMessage {
   timestamp: string;
   targetTab?: WorkspaceTabType;
   citedFiles?: string[];
+  selectedSnippet?: string;
 }
 
 export const ProjectsView: React.FC = () => {
@@ -246,6 +252,12 @@ export const ProjectsView: React.FC = () => {
   const [compareBranch, setCompareBranch] = useState<string>("main");
   const [codingPrompt, setCodingPrompt] = useState<string>("" );
   const [proposal, setProposal] = useState<any>(null);
+  const [proposalApplied, setProposalApplied] = useState<boolean>(false);
+  const [verifyCommand, setVerifyCommand] = useState<string>("pytest -q");
+  const [verifyLoading, setVerifyLoading] = useState<boolean>(false);
+  const [verifyResult, setVerifyResult] = useState<CodingVerifyResult | null>(null);
+  const [revertLoading, setRevertLoading] = useState<boolean>(false);
+  const [revertResult, setRevertResult] = useState<CodingRevertResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [treeLoading, setTreeLoading] = useState(false);
 
@@ -337,12 +349,35 @@ export const ProjectsView: React.FC = () => {
     setSelectedFile("");
     setFileContent("");
     setProposal(null);
+    setProposalApplied(false);
+    setVerifyResult(null);
+    setRevertResult(null);
     setCodingPrompt("");
     setDiff("");
     setAuditData(null);
     setWalkthroughData(null);
     setLearningData(null);
-    setCopilotMessages([]);
+
+    // Durable project messages recovery
+    api
+      .getProjectMessages(selectedProjectId)
+      .then((res) => {
+        if (res?.items && res.items.length > 0) {
+          setCopilotMessages(
+            res.items.map((m: any, idx: number) => ({
+              id: m.message_id || `hist-${idx}`,
+              role: m.role as any,
+              content: m.content,
+              timestamp: m.created_at ? new Date(m.created_at).toLocaleTimeString() : "",
+              citedFiles: m.cited_files,
+              selectedSnippet: m.selected_snippet,
+            }))
+          );
+        } else {
+          setCopilotMessages([]);
+        }
+      })
+      .catch(() => setCopilotMessages([]));
 
     api
       .getProjectTree(selectedProjectId)
@@ -599,11 +634,27 @@ export const ProjectsView: React.FC = () => {
   const handleProposeCoding = async (customPrompt?: string) => {
     const p = (customPrompt || codingPrompt).trim();
     if (!p || !selectedProjectId) return;
+
+    // Check if target file is specified or if a file is currently selected
+    const hasFileMention = /(?:目标文件|文件|file)[:：\s]+([^\s\n,，;]+)/i.test(p);
+    if (!hasFileMention && !selectedFile) {
+      alert("未能确定补丁目标文件。请在左侧文件树中选中待治理的文件，或在需求说明中明确指定（例如：'目标文件: src/xxx.py'）。");
+      return;
+    }
+
     setLoading(true);
+    setProposalApplied(false);
+    setVerifyResult(null);
+    setRevertResult(null);
     try {
-      const res = await api.proposeProjectCoding(selectedProjectId, p);
+      const res = await api.proposeProjectCoding(selectedProjectId, p, selectedFile || undefined);
       setProposal(res);
       setWorkspaceTab("patch");
+      if (res.verification_commands && res.verification_commands.length > 0) {
+        setVerifyCommand(res.verification_commands[0]);
+      } else {
+        setVerifyCommand("pytest -q");
+      }
     } catch (e: any) {
       alert(`提案失败: ${e.message}`);
     } finally {
@@ -620,16 +671,51 @@ export const ProjectsView: React.FC = () => {
         cleanProposal.target_file = cleanProposal.target_file.replace(/[:#]L?\d+$/, "").trim();
       }
       await api.applyProjectCoding(selectedProjectId, cleanProposal);
-      alert("补丁变更已成功应用并写入！");
-      setProposal(null);
-      setCodingPrompt("");
+      setProposalApplied(true);
       if (selectedFile) {
         handleSelectFile(selectedFile);
       }
     } catch (e: any) {
-      alert(`应用失败: ${e.message}`);
+      alert(`应用补丁失败: ${e.message}`);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleVerifyCoding = async () => {
+    if (!proposal || !selectedProjectId) return;
+    setVerifyLoading(true);
+    try {
+      const res = await api.verifyProjectCoding(selectedProjectId, proposal.proposal_id, verifyCommand);
+      setVerifyResult(res);
+    } catch (e: any) {
+      alert(`验证执行失败: ${e.message}`);
+    } finally {
+      setVerifyLoading(false);
+    }
+  };
+
+  const handleRevertCoding = async () => {
+    if (!proposal || !selectedProjectId) return;
+    if (!window.confirm("确定要回滚当前补丁吗？这将撤销本次代码修改并将文件还原至应用前状态。")) {
+      return;
+    }
+    setRevertLoading(true);
+    try {
+      const res = await api.revertProjectCoding(selectedProjectId, proposal.proposal_id);
+      setRevertResult(res);
+      if (res.success) {
+        setProposalApplied(false);
+        setVerifyResult(null);
+        alert("补丁已成功安全回滚！");
+        if (selectedFile) {
+          handleSelectFile(selectedFile);
+        }
+      }
+    } catch (e: any) {
+      alert(`回滚失败: ${e.message}`);
+    } finally {
+      setRevertLoading(false);
     }
   };
 
@@ -676,6 +762,8 @@ export const ProjectsView: React.FC = () => {
       role: "user",
       content: q,
       timestamp: new Date().toLocaleTimeString(),
+      selectedSnippet: selectedSnippet || undefined,
+      citedFiles: selectedFile ? [selectedFile] : undefined,
     };
     setCopilotMessages((prev) => [...prev, userMsg]);
     if (inputQuery === undefined) setCopilotInput("");
@@ -684,15 +772,14 @@ export const ProjectsView: React.FC = () => {
     const qLower = q.toLowerCase();
 
     try {
-      // 1. Audit intent
+      // 1. Audit explicit intent
       if (
-        qLower.includes("体检") ||
-        qLower.includes("审计") ||
-        qLower.includes("健康度") ||
-        qLower.includes("隐患") ||
-        qLower.includes("规范") ||
-        qLower.includes("audit") ||
-        qLower.includes("health")
+        qLower === "/audit" ||
+        qLower === "体检" ||
+        qLower === "项目体检" ||
+        qLower === "架构体检" ||
+        qLower === "audit" ||
+        qLower.startsWith("/audit")
       ) {
         let currentAudit = auditData;
         if (!currentAudit) {
@@ -717,18 +804,17 @@ export const ProjectsView: React.FC = () => {
         return;
       }
 
-      // 2. Learning / Guide intent
+      // 2. Learning / Guide explicit intent
       if (
-        qLower.includes("导学") ||
-        qLower.includes("学习") ||
-        qLower.includes("剖析") ||
-        qLower.includes("精读") ||
-        qLower.includes("路线") ||
-        qLower.includes("入门") ||
-        qLower.includes("新手") ||
-        qLower.includes("learn") ||
-        qLower.includes("roadmap") ||
-        qLower.includes("guide")
+        qLower === "/guide" ||
+        qLower === "/learn" ||
+        qLower === "导学" ||
+        qLower === "精读导学" ||
+        qLower === "项目导学" ||
+        qLower === "guide" ||
+        qLower === "learn" ||
+        qLower.startsWith("/guide") ||
+        qLower.startsWith("/learn")
       ) {
         let currentLearn = learningData;
         if (!currentLearn) {
@@ -752,15 +838,15 @@ export const ProjectsView: React.FC = () => {
         return;
       }
 
-      // 3. Walkthrough / Architecture topology intent
+      // 3. Walkthrough / Architecture topology explicit intent
       if (
-        qLower.includes("走查") ||
-        qLower.includes("拓扑") ||
-        qLower.includes("架构") ||
-        qLower.includes("数据流") ||
-        qLower.includes("组件") ||
-        qLower.includes("walkthrough") ||
-        qLower.includes("topology")
+        qLower === "/walkthrough" ||
+        qLower === "走查" ||
+        qLower === "架构走查" ||
+        qLower === "代码走查" ||
+        qLower === "拓扑" ||
+        qLower === "walkthrough" ||
+        qLower.startsWith("/walkthrough")
       ) {
         let currentWalk = walkthroughData;
         if (!currentWalk) {
@@ -783,14 +869,13 @@ export const ProjectsView: React.FC = () => {
         return;
       }
 
-      // 4. Theory mappings intent
+      // 4. Theory mappings explicit intent
       if (
-        qLower.includes("理论") ||
-        qLower.includes("论文") ||
-        qLower.includes("映射") ||
-        qLower.includes("公式") ||
-        qLower.includes("theory") ||
-        qLower.includes("mapping")
+        qLower === "/theory" ||
+        qLower === "理论映射" ||
+        qLower === "理论图谱" ||
+        qLower === "theory" ||
+        qLower.startsWith("/theory")
       ) {
         let currentWalk = walkthroughData;
         if (!currentWalk) {
@@ -813,18 +898,25 @@ export const ProjectsView: React.FC = () => {
         return;
       }
 
-      // 5. Patch / Refactor intent
+      // 5. Patch / Refactor explicit intent
       if (
-        qLower.startsWith("补丁") ||
-        qLower.startsWith("重构") ||
-        qLower.startsWith("修复") ||
-        qLower.startsWith("优化代码") ||
-        qLower.startsWith("patch") ||
-        qLower.startsWith("refactor")
+        qLower.startsWith("/patch") ||
+        qLower.startsWith("补丁:") ||
+        qLower.startsWith("补丁：") ||
+        qLower.startsWith("修复:") ||
+        qLower.startsWith("修复：") ||
+        qLower.startsWith("重构:") ||
+        qLower.startsWith("重构：")
       ) {
         setCodingPrompt(q);
-        const res = await api.proposeProjectCoding(selectedProjectId, q);
+        const res = await api.proposeProjectCoding(selectedProjectId, q, selectedFile || undefined);
         setProposal(res);
+        setProposalApplied(false);
+        setVerifyResult(null);
+        setRevertResult(null);
+        if (res.verification_commands && res.verification_commands.length > 0) {
+          setVerifyCommand(res.verification_commands[0]);
+        }
         setWorkspaceTab("patch");
 
         setCopilotMessages((prev) => [
@@ -832,7 +924,7 @@ export const ProjectsView: React.FC = () => {
           {
             id: (Date.now() + 1).toString(),
             role: "assistant",
-            content: `已根据您的需求生成代码治理补丁提案！\n\n**提案摘要**：\n${res.summary || "补丁已就绪"}\n\n已在中央视窗为您切换至【治理补丁提案】，可直接比对并一键应用至本地代码。`,
+            content: `已根据您的需求生成代码治理补丁提案！\n\n**提案摘要**：\n${res.summary || res.title || "补丁已就绪"}\n\n已在中央视窗为您切换至【治理补丁提案】，可直接比对并一键应用至本地代码。`,
             timestamp: new Date().toLocaleTimeString(),
             targetTab: "patch",
           },
@@ -840,12 +932,15 @@ export const ProjectsView: React.FC = () => {
         return;
       }
 
-      // 6. General Q&A / Project exploration
+      // 6. General Q&A / Project exploration with precise context
       let answerText = "";
       let citedFiles: string[] = [];
 
       try {
-        const askRes = await api.askProject(selectedProjectId, q);
+        const askRes = await api.askProject(selectedProjectId, q, {
+          current_file: selectedFile || undefined,
+          selected_snippet: selectedSnippet || undefined,
+        });
         if (askRes && askRes.answer_markdown) {
           answerText = askRes.answer_markdown;
           citedFiles = askRes.cited_files || [];
@@ -1834,24 +1929,136 @@ export const ProjectsView: React.FC = () => {
 
                 {proposal && (
                   <div className="p-5 rounded-xl border border-emerald-500/40 bg-emerald-500/5 space-y-4 shadow-sm">
-                    <div className="flex items-center justify-between font-medium text-emerald-700 dark:text-emerald-400">
-                      <span className="font-mono text-xs sm:text-sm">提案 ID: {proposal.proposal_id}</span>
-                      <Badge variant="outline" className="text-xs font-mono">就绪</Badge>
+                    <div className="flex flex-wrap items-center justify-between gap-2 font-medium text-emerald-700 dark:text-emerald-400">
+                      <div className="flex items-center space-x-2">
+                        <span className="font-mono text-xs sm:text-sm font-semibold">提案 ID: {proposal.proposal_id}</span>
+                        {proposal.target_file && (
+                          <Badge variant="outline" className="text-xs font-mono">
+                            {proposal.target_file}
+                          </Badge>
+                        )}
+                      </div>
+                      <Badge
+                        variant={
+                          revertResult?.success
+                            ? "outline"
+                            : verifyResult
+                            ? verifyResult.success
+                              ? "default"
+                              : "destructive"
+                            : proposalApplied
+                            ? "secondary"
+                            : "outline"
+                        }
+                        className="text-xs font-mono"
+                      >
+                        {revertResult?.success
+                          ? "已回滚"
+                          : verifyResult
+                          ? verifyResult.success
+                            ? "已验证通过"
+                            : "验证失败"
+                          : proposalApplied
+                          ? "已写入工作区 (待验证)"
+                          : "就绪待应用"}
+                      </Badge>
                     </div>
+
                     <div
                       className="text-foreground/90 text-xs sm:text-sm leading-relaxed font-serif-academic bg-background/80 p-3.5 rounded-lg border border-border/50 prose dark:prose-invert max-w-none"
-                      dangerouslySetInnerHTML={{ __html: renderMarkdownWithMath(proposal.summary || "已生成语义补丁方案") }}
+                      dangerouslySetInnerHTML={{
+                        __html: renderMarkdownWithMath(proposal.summary || proposal.rationale || "已生成语义补丁方案"),
+                      }}
                     />
-                    <Button
-                      id="proj-prop-apply-btn"
-                      size="default"
-                      variant="default"
-                      className="w-full gap-2 bg-emerald-800 hover:bg-emerald-900 text-white font-serif-academic cursor-pointer"
-                      onClick={handleApplyCoding}
-                    >
-                      <Check className="h-4 w-4" />
-                      <span>应用此补丁至工作区</span>
-                    </Button>
+
+                    {proposal.diff && (
+                      <div className="space-y-1.5">
+                        <div className="text-xs font-mono text-muted-foreground flex items-center justify-between">
+                          <span>代码改动 Diff 预览:</span>
+                        </div>
+                        <pre className="p-3 rounded bg-muted/60 text-foreground font-mono text-xs overflow-x-auto max-h-48 border border-border/60 whitespace-pre-wrap">
+                          {proposal.diff}
+                        </pre>
+                      </div>
+                    )}
+
+                    {!proposalApplied ? (
+                      <Button
+                        id="proj-prop-apply-btn"
+                        size="default"
+                        variant="default"
+                        className="w-full gap-2 bg-emerald-800 hover:bg-emerald-900 text-white font-serif-academic cursor-pointer"
+                        onClick={handleApplyCoding}
+                        disabled={loading}
+                      >
+                        <Check className="h-4 w-4" />
+                        <span>{loading ? "正在应用修改..." : "应用此补丁至工作区"}</span>
+                      </Button>
+                    ) : (
+                      <div className="space-y-3 pt-2 border-t border-emerald-500/20">
+                        <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-800 dark:text-emerald-300 font-serif-academic flex items-center justify-between">
+                          <span>✓ 补丁已写入本地文件，请执行受限验证指令检查测试与语法。</span>
+                        </div>
+
+                        {/* Verification & Revert Section */}
+                        <div className="space-y-2.5 bg-background/80 p-3.5 rounded-lg border border-border/60">
+                          <label className="text-xs font-semibold text-foreground flex items-center justify-between">
+                            <span className="flex items-center gap-1.5">
+                              <Terminal className="h-3.5 w-3.5 text-emerald-600" />
+                              受限自动化验证命令 (Sandbox Verified Execution)
+                            </span>
+                            {verifyResult && (
+                              <span
+                                className={`text-[11px] font-mono font-bold ${
+                                  verifyResult.success ? "text-emerald-600" : "text-rose-600"
+                                }`}
+                              >
+                                {verifyResult.success ? "✓ PASS" : "✗ FAIL"} (code: {verifyResult.exit_code},{" "}
+                                {verifyResult.duration_seconds}s)
+                              </span>
+                            )}
+                          </label>
+
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="text"
+                              value={verifyCommand}
+                              onChange={(e) => setVerifyCommand(e.target.value)}
+                              placeholder="例如: pytest -q 或 ruff check"
+                              className="flex-1 h-8 px-2.5 rounded border border-input bg-transparent font-mono text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+                            />
+                            <Button
+                              size="sm"
+                              className="h-8 px-3 text-xs gap-1.5 bg-emerald-800 hover:bg-emerald-900 text-white font-serif-academic cursor-pointer"
+                              onClick={handleVerifyCoding}
+                              disabled={verifyLoading || !verifyCommand.trim()}
+                            >
+                              <Play className={cn("h-3.5 w-3.5", verifyLoading && "animate-spin")} />
+                              <span>{verifyLoading ? "正在验证..." : "运行验证"}</span>
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 px-3 text-xs gap-1.5 border-rose-500/40 text-rose-600 hover:bg-rose-500/10 font-serif-academic cursor-pointer"
+                              onClick={handleRevertCoding}
+                              disabled={revertLoading}
+                            >
+                              <RefreshCw className={cn("h-3.5 w-3.5", revertLoading && "animate-spin")} />
+                              <span>{revertLoading ? "回滚中..." : "安全回滚"}</span>
+                            </Button>
+                          </div>
+
+                          {verifyResult && (
+                            <div className="space-y-1 pt-1">
+                              <div className="text-[11px] font-mono text-muted-foreground">命令输出日志:</div>
+                              <pre className="p-2.5 rounded bg-black/90 text-neutral-200 font-mono text-[11px] overflow-x-auto max-h-48 whitespace-pre-wrap">
+                                {verifyResult.stdout || verifyResult.stderr || "(无终端输出)"}
+                              </pre>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
