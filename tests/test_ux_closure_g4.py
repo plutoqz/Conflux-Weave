@@ -48,6 +48,47 @@ class _SequenceChatTransport:
         return ProviderHttpResponse(200, json.dumps(payload).encode(), {"Content-Type": "application/json"})
 
 
+class _SkillRetrieval:
+    def __init__(self):
+        self.document_by_id = {
+            "chunk-quant-1": SimpleNamespace(
+                document_id="chunk-quant-1",
+                source_snapshot_id="doc-quant-2024",
+                locator={"document_id": "doc-quant-2024", "page": 4},
+                text="Quantum error correction threshold is reported under a defined noise model.",
+            ),
+            "chunk-topo-1": SimpleNamespace(
+                document_id="chunk-topo-1",
+                source_snapshot_id="doc-topo-2025",
+                locator={"document_id": "doc-topo-2025", "page": 7},
+                text="Topological decoding results include accuracy and computational cost measurements.",
+            ),
+            "chunk-excluded-1": SimpleNamespace(
+                document_id="chunk-excluded-1",
+                source_snapshot_id="doc-excluded-2026",
+                locator={"document_id": "doc-excluded-2026", "page": 2},
+                text="This excluded paper must never enter the selected comparison scope.",
+            ),
+        }
+
+    def search(self, query: str, *, document_ids=None):
+        allowed = set(document_ids or ())
+        hits = []
+        for rank, document in enumerate(self.document_by_id.values(), 1):
+            if allowed and document.source_snapshot_id not in allowed:
+                continue
+            hits.append(
+                SimpleNamespace(
+                    document_id=document.document_id,
+                    hit_id=document.document_id,
+                    source_snapshot_id=document.source_snapshot_id,
+                    locator=document.locator,
+                    score=1.0 / rank,
+                )
+            )
+        return SimpleNamespace(final=SimpleNamespace(hits=tuple(hits)))
+
+
 def _mock_chat_payload(content: str, response_id: str = "resp-001"):
     return {
         "id": response_id,
@@ -78,6 +119,7 @@ def _build_g4_test_environment(tmp_path: Path):
         provider_configured=True,
         chat_service=chat_service,
         worker=WorkerLoop(orchestrator, interval_seconds=10),
+        retrieval_pipeline=_SkillRetrieval(),
     )
     return app, repository, store, chat_adapter
 
@@ -390,7 +432,7 @@ def test_skill_literature_comparative_survey_execution(tmp_path: Path):
     # 2. Nonexistent paper should fail honestly
     nonexist_res = client.post(
         "/api/v1/skills/literature_comparative_survey/execute",
-        json={"inputs": {"paper_ids": ["paper_nonexistent_999"]}},
+        json={"inputs": {"paper_ids": ["paper-missing-without-magic-name"]}},
     )
     assert nonexist_res.status_code in (400, 200)
     nonexist_data = nonexist_res.json()
@@ -410,6 +452,9 @@ def test_skill_literature_comparative_survey_execution(tmp_path: Path):
     tool_names = [t.get("tool_name") or t.get("tool") for t in traces]
     assert "get_paper_evidence" in tool_names
     assert "rag_hybrid_search" in tool_names
+    combined = next(t for t in traces if t.get("tool_name") == "rag_hybrid_search")
+    assert set(combined["document_ids"]) == {"doc-quant-2024", "doc-topo-2025"}
+    assert "chunk-excluded-1" not in combined["chunk_ids"]
 
     artifacts = result.get("artifacts", [])
     assert len(artifacts) >= 1

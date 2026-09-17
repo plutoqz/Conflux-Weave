@@ -71,6 +71,7 @@ class FakeRetrieval:
         # doc_specs: [{"id": "chunk-1", "snapshot": "snap-A", "text": "...", "locator": {...}}]
         self.document_by_id = {
             spec["id"]: SimpleNamespace(
+                document_id=spec["id"],
                 text=spec["text"],
                 source_snapshot_id=spec.get("snapshot", ""),
                 locator=spec.get("locator", {}),
@@ -80,8 +81,9 @@ class FakeRetrieval:
         self.doc_specs = doc_specs
         self.searched = None
 
-    def search(self, query: str):
+    def search(self, query: str, *, document_ids=None):
         self.searched = query
+        allowed = set(document_ids or ())
         hits = [
             FakeHit(
                 spec["id"],
@@ -90,6 +92,9 @@ class FakeRetrieval:
                 spec.get("locator", {}),
             )
             for idx, spec in enumerate(self.doc_specs)
+            if not allowed
+            or spec.get("snapshot", "") in allowed
+            or spec.get("locator", {}).get("document_id") in allowed
         ]
         return SimpleNamespace(final=SimpleNamespace(hits=hits), fused_hits=())
 

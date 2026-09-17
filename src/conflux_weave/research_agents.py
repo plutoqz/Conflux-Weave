@@ -170,13 +170,27 @@ class VerifiedResearchWorkflow:
         self.research_profile = AgentProfile("research_agent", "v1", "Evidence-bound paper ResearchAgent", ("verified_paper_research",), (RESEARCH_TOOL_ID,), BudgetLedger(180, 30000, 5000, "provider-price-not-frozen", 3, 1, 1))
         self.verifier_profile = AgentProfile("verifier", "v1", "Independent Claim/Evidence verifier", ("verify_research_claims",), (), BudgetLedger(120, 30000, 4000, "provider-price-not-frozen", 2, 0, 1))
 
-    def execute(self, objective: str, *, enable_writer: bool = True, max_queries: int = 1) -> ResearchExecution:
+    def execute(
+        self,
+        objective: str,
+        *,
+        enable_writer: bool = True,
+        max_queries: int = 1,
+        document_ids: tuple[str, ...] | None = None,
+    ) -> ResearchExecution:
         if not objective.strip(): raise ValueError("objective must not be empty")
         if not 1 <= max_queries <= MAX_SEARCH_QUERIES: raise ValueError(f"max_queries must be between 1 and {MAX_SEARCH_QUERIES}")
         plan = ResearchPlan(objective.strip(), (objective.strip(),), max_queries, 1, "all delivered claims accepted by Verifier")
         plan_ref = self.store.put_json(asdict(plan), producer_step_id="s1-research-plan", schema_version="conflux-weave.research-plan.v1")
         queries, query_refs, query_warning = self._plan_queries(objective, max_queries=max_queries)
-        runs = tuple(self.retrieval.search(query) for query in queries)
+        runs = tuple(
+            (
+                self.retrieval.search(query, document_ids=document_ids)
+                if document_ids
+                else self.retrieval.search(query)
+            )
+            for query in queries
+        )
         merged_hits = self._merge_hits(runs)
         evidence = self._evidence(merged_hits)
         retrieval_ref = self.store.put_json(self._retrieval_payload(queries, runs, merged_hits), producer_step_id="s1-research-retrieval", schema_version="conflux-weave.retrieval-tool-result.v2")
@@ -231,7 +245,7 @@ class VerifiedResearchWorkflow:
         coverage = CoverageReport(len(accepted_evidence), len(claims), len(accepted_claims), len(claims) - len(accepted_claims), repair_rounds, "verified_delivery" if accepted_claims else "no_supported_claim")
         harness_refs = self._harness_trace(objective, plan_ref.artifact_id, retrieval_ref, report_ref, accepted_evidence, coverage)
         writer_status = writer.status if writer is not None else "deterministic"
-        manifest = {"schema_version": "conflux-weave.verified-research-manifest.v1", "objective": objective, "corpus_scope": self.corpus_scope, "disposition": DeliveryDisposition.COMPLETE.value, "profiles": {"research": asdict(self.research_profile), "verifier": asdict(self.verifier_profile)}, "plan_artifact": plan_ref.artifact_id, "retrieval_artifact": retrieval_ref.artifact_id, "model_artifacts": query_refs + research_refs + verify_refs, "harness_artifacts": harness_refs, "report_artifact": report_ref.artifact_id, "coverage": asdict(coverage), "citation_closure": 1.0, "repair_rounds": repair_rounds, "character_count": len(report), "word_count": len(re.findall(r"[\u4e00-\u9fff]|[a-zA-Z0-9_-]+", report)), "search_queries": list(queries), "query_planning_warning": query_warning, "limitations": list(limitations), "report_contract": "v2", "writer_status": writer_status, "writer_degrade_reason": writer.reason if writer is not None else None, "writer_document_artifact": writer.document_artifact_id if writer is not None else None, "writer_audit_artifact": writer.audit_artifact_id if writer_status == "ok" else None, "writer_request_artifact": writer.writer_request_artifact_id if writer is not None else None, "writer_response_artifact": writer.writer_response_artifact_id if writer is not None else None, "writer_audit_request_artifact": writer.audit_request_artifact_id if writer is not None else None, "writer_audit_response_artifact": writer.audit_response_artifact_id if writer is not None else None, "writer_warnings": list(writer.warnings) if writer is not None else [], "unreferenced_claim_ids": list(writer.document.unreferenced_claim_ids) if writer is not None else [], "distill_status": distill.status if distill is not None else "skipped", "distill_artifact": distill.cards_artifact_id if distill is not None and distill.status == "ok" else None, "distill_request_artifact": distill.request_artifact_id if distill is not None else None, "distill_response_artifact": distill.response_artifact_id if distill is not None else None, "distill_degrade_reason": distill.reason if distill is not None and distill.status == "failed" else None}
+        manifest = {"schema_version": "conflux-weave.verified-research-manifest.v1", "objective": objective, "corpus_scope": self.corpus_scope, "document_ids": list(document_ids or ()), "disposition": DeliveryDisposition.COMPLETE.value, "profiles": {"research": asdict(self.research_profile), "verifier": asdict(self.verifier_profile)}, "plan_artifact": plan_ref.artifact_id, "retrieval_artifact": retrieval_ref.artifact_id, "model_artifacts": query_refs + research_refs + verify_refs, "harness_artifacts": harness_refs, "report_artifact": report_ref.artifact_id, "coverage": asdict(coverage), "citation_closure": 1.0, "repair_rounds": repair_rounds, "character_count": len(report), "word_count": len(re.findall(r"[\u4e00-\u9fff]|[a-zA-Z0-9_-]+", report)), "search_queries": list(queries), "query_planning_warning": query_warning, "limitations": list(limitations), "report_contract": "v2", "writer_status": writer_status, "writer_degrade_reason": writer.reason if writer is not None else None, "writer_document_artifact": writer.document_artifact_id if writer is not None else None, "writer_audit_artifact": writer.audit_artifact_id if writer_status == "ok" else None, "writer_request_artifact": writer.writer_request_artifact_id if writer is not None else None, "writer_response_artifact": writer.writer_response_artifact_id if writer is not None else None, "writer_audit_request_artifact": writer.audit_request_artifact_id if writer is not None else None, "writer_audit_response_artifact": writer.audit_response_artifact_id if writer is not None else None, "writer_warnings": list(writer.warnings) if writer is not None else [], "unreferenced_claim_ids": list(writer.document.unreferenced_claim_ids) if writer is not None else [], "distill_status": distill.status if distill is not None else "skipped", "distill_artifact": distill.cards_artifact_id if distill is not None and distill.status == "ok" else None, "distill_request_artifact": distill.request_artifact_id if distill is not None else None, "distill_response_artifact": distill.response_artifact_id if distill is not None else None, "distill_degrade_reason": distill.reason if distill is not None and distill.status == "failed" else None}
         manifest_ref = self.store.put_json(manifest, producer_step_id="s1-research-deliver", schema_version=manifest["schema_version"])
         return ResearchExecution(report_ref.artifact_id, manifest_ref.artifact_id, accepted_claims, accepted_evidence, citations, assessments, coverage, DeliveryDisposition.COMPLETE, limitations)
 

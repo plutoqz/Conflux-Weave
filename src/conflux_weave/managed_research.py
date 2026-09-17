@@ -112,7 +112,13 @@ class ManagedVerifiedResearchWorkflow:
             BudgetLedger(120, 16000, 2400, "provider-price-not-frozen", 2, 0, 1),
         )
 
-    def execute(self, objective: str, *, max_subquestions: int = 4) -> ManagedResearchExecution:
+    def execute(
+        self,
+        objective: str,
+        *,
+        max_subquestions: int = 4,
+        document_ids: tuple[str, ...] | None = None,
+    ) -> ManagedResearchExecution:
         if not objective.strip():
             raise ValueError("objective must not be empty")
         if not 2 <= max_subquestions <= 6:
@@ -153,6 +159,7 @@ class ManagedVerifiedResearchWorkflow:
                 self._worker_objective(objective, item, requirement_by_id),
                 enable_writer=False,
                 max_queries=1,
+                document_ids=document_ids,
             )
             for item in subquestions
         )
@@ -248,6 +255,7 @@ class ManagedVerifiedResearchWorkflow:
         manifest = {
             "schema_version": "conflux-weave.managed-research-manifest.v1",
             "objective": objective,
+            "document_ids": list(document_ids or ()),
             "disposition": disposition.value,
             "manager_profile": asdict(self.manager_profile),
             "manager_plan_artifact": plan_ref.artifact_id,

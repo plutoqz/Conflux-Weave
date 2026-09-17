@@ -88,8 +88,19 @@ class FakeBridge:
         self.report_markdown = report_markdown
         self.calls = []
 
-    def execute(self, objective, *, on_progress=None):
+    def execute(self, objective, *, on_progress=None, document_ids=None):
         self.calls.append(objective)
+        if document_ids and not self.local_chunks:
+            return DeepResearchResult(
+                sources=(),
+                context="",
+                report_markdown="",
+                planned_queries=(),
+                costs_usd=0.0,
+                token_usage={"input_tokens": 0, "output_tokens": 0, "calls": 0, "usage_source": "empty_scope"},
+                report_source="local",
+                local_chunks=(),
+            )
         return DeepResearchResult(
             sources=self.sources,
             context="context",
@@ -559,10 +570,18 @@ def test_deep_research_endpoint_submits_expected_kind(tmp_path):
     # 端点为 async def：显式驱动；内部 get_run 未知 run 走错误响应，但提交已被捕获。
     import asyncio
 
-    asyncio.run(submit(DeepResearchTaskRequest(objective="研究问题")))
+    asyncio.run(
+        submit(
+            DeepResearchTaskRequest(
+                objective="研究问题",
+                document_ids=("paper-a", "paper-b"),
+            )
+        )
+    )
 
     assert captured["submission"].task_kind == "deep_research"
     assert captured["submission"].input["objective"] == "研究问题"
+    assert captured["submission"].input["document_ids"] == ["paper-a", "paper-b"]
 
 
 DRAFT3 = {"claims": [
@@ -784,3 +803,35 @@ def test_tavily_adapter_overrides_endpoint_and_adds_bearer(monkeypatch):
         assert restored.base_url == "https://api.tavily.com/search"
     finally:
         GPTResearcherBridge._uninstall_tavily_adapter(original)
+
+
+def test_deep_workflow_delivers_no_answer_when_scope_is_empty(tmp_path):
+    workflow, store = build_workflow(tmp_path, [])
+
+    result = workflow.execute("How do agents use memory?", document_ids=("nonexistent-doc",))
+
+    assert result.disposition is DeliveryDisposition.NO_ANSWER
+    assert result.claims == () and result.evidence == ()
+    manifest = json.loads(read_artifact(store, result.manifest_artifact_id))
+    assert manifest["disposition"] == "no_answer"
+    assert manifest["document_ids"] == ["nonexistent-doc"]
+    assert any("指定文献范围内无检索命中" in item for item in result.limitations)
+
+
+def test_gpt_researcher_bridge_empty_scope_returns_empty_result(monkeypatch):
+    class EmptyRetrieval:
+        document_by_id = {}
+
+        def search(self, query, document_ids=None):
+            return SimpleNamespace(final=SimpleNamespace(hits=()))
+
+    monkeypatch.setitem(sys.modules, "gpt_researcher", SimpleNamespace(GPTResearcher=None))
+
+    config = ProviderConfig("https://provider.example/v1", "secret", "chat")
+    bridge = GPTResearcherBridge(config, retrieval=EmptyRetrieval())
+    result = bridge.execute("test objective", document_ids=("missing-paper",))
+
+    assert result.report_markdown == ""
+    assert result.local_chunks == ()
+    assert result.token_usage.get("usage_source") == "empty_scope"
+

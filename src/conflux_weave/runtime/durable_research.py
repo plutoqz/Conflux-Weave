@@ -72,6 +72,7 @@ class ResearchExecutor(Protocol):
         task_kind: str,
         objective: str,
         max_subquestions: int,
+        document_ids: tuple[str, ...] = (),
     ) -> DurableResearchExecution: ...
 
 
@@ -95,16 +96,21 @@ class VerifiedWorkflowExecutorAdapter:
         task_kind: str,
         objective: str,
         max_subquestions: int,
+        document_ids: tuple[str, ...] = (),
     ) -> DurableResearchExecution:
         if task_kind == VERIFIED_RESEARCH_TASK:
-            result = self.verified_workflow.execute(objective, max_queries=4)
+            result = self.verified_workflow.execute(
+                objective, max_queries=4, document_ids=document_ids or None
+            )
             evidence_refs = tuple(item.evidence_id for item in result.evidence)
             evidence_records = tuple(asdict(item) for item in result.evidence)
             retrieval_rounds = 1
         elif task_kind == DEEP_RESEARCH_TASK:
             if self.deep_workflow is None:
                 raise ValueError("deep research engine is not configured")
-            result = self.deep_workflow.execute(objective)
+            result = self.deep_workflow.execute(
+                objective, document_ids=document_ids or None
+            )
             evidence_refs = tuple(item.evidence_id for item in result.evidence)
             evidence_records = tuple(asdict(item) for item in result.evidence)
             retrieval_rounds = int(result.usage.get("retrieval_rounds", 1))
@@ -112,7 +118,9 @@ class VerifiedWorkflowExecutorAdapter:
             if self.managed_workflow is None:
                 raise ValueError("managed research workflow is not configured")
             result = self.managed_workflow.execute(
-                objective, max_subquestions=max_subquestions
+                objective,
+                max_subquestions=max_subquestions,
+                document_ids=document_ids or None,
             )
             evidence_refs = tuple(
                 f"sq{sub_index}-{item.evidence_id}"
@@ -260,6 +268,7 @@ class DurableResearchRuntime:
         parent_run_id: str | None = None,
         follow_up_question: str | None = None,
         conversation_id: str | None = None,
+        document_ids: tuple[str, ...] = (),
     ) -> SubmissionResult:
         normalized = objective.strip()
         if not normalized:
@@ -278,6 +287,11 @@ class DurableResearchRuntime:
             not isinstance(follow_up_question, str) or not follow_up_question.strip()
         ):
             raise ValueError("follow_up_question must not be blank")
+        normalized_document_ids = tuple(
+            dict.fromkeys(
+                str(item).strip() for item in document_ids if str(item).strip()
+            )
+        )
 
         # Single agent worst case (W2a.2, no-degrade): query planning 1 + 3 queries ×
         # (embedding + rerank) 6 + draft + verify (+ verifier repair) + claim repair +
@@ -335,6 +349,7 @@ class DurableResearchRuntime:
             "parent_run_id": parent_run_id,
             "follow_up_question": follow_up_question,
             "conversation_id": conversation_id,
+            "document_ids": list(normalized_document_ids),
         }
         config = self.artifact_store.put_json(
             {
@@ -505,6 +520,7 @@ class DurableResearchRuntime:
                 "task_kind": task.kind,
                 "objective": task.input["objective"],
                 "max_subquestions": task.input["max_subquestions"],
+                "document_ids": list(task.input.get("document_ids") or ()),
                 "automatic_replay": False,
             },
             producer_step_id=claim.step_id,
@@ -541,11 +557,22 @@ class DurableResearchRuntime:
         if not authorized:
             return
 
-        execution = self.executor(
-            task.kind,
-            str(task.input["objective"]),
-            int(task.input["max_subquestions"]),
+        document_ids = tuple(
+            str(item) for item in (task.input.get("document_ids") or ())
         )
+        if document_ids:
+            execution = self.executor(
+                task.kind,
+                str(task.input["objective"]),
+                int(task.input["max_subquestions"]),
+                document_ids,
+            )
+        else:
+            execution = self.executor(
+                task.kind,
+                str(task.input["objective"]),
+                int(task.input["max_subquestions"]),
+            )
         self._validate_execution(execution)
         response = self.artifact_store.put_json(
             {

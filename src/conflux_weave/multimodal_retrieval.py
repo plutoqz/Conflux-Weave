@@ -10,6 +10,7 @@ Provides:
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -92,6 +93,31 @@ class MultimodalRetrievalPipeline:
             and self.image_index.table is not None
         )
 
+    def _scope_values(self, document_ids: Sequence[str] | None) -> tuple[str, ...]:
+        if not document_ids:
+            return ()
+        values = {str(item).strip() for item in document_ids if str(item).strip()}
+        for document in self.text_pipeline.resolve_scope(tuple(values)):
+            values.add(document.document_id)
+            if document.source_snapshot_id:
+                values.add(document.source_snapshot_id)
+            locator = document.locator if isinstance(document.locator, dict) else {}
+            for key in ("document_id", "paper_id", "source_id"):
+                value = str(locator.get(key) or "").strip()
+                if value:
+                    values.add(value)
+        return tuple(sorted(values))
+
+    @staticmethod
+    def _scope_where(scope_values: Sequence[str]) -> str | None:
+        if not scope_values:
+            return None
+        escaped = ", ".join(json.dumps(item) for item in scope_values)
+        return (
+            f"(document_id IN ({escaped}) OR "
+            f"source_snapshot_id IN ({escaped}))"
+        )
+
     def _image_dimension_conflict(self) -> str | None:
         """Return a degradation reason when the embedder and index dimensions are known and incompatible.
 
@@ -159,6 +185,7 @@ class MultimodalRetrievalPipeline:
         *,
         top_k: int = 5,
         where: str | None = None,
+        document_ids: Sequence[str] | None = None,
         producer_step_id: str = "step-image-retrieval",
     ) -> tuple[MultimodalRetrievalHit, ...]:
         """Retrieve relevant images for a text query."""
@@ -168,6 +195,13 @@ class MultimodalRetrievalPipeline:
             raise ValueError("top_k must be positive")
         if not self.is_multimodal_active():
             return ()
+        scope_values = self._scope_values(document_ids)
+        scope_where = self._scope_where(scope_values)
+        effective_where = (
+            f"({where}) AND ({scope_where})"
+            if where and scope_where
+            else where or scope_where
+        )
         conflict = self._image_dimension_conflict()
 
         vector_hits: list[MultimodalRetrievalHit] = []
@@ -177,7 +211,11 @@ class MultimodalRetrievalPipeline:
                     query, producer_step_id=producer_step_id
                 )
                 if embedded.vectors:
-                    vector_hits = list(self.image_index.search_vector(embedded.vectors[0], top_k=top_k, where=where))
+                    vector_hits = list(
+                        self.image_index.search_vector(
+                            embedded.vectors[0], top_k=top_k, where=effective_where
+                        )
+                    )
             except ImageVectorDimensionMismatch:
                 pass
             except Exception:
@@ -185,7 +223,14 @@ class MultimodalRetrievalPipeline:
 
         caption_hits: list[MultimodalRetrievalHit] = []
         if self.image_index is not None and hasattr(self.image_index, "search_caption_text"):
-            caption_hits = list(self.image_index.search_caption_text(query, top_k=top_k, where=where))
+            caption_hits = list(
+                self.image_index.search_caption_text(
+                    query,
+                    top_k=top_k,
+                    where=effective_where,
+                    document_ids=scope_values,
+                )
+            )
 
         merged: list[MultimodalRetrievalHit] = []
         seen = set()
@@ -281,6 +326,7 @@ class MultimodalRetrievalPipeline:
         fusion_k: int = 15,
         text_weight: float = 1.0,
         image_weight: float = 1.0,
+        document_ids: Sequence[str] | None = None,
     ) -> MultimodalRetrievalRun:
         """Execute text hybrid search + image search, then combine results via RRF."""
         if not query or not query.strip():
@@ -292,7 +338,11 @@ class MultimodalRetrievalPipeline:
             dense_k=text_dense_k,
             fusion_k=text_fusion_k,
             rerank_k=text_rerank_k,
+            document_ids=document_ids,
         )
+
+        scope_values = self._scope_values(document_ids)
+        image_where = self._scope_where(scope_values)
 
         image_hits: tuple[MultimodalRetrievalHit, ...] = ()
         req_art = None
@@ -312,7 +362,7 @@ class MultimodalRetrievalPipeline:
                     resp_art = embedded.response_artifact.artifact_id
                     if embedded.vectors:
                         vector_hits = list(self.image_index.search_vector(
-                            embedded.vectors[0], top_k=image_k
+                            embedded.vectors[0], top_k=image_k, where=image_where
                         ))
                 except ImageVectorDimensionMismatch as mismatch:
                     image_degradation = (
@@ -326,7 +376,14 @@ class MultimodalRetrievalPipeline:
 
             caption_hits: list[MultimodalRetrievalHit] = []
             if self.image_index is not None and hasattr(self.image_index, "search_caption_text"):
-                caption_hits = list(self.image_index.search_caption_text(query, top_k=image_k))
+                caption_hits = list(
+                    self.image_index.search_caption_text(
+                        query,
+                        top_k=image_k,
+                        where=image_where,
+                        document_ids=scope_values,
+                    )
+                )
 
             page_hits: list[MultimodalRetrievalHit] = []
             if self.image_index is not None and hasattr(self.image_index, "search_by_document_pages") and text_run and text_run.final.hits:

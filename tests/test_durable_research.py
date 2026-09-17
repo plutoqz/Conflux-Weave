@@ -27,11 +27,13 @@ class FixtureExecutor:
         self.store = store
         self.crash = crash
         self.calls = 0
+        self.last_document_ids = ()
         self.usage = usage or BudgetAmount(120, 40, 4, 1)
         self.disposition = disposition
 
-    def __call__(self, task_kind, objective, max_subquestions):
+    def __call__(self, task_kind, objective, max_subquestions, document_ids=()):
         self.calls += 1
+        self.last_document_ids = tuple(document_ids)
         if self.crash:
             raise SimulatedProcessExit("worker exited during paid research batch")
         report = self.store.put_bytes(
@@ -104,6 +106,24 @@ def test_submission_is_idempotent_and_executes_no_provider_call(tmp_path):
         "execute_research",
         "publish_delivery",
     ]
+
+
+def test_document_scope_is_frozen_and_reaches_executor(tmp_path):
+    runtime, repository, store, executor = build_runtime(tmp_path)
+
+    submission = runtime.submit(
+        "Research only the selected papers",
+        document_ids=("paper-a", " paper-b ", "paper-a", ""),
+    )
+
+    task = repository.get_task_for_run(submission.run_id)
+    assert task.input["document_ids"] == ["paper-a", "paper-b"]
+    run = repository.get_run(submission.run_id)
+    config = json.loads(store.read_bytes_by_id(run.config_snapshot_ref))
+    assert config["document_ids"] == ["paper-a", "paper-b"]
+
+    assert runtime.work_once().step_kind == "execute_research"
+    assert executor.last_document_ids == ("paper-a", "paper-b")
 
 
 def test_managed_submission_reserves_plan_and_coverage_audit_calls(tmp_path):
@@ -346,3 +366,77 @@ def test_verified_workflow_adapter_collects_traceable_provider_usage(tmp_path):
     assert no_answer_execution.limitations == (
         "No supported Claim in the configured corpus.",
     )
+
+
+def test_workflow_adapter_preserves_document_scope_for_all_modes(tmp_path):
+    store = LocalArtifactStore(tmp_path / "artifacts")
+    report = store.put_bytes(
+        b"# Scoped result\n",
+        media_type="text/markdown",
+        producer_step_id="fixture-deliver",
+        schema_version="fixture-report.v1",
+    )
+    provider_request = store.put_json(
+        {"endpoint": "/chat/completions", "request": {"messages": []}},
+        producer_step_id="fixture-provider",
+        schema_version="fixture-provider-request.v1",
+    )
+    provider_response = store.put_json(
+        {
+            "choices": [{"message": {"content": "{}"}}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+        },
+        producer_step_id="fixture-provider",
+        schema_version="fixture-provider-response.v1",
+    )
+    manifest = store.put_json(
+        {
+            "model_artifacts": [
+                provider_request.artifact_id,
+                provider_response.artifact_id,
+            ]
+        },
+        producer_step_id="fixture-deliver",
+        schema_version="fixture-manifest.v1",
+    )
+    calls = {}
+
+    class Recorder:
+        def __init__(self, mode):
+            self.mode = mode
+
+        def execute(self, objective, **kwargs):
+            calls[self.mode] = kwargs
+            common = {
+                "report_artifact_id": report.artifact_id,
+                "manifest_artifact_id": manifest.artifact_id,
+                "evidence": (),
+                "disposition": DeliveryDisposition.NO_ANSWER,
+                "limitations": ("fixture",),
+                "unmet_criteria": (),
+            }
+            if self.mode == "managed":
+                return SimpleNamespace(**common, subruns=())
+            if self.mode == "deep":
+                return SimpleNamespace(
+                    **common,
+                    usage={"input_tokens": 3, "output_tokens": 2, "retrieval_rounds": 1},
+                    provider_call_count=1,
+                )
+            return SimpleNamespace(**common)
+
+    adapter = VerifiedWorkflowExecutorAdapter(
+        store,
+        Recorder("verified"),
+        managed_workflow=Recorder("managed"),
+        deep_workflow=Recorder("deep"),
+    )
+    scope = ("paper-a", "paper-b")
+
+    adapter("verified_paper_research", "objective", 4, scope)
+    adapter("managed_verified_research", "objective", 2, scope)
+    adapter("deep_research", "objective", 4, scope)
+
+    assert calls["verified"]["document_ids"] == scope
+    assert calls["managed"]["document_ids"] == scope
+    assert calls["deep"]["document_ids"] == scope

@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+from pathlib import Path
+import re
 from threading import RLock
 from typing import Any
 
@@ -53,6 +56,74 @@ class HybridRetrievalPipeline:
         self.embedding = embedding
         self.reranker = reranker
         self._index_lock = RLock()
+
+    @classmethod
+    def _normalize_id(cls, identifier: str) -> set[str]:
+        text = str(identifier or "").strip()
+        if not text:
+            return set()
+        variants = {text}
+        lower = text.lower()
+        variants.add(lower)
+
+        if "#" in lower:
+            variants.add(lower.split("#", 1)[0])
+
+        for item in list(variants):
+            stem = Path(item).stem
+            if stem:
+                variants.add(stem)
+
+        for item in list(variants):
+            unprefixed = re.sub(r"^(?:doc|document|paper|snap|snapshot)[-_]", "", item)
+            if unprefixed:
+                variants.add(unprefixed)
+
+        for item in list(variants):
+            unversioned = re.sub(r"v\d+$", "", item)
+            if unversioned:
+                variants.add(unversioned)
+
+        return {v for v in variants if v}
+
+    @classmethod
+    def _matches_scope(cls, document: RetrievalDocument, allowed_ids: set[str]) -> bool:
+        locator = document.locator if isinstance(document.locator, dict) else {}
+        candidate_strings = (
+            document.document_id,
+            document.source_snapshot_id or "",
+            str(locator.get("document_id") or ""),
+            str(locator.get("paper_id") or ""),
+            str(locator.get("source_id") or ""),
+            str(locator.get("snapshot_id") or ""),
+            str(locator.get("filename") or ""),
+            str(locator.get("file_name") or ""),
+            str(locator.get("relative_path") or ""),
+        )
+        candidates: set[str] = set()
+        for c in candidate_strings:
+            candidates.update(cls._normalize_id(c))
+        norm_allowed: set[str] = set()
+        for a in allowed_ids:
+            norm_allowed.update(cls._normalize_id(a))
+        return bool(candidates & norm_allowed)
+
+    def resolve_scope(
+        self, document_ids: tuple[str, ...] | list[str] | None
+    ) -> tuple[RetrievalDocument, ...]:
+        """Resolve user-facing document IDs to the indexed chunks they own."""
+        if not document_ids:
+            return self.documents
+        norm_allowed: set[str] = set()
+        for item in document_ids:
+            norm_allowed.update(self._normalize_id(item))
+        if not norm_allowed:
+            return ()
+        return tuple(
+            document
+            for document in self.documents
+            if self._matches_scope(document, norm_allowed)
+        )
 
     def add_documents(
         self,
@@ -118,15 +189,55 @@ class HybridRetrievalPipeline:
         dense_k: int = 50,
         fusion_k: int = 30,
         rerank_k: int = 12,
+        document_ids: tuple[str, ...] | list[str] | None = None,
     ) -> HybridRetrievalRun:
         if not query.strip():
             raise ValueError("query must not be empty")
+        scoped_documents = self.resolve_scope(document_ids)
+        if document_ids and not scoped_documents:
+            empty = RetrievalQueryResult(query, RetrievalStrategy.HYBRID, ())
+            return HybridRetrievalRun(
+                query,
+                RetrievalQueryResult(query, RetrievalStrategy.BM25, ()),
+                RetrievalQueryResult(query, RetrievalStrategy.DENSE, ()),
+                empty,
+                empty,
+                "scope_empty",
+                "",
+                "",
+                None,
+                None,
+            )
         embedded = self.embedding.embed([query], producer_step_id="s1-query-embedding")
         with self._index_lock:
-            bm25 = self.bm25.search(query, top_k=sparse_k)
-            dense = self.dense_index.search(embedded.vectors[0], top_k=dense_k)
+            scoped_bm25 = self.bm25 if scoped_documents == self.documents else BM25Retriever(scoped_documents)
+            bm25 = scoped_bm25.search(query, top_k=min(sparse_k, len(scoped_documents)))
+            dense_where = None
+            if document_ids:
+                escaped_chunk_ids = ", ".join(
+                    json.dumps(document.document_id) for document in scoped_documents
+                )
+                dense_where = f"chunk_id IN ({escaped_chunk_ids})"
+            dense = self.dense_index.search(
+                embedded.vectors[0],
+                top_k=min(dense_k, len(scoped_documents)),
+                where=dense_where,
+            )
             hybrid = reciprocal_rank_fusion(bm25, dense, top_k=fusion_k)
             candidates = [self.document_by_id[hit.document_id] for hit in hybrid.hits]
+        if not candidates:
+            return HybridRetrievalRun(
+                query,
+                bm25,
+                dense,
+                hybrid,
+                hybrid,
+                "skipped_no_candidates",
+                embedded.request_artifact.artifact_id,
+                embedded.response_artifact.artifact_id,
+                None,
+                None,
+            )
         try:
             reranked = self.reranker.rerank(query, [item.text for item in candidates], top_n=min(rerank_k, len(candidates)), producer_step_id="s1-query-rerank")
             final_hits = tuple(

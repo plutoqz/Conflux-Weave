@@ -544,6 +544,11 @@ def create_app(
                     input={
                         "objective": request.objective,
                         "max_subquestions": request.max_subquestions,
+                        **(
+                            {"document_ids": list(request.document_ids)}
+                            if request.document_ids
+                            else {}
+                        ),
                     },
                     requested_agent="durable_verified_research@v1",
                 )
@@ -966,7 +971,15 @@ def create_app(
             result = orchestrator.submit(
                 TaskSubmission(
                     task_kind="deep_research",
-                    input={"objective": request.objective, "conversation_id": conversation_id},
+                    input={
+                        "objective": request.objective,
+                        "conversation_id": conversation_id,
+                        **(
+                            {"document_ids": list(request.document_ids)}
+                            if request.document_ids
+                            else {}
+                        ),
+                    },
                     requested_agent="durable_verified_research@v1",
                 )
             )
@@ -2504,6 +2517,10 @@ def create_app(
         return None
 
     async def resolve_registered_asset(asset_id: str) -> dict[str, Any] | None:
+        manifest_path = Path((config_paths or {}).get("corpus_manifest", ""))
+        registry_path = repository.database_path.with_name("library-registry.json")
+        registry_configured = registry_path.is_file() or manifest_path.is_file()
+
         overview = await library_overview(status="")
         valid_doc_ids = {
             str(val)
@@ -2512,10 +2529,19 @@ def create_app(
             if (val := doc.get(key))
         }
 
+        if registry_configured and not valid_doc_ids:
+            _asset_by_id_cache.pop(asset_id, None)
+            return None
+
+        def is_authorized(doc_identifier: str) -> bool:
+            if not registry_configured:
+                return True
+            return doc_identifier in valid_doc_ids
+
         if asset_id in _asset_by_id_cache:
             cached = _asset_by_id_cache[asset_id]
             doc_id = str(cached.get("document_id") or cached.get("source_snapshot_id") or "")
-            if not valid_doc_ids or doc_id in valid_doc_ids:
+            if is_authorized(doc_id):
                 return cached
             _asset_by_id_cache.pop(asset_id, None)
 
@@ -2528,7 +2554,7 @@ def create_app(
                 if res:
                     r = res[0]
                     doc_id = str(r.get("document_id", ""))
-                    if not valid_doc_ids or doc_id in valid_doc_ids:
+                    if is_authorized(doc_id):
                         loc = {}
                         if r.get("locator_json"):
                             try:

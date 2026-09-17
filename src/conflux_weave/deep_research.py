@@ -195,7 +195,13 @@ class GPTResearcherBridge:
         self._retriever = retriever
         self._max_local_documents = max_local_documents
 
-    def execute(self, objective: str, *, on_progress: Callable[[str], None] | None = None) -> DeepResearchResult:
+    def execute(
+        self,
+        objective: str,
+        *,
+        on_progress: Callable[[str], None] | None = None,
+        document_ids: tuple[str, ...] | None = None,
+    ) -> DeepResearchResult:
         try:
             from gpt_researcher import GPTResearcher
         except ImportError as exc:  # pragma: no cover - optional engine
@@ -232,7 +238,27 @@ class GPTResearcherBridge:
         original_tavily_init = self._install_tavily_adapter()
         original_text_loader = self._install_utf8_document_loader()
         try:
-            local_chunks, planned_queries = self._local_chunks(objective)
+            local_chunks, planned_queries = self._local_chunks(
+                objective, document_ids=document_ids
+            )
+            if document_ids and not local_chunks:
+                return DeepResearchResult(
+                    sources=(),
+                    context="",
+                    report_markdown="",
+                    planned_queries=planned_queries,
+                    costs_usd=0.0,
+                    token_usage={
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "calls": 0,
+                        "usage_source": "empty_scope",
+                    },
+                    report_source="local",
+                    local_chunks=(),
+                    model=self._provider_config.engine_model or chat_model,
+                    retriever=retriever,
+                )
             config_payload = {
                 "SMART_LLM": engine_llm,
                 "FAST_LLM": engine_llm,
@@ -251,7 +277,9 @@ class GPTResearcherBridge:
             config_file.write_text(json.dumps(config_payload), encoding="utf-8")
 
             progress(f"启动深度研究引擎（本地文档 {len(local_chunks)}，检索器 {retriever}）")
-            report_source = "hybrid" if local_chunks else "web"
+            report_source = (
+                "local" if document_ids else ("hybrid" if local_chunks else "web")
+            )
             researcher = GPTResearcher(
                 query=objective,
                 report_type="research_report",
@@ -460,12 +488,24 @@ class GPTResearcherBridge:
                 merged[url] = DeepSource(url=url, title=title or existing.title, content=content)
         return tuple(merged[url] for url in order)
 
-    def _local_chunks(self, objective: str) -> tuple[list[DeepLocalChunk], tuple[str, ...]]:
+    def _local_chunks(
+        self,
+        objective: str,
+        *,
+        document_ids: tuple[str, ...] | None = None,
+    ) -> tuple[list[DeepLocalChunk], tuple[str, ...]]:
         """Facet-aware local retrieval with round-robin coverage and source diversity."""
         if self._retrieval is None:
             return [], ()
         queries = _research_query_facets(objective)
-        runs = [self._retrieval.search(query) for query in queries]
+        runs = [
+            (
+                self._retrieval.search(query, document_ids=document_ids)
+                if document_ids
+                else self._retrieval.search(query)
+            )
+            for query in queries
+        ]
         candidates = []
         max_hits = max((len(run.final.hits) for run in runs), default=0)
         for rank in range(max_hits):
@@ -591,14 +631,25 @@ class DeepResearchWorkflow:
         self.code_revision = code_revision
         self._verified = VerifiedResearchWorkflow(store, None, chat, corpus_scope="web+local hybrid (GPT Researcher)")
 
-    def execute(self, objective: str, *, max_sources: int = MAX_SOURCES) -> DeepResearchExecution:
+    def execute(
+        self,
+        objective: str,
+        *,
+        max_sources: int = MAX_SOURCES,
+        document_ids: tuple[str, ...] | None = None,
+    ) -> DeepResearchExecution:
         normalized = objective.strip()
         if not normalized:
             raise ValueError("objective must not be empty")
         step_id = "w32-deep-research"
         started = time.monotonic()
         bridge_started = time.monotonic()
-        result = self.bridge.execute(normalized)
+        if document_ids:
+            result = self.bridge.execute(
+                normalized, document_ids=tuple(document_ids)
+            )
+        else:
+            result = self.bridge.execute(normalized)
         bridge_ms = int((time.monotonic() - bridge_started) * 1000)
         sources = list(result.sources)
 
@@ -682,9 +733,20 @@ class DeepResearchWorkflow:
         )
 
         visual_evidence: list[EvidenceRef] = []
-        if self.bridge._retrieval is not None and hasattr(self.bridge._retrieval, "search_images_by_text"):
+        bridge_retrieval = getattr(self.bridge, "_retrieval", None)
+        if bridge_retrieval is not None and hasattr(bridge_retrieval, "search_images_by_text"):
             try:
-                image_hits = self.bridge._retrieval.search_images_by_text(objective, top_k=4)
+                if document_ids:
+                    image_hits = bridge_retrieval.search_images_by_text(
+                        objective,
+                        top_k=4,
+                        document_ids=document_ids,
+                    )
+                else:
+                    image_hits = bridge_retrieval.search_images_by_text(
+                        objective,
+                        top_k=4,
+                    )
                 for img_hit in image_hits:
                     cap = getattr(img_hit, "caption", "") or ""
                     v_ev_id = f"evidence-visual-{len(visual_evidence) + 1:03d}"
@@ -707,6 +769,7 @@ class DeepResearchWorkflow:
 
         evidence_ms = int((time.monotonic() - bridge_started) * 1000) - bridge_ms
         local_call_count = max(1, len(result.planned_queries)) if local_chunks else 0
+        provider_call_count = len(snapshot_records) + local_call_count + 1
         usage = {
             "input_tokens": int(result.token_usage.get("input_tokens", 0)),
             "output_tokens": int(result.token_usage.get("output_tokens", 0)),
@@ -715,7 +778,18 @@ class DeepResearchWorkflow:
         }
 
         if not evidence and not snapshot_records and not result.report_markdown.strip():
-            return self._no_answer(result, usage, provider_call_count, "引擎未返回可用来源，且本地语料无检索命中")
+            reason = (
+                "指定文献范围内无检索命中"
+                if document_ids
+                else "引擎未返回可用来源，且本地语料无检索命中"
+            )
+            return self._no_answer(
+                result,
+                usage,
+                provider_call_count,
+                reason,
+                document_ids=document_ids,
+            )
 
         disposition = DeliveryDisposition.COMPLETE
         unmet: tuple[str, ...] = ()
@@ -728,7 +802,13 @@ class DeepResearchWorkflow:
         draft_ms = int((time.monotonic() - draft_started) * 1000)
         if not claims:
             return self._unverified_delivery(
-                objective, snapshot_records, result, "起草未产出任何候选结论", usage, provider_call_count
+                objective,
+                snapshot_records,
+                result,
+                "起草未产出任何候选结论",
+                usage,
+                provider_call_count,
+                document_ids=document_ids,
             )
         verify_started = time.monotonic()
         assessments, _verify_refs = self._verified._verify(claims, evidence, round_number=0)
@@ -748,7 +828,13 @@ class DeepResearchWorkflow:
         accepted_claims = tuple(claim for claim in claims if claim.claim_id in accepted_ids)
         if not accepted_claims:
             return self._unverified_delivery(
-                objective, snapshot_records, result, "核验后无通过 Verifier 的结论", usage, provider_call_count
+                objective,
+                snapshot_records,
+                result,
+                "核验后无通过 Verifier 的结论",
+                usage,
+                provider_call_count,
+                document_ids=document_ids,
             )
         accepted_assessments = tuple(item for item in assessments if item.claim_id in accepted_ids)
         allowed_evidence = {
@@ -972,6 +1058,7 @@ class DeepResearchWorkflow:
             {
                 "schema_version": DEEP_RESEARCH_SCHEMA,
                 "objective": objective,
+                "document_ids": list(document_ids or ()),
                 "engine": {
                     "name": "gpt-researcher",
                     "report_source": result.report_source,
@@ -1061,6 +1148,8 @@ class DeepResearchWorkflow:
         reason: str,
         usage: dict[str, int],
         provider_call_count: int,
+        *,
+        document_ids: tuple[str, ...] | None = None,
     ) -> DeepResearchExecution:
         """无本地核验结论 ≠ 无答案：PARTIAL 交付未核验综合视图 + 来源引用清单。
 
@@ -1120,6 +1209,7 @@ class DeepResearchWorkflow:
             {
                 "schema_version": DEEP_RESEARCH_SCHEMA,
                 "objective": objective,
+                "document_ids": list(document_ids or ()),
                 "engine": {
                     "name": "gpt-researcher",
                     "report_source": result.report_source,
@@ -1161,6 +1251,8 @@ class DeepResearchWorkflow:
         usage: dict[str, int],
         provider_call_count: int,
         reason: str,
+        *,
+        document_ids: tuple[str, ...] | None = None,
     ) -> DeepResearchExecution:
         """引擎与本地语料均无可引用材料时的诚实空交付（保留 NO_ANSWER 语义）。"""
         limitations = (
@@ -1186,6 +1278,7 @@ class DeepResearchWorkflow:
         manifest_ref = self.store.put_json(
             {
                 "schema_version": DEEP_RESEARCH_SCHEMA,
+                "document_ids": list(document_ids or ()),
                 "engine": {"name": "gpt-researcher", "costs_usd": result.costs_usd},
                 "disposition": DeliveryDisposition.NO_ANSWER.value,
                 "sources": [],

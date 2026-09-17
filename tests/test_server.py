@@ -47,7 +47,12 @@ class FixtureRuntime:
                 "objective": str(submission.input["objective"]),
                 "max_subquestions": int(submission.input.get("max_subquestions", 4)),
             }
-            for key in ("parent_run_id", "follow_up_question"):
+            for key in (
+                "parent_run_id",
+                "follow_up_question",
+                "conversation_id",
+                "document_ids",
+            ):
                 if key in submission.input:
                     task_input[key] = submission.input[key]
         task = TaskSpec(
@@ -178,6 +183,7 @@ async def _test_verified_research_submit_and_rerun_preserve_task_scope(tmp_path)
             objective="Compare context reduction methods and evaluations",
             mode="managed",
             max_subquestions=3,
+            document_ids=("paper-a", "paper-b"),
         )
     )
     original = repository.get_task_for_run(accepted.run_id)
@@ -196,6 +202,7 @@ async def _test_verified_research_submit_and_rerun_preserve_task_scope(tmp_path)
     assert cloned.input == original.input == {
         "objective": "Compare context reduction methods and evaluations",
         "max_subquestions": 3,
+        "document_ids": ["paper-a", "paper-b"],
     }
     assert repeated.created is True
     assert repeated.run_id != accepted.run_id

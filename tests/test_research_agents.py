@@ -82,7 +82,7 @@ def test_verified_research_produces_closed_delivery(tmp_path):
     ]))
     result = VerifiedResearchWorkflow(
         store, retrieval, chat, corpus_scope="fixture new-paper corpus"
-    ).execute("How is context reduced?")
+    ).execute("How is context reduced?", document_ids=("paper-a",))
     assert result.coverage.accepted_claim_count == 1
     assert result.coverage.repair_rounds == 0
     assert len(result.claims) == len(result.citations) == 1
@@ -92,6 +92,7 @@ def test_verified_research_produces_closed_delivery(tmp_path):
     manifest = json.loads(store.path_for_digest(result.manifest_artifact_id.removeprefix("artifact-sha256-")).read_text(encoding="utf-8"))
     assert len(manifest["harness_artifacts"]) == 10
     assert manifest["corpus_scope"] == "fixture new-paper corpus"
+    assert manifest["document_ids"] == ["paper-a"]
     assert manifest["report_contract"] == "v2"
     assert manifest["writer_status"] == "ok"
     assert manifest["writer_document_artifact"]
@@ -322,7 +323,11 @@ def test_manager_plans_and_aggregates_verified_subruns(tmp_path):
             {"coverage_id": "coverage-evaluation", "status": "covered", "claim_ids": ["sq2-claim-0001"], "rationale": "The evaluation Claim addresses this requirement."},
         ]}, "coverage"),
     ]))
-    result = ManagedVerifiedResearchWorkflow(store, VerifiedResearchWorkflow(store, retrieval, worker_chat), manager_chat).execute("Compare methods and evaluation", max_subquestions=2)
+    result = ManagedVerifiedResearchWorkflow(store, VerifiedResearchWorkflow(store, retrieval, worker_chat), manager_chat).execute(
+        "Compare methods and evaluation",
+        max_subquestions=2,
+        document_ids=("paper-a", "paper-b"),
+    )
     assert len(result.subruns) == 2
     assert result.claim_count == 2
     assert result.disposition is DeliveryDisposition.COMPLETE
@@ -336,6 +341,7 @@ def test_manager_plans_and_aggregates_verified_subruns(tmp_path):
         ).read_text(encoding="utf-8")
     )
     assert manifest["coverage_assessment_artifact"]
+    assert manifest["document_ids"] == ["paper-a", "paper-b"]
     assert manifest["coverage_request_artifact"]
     assert manifest["stop_reason"] == "all_subquestions_verified"
 

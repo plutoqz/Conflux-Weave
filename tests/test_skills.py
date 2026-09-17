@@ -27,6 +27,60 @@ from conflux_weave.skills.runner import SkillRunner
 from types import SimpleNamespace
 
 
+class _SkillRetrieval:
+    def __init__(self) -> None:
+        self.document_by_id = {
+            "chunk-2606-08702": SimpleNamespace(
+                document_id="chunk-2606-08702",
+                source_snapshot_id="2606.08702",
+                locator={"paper_id": "2606.08702", "page": 3},
+                text="The paper describes its model structure and evaluation protocol.",
+            ),
+            "chunk-2606-10209": SimpleNamespace(
+                document_id="chunk-2606-10209",
+                source_snapshot_id="2606.10209",
+                locator={"paper_id": "2606.10209", "page": 5},
+                text="The paper reports recall under the stated benchmark conditions.",
+            ),
+            "chunk-excluded": SimpleNamespace(
+                document_id="chunk-excluded",
+                source_snapshot_id="2606.99999",
+                locator={"paper_id": "2606.99999", "page": 1},
+                text="This paper is outside the requested comparison scope.",
+            ),
+        }
+
+    def search(self, query: str, *, document_ids=None):
+        allowed = set(document_ids or ())
+        hits = tuple(
+            SimpleNamespace(
+                document_id=document.document_id,
+                hit_id=document.document_id,
+                source_snapshot_id=document.source_snapshot_id,
+                locator=document.locator,
+                score=1.0,
+            )
+            for document in self.document_by_id.values()
+            if not allowed or document.source_snapshot_id in allowed
+        )
+        return SimpleNamespace(final=SimpleNamespace(hits=hits))
+
+
+class _IgnoringScopeSkillRetrieval(_SkillRetrieval):
+    def search(self, query: str, *, document_ids=None):
+        hits = tuple(
+            SimpleNamespace(
+                document_id=document.document_id,
+                hit_id=document.document_id,
+                source_snapshot_id=document.source_snapshot_id,
+                locator=document.locator,
+                score=1.0,
+            )
+            for document in self.document_by_id.values()
+        )
+        return SimpleNamespace(final=SimpleNamespace(hits=hits))
+
+
 def test_builtin_skills_are_complete_and_valid() -> None:
     assert len(BUILTIN_SKILLS) == 3
     skill_ids = {s.skill_id for s in BUILTIN_SKILLS}
@@ -128,27 +182,33 @@ def test_skill_runner_execution_and_offline_mode() -> None:
     registry = SkillRegistry()
     runner = SkillRunner(registry, provider=None)
 
-    # 1. Execute literature_comparative_survey
+    # 1. Literature comparison must fail honestly without an index/retriever.
     req1 = SkillExecutionRequest(
         skill_id="literature_comparative_survey",
         inputs={"paper_ids": ["paper_alpha", "paper_beta"], "focus_dimensions": ["创新点", "准确率"]},
     )
     res1 = runner.execute_skill(req1)
-    assert res1.status == "completed"
-    assert "paper_alpha" in res1.content
-    assert "结构化横向对比矩阵" in res1.content
-    assert res1.structured_data["category"] == "research"
-    assert res1.tokens_consumed > 0
+    assert res1.status == "failed"
+    assert "检索工具不可用" in res1.summary
+    assert "资料索引与检索管线" in str(res1.error)
 
-    # 2. Execute code_architecture_audit
+    blank = runner.execute_skill(
+        SkillExecutionRequest(
+            skill_id="literature_comparative_survey",
+            inputs={"paper_ids": [" ", "\t"]},
+        )
+    )
+    assert blank.status == "failed"
+    assert "有效的待比对学术论文 ID" in str(blank.error)
+
+    # 2. Code audit also fails honestly when no project registry is injected.
     req2 = SkillExecutionRequest(
         skill_id="code_architecture_audit",
         inputs={"project_id": "Conflux-Weave", "severity_threshold": "high"},
     )
     res2 = runner.execute_skill(req2)
-    assert res2.status == "completed"
-    assert "架构治理与契约审计体检报告" in res2.content
-    assert "Conflux-Weave" in res2.content
+    assert res2.status == "failed"
+    assert "目标项目不存在" in str(res2.error)
 
     # 3. Execute latex_paper_polisher
     req3 = SkillExecutionRequest(
@@ -181,7 +241,7 @@ def test_skills_rest_api(tmp_path: Path) -> None:
     store = LocalArtifactStore(tmp_path / "artifacts")
     repository = SQLiteRuntimeRepository(tmp_path / "api_test.sqlite3", store)
     orchestrator = SimpleNamespace()
-    app = create_app(repository, orchestrator)
+    app = create_app(repository, orchestrator, retrieval_pipeline=_SkillRetrieval())
     client = TestClient(app)
 
     # 1. GET /api/v1/skills
@@ -223,8 +283,12 @@ def test_skills_rest_api(tmp_path: Path) -> None:
     assert exec_resp.status_code == 200
     exec_data = exec_resp.json()
     assert exec_data["status"] == "completed"
-    assert "对比分析综述" in exec_data["content"]
-    assert exec_data["tokens_consumed"] > 0
+    assert "文献证据对比摘录" in exec_data["content"]
+    assert exec_data["tokens_consumed"] == 0
+    traces = exec_data["tool_traces"]
+    combined = next(item for item in traces if item["tool_name"] == "rag_hybrid_search")
+    assert set(combined["document_ids"]) == {"2606.08702", "2606.10209"}
+    assert "chunk-excluded" not in combined["chunk_ids"]
 
     # 6. POST /api/v1/skills/{skill_id}/execute (Validation Failure 400)
     fail_resp = client.post(
@@ -234,3 +298,28 @@ def test_skills_rest_api(tmp_path: Path) -> None:
     assert fail_resp.status_code == 400
     fail_data = fail_resp.json()
     assert fail_data["code"] == "skill_execution_failed"
+
+
+def test_literature_skill_rechecks_scope_even_if_retriever_leaks_hits() -> None:
+    runner = SkillRunner(
+        SkillRegistry(),
+        provider=None,
+        retrieval_pipeline=_IgnoringScopeSkillRetrieval(),
+    )
+
+    result = runner.execute_skill(
+        SkillExecutionRequest(
+            skill_id="literature_comparative_survey",
+            inputs={"paper_ids": ["2606.08702", "2606.10209"]},
+        )
+    )
+
+    assert result.status == "completed"
+    evidence_ids = {item["chunk_id"] for item in result.structured_data["evidence"]}
+    assert evidence_ids == {"chunk-2606-08702", "chunk-2606-10209"}
+    combined = next(
+        item
+        for item in result.structured_data["tool_traces"]
+        if item["tool_name"] == "rag_hybrid_search"
+    )
+    assert "chunk-excluded" not in combined["chunk_ids"]

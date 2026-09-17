@@ -810,6 +810,7 @@ class LanceDBImageIndex:
         *,
         top_k: int = 5,
         where: str | None = None,
+        document_ids: Sequence[str] | None = None,
     ) -> tuple[MultimodalRetrievalHit, ...]:
         """Search image assets by substantive keyword/token match on their caption."""
         if self.table is None or not query or not query.strip():
@@ -879,10 +880,20 @@ class LanceDBImageIndex:
             return ()
 
         total_rows = len(pydict.get("asset_id", []))
+        allowed_ids = {
+            str(item).strip().lower()
+            for item in (document_ids or ())
+            if str(item).strip()
+        }
         scored = []
         for i in range(total_rows):
             cap = str(pydict.get("caption", [""])[i] or "").lower()
             doc_id = str(pydict.get("document_id", [""])[i] or "").lower()
+            source_snapshot_id = str(
+                pydict.get("source_snapshot_id", [""])[i] or ""
+            ).lower()
+            if allowed_ids and not ({doc_id, source_snapshot_id} & allowed_ids):
+                continue
             combined = f"{cap} {doc_id}"
             substantive_matches = 0
             match_score = 0.0

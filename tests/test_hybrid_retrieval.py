@@ -67,3 +67,116 @@ def test_incremental_documents_are_added_to_sparse_and_dense_indexes(tmp_path):
     assert result["added_count"] == 1
     assert pipeline.bm25.search("UReCoM", top_k=5).hits[0].document_id == "chunk-2"
     assert index.search((0.0, 1.0), top_k=1).hits[0].document_id == "chunk-2"
+
+
+def test_document_scope_is_applied_before_sparse_dense_and_rerank(tmp_path):
+    documents = (
+        RetrievalDocument("chunk-a", "agent evidence", "doc-a", {"document_id": "doc-a"}),
+        RetrievalDocument("chunk-b", "agent evidence", "doc-b", {"document_id": "doc-b"}),
+        RetrievalDocument("chunk-c", "agent evidence", "doc-c", {"document_id": "doc-c"}),
+    )
+    index = LanceDBDenseIndex(tmp_path / "db")
+    index.publish(documents, ((1.0, 0.0), (1.0, 0.0), (1.0, 0.0)))
+    store = LocalArtifactStore(tmp_path / "artifacts")
+    config = ProviderConfig("https://provider.example/v1", "secret", "chat")
+    embedding = OpenAICompatibleEmbeddingAdapter(
+        store,
+        config,
+        transport=SequenceTransport([
+            response({"data": [{"index": 0, "embedding": [1.0, 0.0]}]})
+        ]),
+    )
+    reranker = OpenAICompatibleRerankerAdapter(
+        store,
+        config,
+        transport=SequenceTransport([
+            response({"results": [
+                {"index": 0, "relevance_score": 0.9},
+                {"index": 1, "relevance_score": 0.8},
+            ]})
+        ]),
+    )
+
+    run = HybridRetrievalPipeline(documents, index, embedding, reranker).search(
+        "agent",
+        document_ids=("doc-a", "doc-b"),
+        sparse_k=10,
+        dense_k=10,
+        fusion_k=10,
+        rerank_k=10,
+    )
+
+    for result in (run.bm25, run.dense, run.hybrid, run.final):
+        assert {hit.document_id for hit in result.hits} <= {"chunk-a", "chunk-b"}
+    assert "chunk-c" not in {hit.document_id for hit in run.final.hits}
+
+
+def test_missing_document_scope_returns_empty_without_provider_calls(tmp_path):
+    documents = (
+        RetrievalDocument("chunk-a", "agent evidence", "doc-a", {}),
+    )
+    index = LanceDBDenseIndex(tmp_path / "db")
+    index.publish(documents, ((1.0, 0.0),))
+    store = LocalArtifactStore(tmp_path / "artifacts")
+    config = ProviderConfig("https://provider.example/v1", "secret", "chat")
+    embedding = OpenAICompatibleEmbeddingAdapter(
+        store, config, transport=SequenceTransport([])
+    )
+    reranker = OpenAICompatibleRerankerAdapter(
+        store, config, transport=SequenceTransport([])
+    )
+
+    run = HybridRetrievalPipeline(documents, index, embedding, reranker).search(
+        "agent",
+        document_ids=("doc-missing",),
+    )
+
+    assert run.rerank_status == "scope_empty"
+    assert run.bm25.hits == run.dense.hits == run.final.hits == ()
+    assert run.embedding_request_artifact == ""
+    assert run.rerank_request_artifact is None
+
+
+def test_document_scope_identifier_normalization(tmp_path):
+    documents = (
+        RetrievalDocument(
+            "chunk-1",
+            "first paper text",
+            "paper-2401.12345v1",
+            {"paper_id": "2401.12345v1", "filename": "2401.12345v1.pdf"},
+        ),
+        RetrievalDocument(
+            "chunk-2",
+            "second paper text",
+            "doc-9999.00001",
+            {"document_id": "doc-9999.00001"},
+        ),
+    )
+    index = LanceDBDenseIndex(tmp_path / "db")
+    index.publish(documents, ((1.0, 0.0), (0.0, 1.0)))
+    store = LocalArtifactStore(tmp_path / "artifacts")
+    config = ProviderConfig("https://provider.example/v1", "secret", "chat")
+    embedding = OpenAICompatibleEmbeddingAdapter(
+        store, config, transport=SequenceTransport([])
+    )
+    reranker = OpenAICompatibleRerankerAdapter(
+        store, config, transport=SequenceTransport([])
+    )
+    pipeline = HybridRetrievalPipeline(documents, index, embedding, reranker)
+
+    # 1. Matching by bare arXiv ID without version or prefix
+    resolved = pipeline.resolve_scope(("2401.12345",))
+    assert tuple(d.document_id for d in resolved) == ("chunk-1",)
+
+    # 2. Matching with .pdf extension
+    resolved = pipeline.resolve_scope(("2401.12345.pdf",))
+    assert tuple(d.document_id for d in resolved) == ("chunk-1",)
+
+    # 3. Matching with different prefix (e.g. doc- vs paper-)
+    resolved = pipeline.resolve_scope(("doc-2401.12345",))
+    assert tuple(d.document_id for d in resolved) == ("chunk-1",)
+
+    # 4. Matching bare id without doc- prefix
+    resolved = pipeline.resolve_scope(("9999.00001",))
+    assert tuple(d.document_id for d in resolved) == ("chunk-2",)
+

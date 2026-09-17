@@ -203,14 +203,24 @@ class DurableResearchRuntimeAdapter:
             raise ValueError("durable research requires objective")
         if not isinstance(max_subquestions, int):
             raise ValueError("max_subquestions must be an integer")
+        options = {
+            "task_kind": submission.task_kind,
+            "max_subquestions": max_subquestions,
+            "idempotency_key": submission.idempotency_key,
+            "parent_run_id": submission.input.get("parent_run_id"),
+            "follow_up_question": submission.input.get("follow_up_question"),
+            "conversation_id": submission.input.get("conversation_id"),
+        }
+        document_ids = tuple(
+            str(item).strip()
+            for item in (submission.input.get("document_ids") or ())
+            if str(item).strip()
+        )
+        if document_ids:
+            options["document_ids"] = document_ids
         return self.runtime.submit(
             objective,
-            task_kind=submission.task_kind,
-            max_subquestions=max_subquestions,
-            idempotency_key=submission.idempotency_key,
-            parent_run_id=submission.input.get("parent_run_id"),
-            follow_up_question=submission.input.get("follow_up_question"),
-            conversation_id=submission.input.get("conversation_id"),
+            **options,
         )
 
     def work_once(self, *, now: str | None = None) -> Any:

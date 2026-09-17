@@ -518,7 +518,13 @@ class ChatService:
 
         started = time.monotonic()
         retrieval_started = time.monotonic()
-        run = self._retrieval.search(normalized)
+        if document_ids:
+            run = self._retrieval.search(
+                normalized,
+                document_ids=tuple(document_ids),
+            )
+        else:
+            run = self._retrieval.search(normalized)
         retrieval_ms = int((time.monotonic() - retrieval_started) * 1000)
         allowed_docs = set(document_ids) if document_ids else None
         text_source_hits = run.text_run.final.hits if hasattr(run, "text_run") and run.text_run else run.final.hits

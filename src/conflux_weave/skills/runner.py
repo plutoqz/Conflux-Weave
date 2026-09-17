@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import time
 from typing import Any
@@ -265,58 +266,208 @@ class SkillRunner:
                     elapsed_seconds=time.monotonic() - start_time,
                 )
 
-            # Check if any paper is explicitly nonexistent
-            clean_pids = [str(p).strip() for p in paper_ids if str(p).strip()]
-            if any("nonexistent" in p.lower() or "notfound" in p.lower() for p in clean_pids):
+            clean_pids = list(
+                dict.fromkeys(str(p).strip() for p in paper_ids if str(p).strip())
+            )
+            if not clean_pids:
                 return SkillExecutionResult(
                     skill_id=skill.skill_id,
                     status="failed",
-                    summary="指定的学术论文不存在",
+                    summary="Missing paper_ids",
                     content="",
-                    error=f"指定的学术论文在资料库中不存在: {clean_pids}，请重新选择有效文献",
+                    error="未指定有效的待比对学术论文 ID",
+                    elapsed_seconds=time.monotonic() - start_time,
+                )
+            retrieval = self._retrieval_pipeline
+            document_by_id = getattr(retrieval, "document_by_id", None)
+            if retrieval is None or not callable(getattr(retrieval, "search", None)) or not isinstance(document_by_id, dict):
+                return SkillExecutionResult(
+                    skill_id=skill.skill_id,
+                    status="failed",
+                    summary="文献检索工具不可用",
+                    content="",
+                    error="文献对比 Skill 需要已就绪的资料索引与检索管线",
                     elapsed_seconds=time.monotonic() - start_time,
                 )
 
-            # Real tool calls (get_paper_evidence, rag_hybrid_search)
+            documents_by_paper: dict[str, list[Any]] = {pid: [] for pid in clean_pids}
+            for document in document_by_id.values():
+                locator = getattr(document, "locator", None)
+                locator = locator if isinstance(locator, dict) else {}
+                identities = {
+                    str(getattr(document, "document_id", "") or ""),
+                    str(getattr(document, "source_snapshot_id", "") or ""),
+                    str(locator.get("document_id") or ""),
+                    str(locator.get("paper_id") or ""),
+                    str(locator.get("source_id") or ""),
+                }
+                for pid in clean_pids:
+                    if pid in identities:
+                        documents_by_paper[pid].append(document)
+
+            missing_pids = [pid for pid, documents in documents_by_paper.items() if not documents]
+            if missing_pids:
+                return SkillExecutionResult(
+                    skill_id=skill.skill_id,
+                    status="failed",
+                    summary="指定的学术论文不存在或尚未建立索引",
+                    content="",
+                    error=f"资料索引中未找到以下文献: {missing_pids}",
+                    elapsed_seconds=time.monotonic() - start_time,
+                )
+
+            dims = request.inputs.get("focus_dimensions") or ["理论假设", "架构创新", "关键指标", "计算开销", "局限性"]
+            retrieval_query = "；".join(str(item) for item in dims if str(item).strip()) or "核心方法与实验结论"
+            evidence_records: list[dict[str, Any]] = []
             for pid in clean_pids:
+                try:
+                    scoped_run = retrieval.search(
+                        retrieval_query,
+                        document_ids=(pid,),
+                    )
+                except Exception as exc:
+                    return SkillExecutionResult(
+                        skill_id=skill.skill_id,
+                        status="failed",
+                        summary=f"文献证据检索失败: {pid}",
+                        content="",
+                        error=str(exc),
+                        elapsed_seconds=time.monotonic() - start_time,
+                    )
+                hits = self._final_retrieval_hits(scoped_run)
+                selected_documents = []
+                allowed_chunk_ids = {
+                    str(getattr(document, "document_id", ""))
+                    for document in documents_by_paper[pid]
+                }
+                for hit in hits:
+                    chunk_id = str(
+                        getattr(hit, "document_id", None)
+                        or getattr(hit, "hit_id", "")
+                    )
+                    document = document_by_id.get(chunk_id)
+                    if document is not None and chunk_id in allowed_chunk_ids:
+                        selected_documents.append(document)
+                if not selected_documents:
+                    selected_documents = documents_by_paper[pid][:3]
+                for document in selected_documents[:3]:
+                    evidence_records.append(
+                        {
+                            "paper_id": pid,
+                            "chunk_id": str(getattr(document, "document_id", "")),
+                            "source_snapshot_id": str(
+                                getattr(document, "source_snapshot_id", "") or ""
+                            ),
+                            "locator": dict(getattr(document, "locator", None) or {}),
+                            "quote": str(getattr(document, "text", ""))[:1600],
+                        }
+                    )
                 tool_traces.append({
                     "tool": "get_paper_evidence",
                     "tool_name": "get_paper_evidence",
                     "paper_id": pid,
                     "status": "success",
-                    "summary": f"提取论文 `{pid}` 的权威章节锚点、关键参数与实验设计片段",
+                    "returned_count": len(selected_documents[:3]),
+                    "chunk_ids": [
+                        str(getattr(item, "document_id", ""))
+                        for item in selected_documents[:3]
+                    ],
+                    "summary": f"从已发布资料索引提取论文 `{pid}` 的证据片段",
                 })
 
+            try:
+                combined_run = retrieval.search(
+                    retrieval_query,
+                    document_ids=tuple(clean_pids),
+                )
+            except Exception as exc:
+                return SkillExecutionResult(
+                    skill_id=skill.skill_id,
+                    status="failed",
+                    summary="限定文献联合检索失败",
+                    content="",
+                    error=str(exc),
+                    elapsed_seconds=time.monotonic() - start_time,
+                )
+            allowed_combined_chunks = {
+                str(getattr(document, "document_id", ""))
+                for documents in documents_by_paper.values()
+                for document in documents
+            }
+            combined_hits = tuple(
+                hit
+                for hit in self._final_retrieval_hits(combined_run)
+                if str(
+                    getattr(hit, "document_id", None)
+                    or getattr(hit, "hit_id", "")
+                )
+                in allowed_combined_chunks
+            )
             tool_traces.append({
                 "tool": "rag_hybrid_search",
                 "tool_name": "rag_hybrid_search",
-                "query": " ".join(clean_pids),
+                "query": retrieval_query,
                 "status": "success",
-                "summary": f"完成 {len(clean_pids)} 篇文献的横向多路召回与 RRF 融合排序",
+                "document_ids": clean_pids,
+                "returned_count": len(combined_hits),
+                "chunk_ids": [
+                    str(
+                        getattr(hit, "document_id", None)
+                        or getattr(hit, "hit_id", "")
+                    )
+                    for hit in combined_hits
+                ],
+                "summary": f"在限定的 {len(clean_pids)} 篇文献内完成混合检索与排序",
             })
 
-            dims = request.inputs.get("focus_dimensions") or ["理论假设", "架构创新", "关键指标", "计算开销", "局限性"]
-            table_header = "| 论文 ID | " + " | ".join(dims) + " |\n"
-            table_sep = "| " + " | ".join(["---"] * (len(dims) + 1)) + " |\n"
-            table_rows = ""
-            for p in clean_pids:
-                cols = [f"`{p}`"] + [f"基于 `{p}` 证据分析: {dim}" for dim in dims]
-                table_rows += "| " + " | ".join(cols) + " |\n"
-
-            content = f"""# 学术文献多源横向对比分析综述报告
-
-## 1. 结构化横向对比矩阵
-{table_header}{table_sep}{table_rows}
-
-## 2. 核心技术代际演进与架构差异
-- 目标文献（{', '.join(f'`{p}`' for p in clean_pids)}）在核心机理与拓扑结构上呈现清晰的演进逻辑；
-- 在参数量级、推理吞吐与精度指标间展示了不同的设计权衡取舍。
-
-## 3. 共性局限与未决学术挑战
-- 边界泛化能力与小样本鲁棒性仍存在理论瓶颈；
-- 建议在后续研究中重点引入细粒度消融实验以确认模块边际收益。
-"""
-            tokens = max(1, len(content) // 4)
+            evidence_payload = {
+                "paper_ids": clean_pids,
+                "focus_dimensions": list(dims),
+                "evidence": evidence_records,
+            }
+            if self._provider is not None:
+                try:
+                    completion = self._provider.complete(
+                        system_prompt=(
+                            "你正在执行文献对比 Skill。只能使用给定 evidence 中的原文片段；"
+                            "不得补充片段未支持的指标、优越性、因果关系或实验结论。"
+                            "证据不足的维度必须明确写为未找到充分证据，并为每项判断标注 chunk_id。"
+                        ),
+                        user_prompt=json.dumps(evidence_payload, ensure_ascii=False),
+                    )
+                except Exception as exc:
+                    return SkillExecutionResult(
+                        skill_id=skill.skill_id,
+                        status="failed",
+                        summary=f"文献对比生成失败: {exc}",
+                        content="",
+                        error=str(exc),
+                        elapsed_seconds=time.monotonic() - start_time,
+                    )
+                content = completion.content
+                tokens = completion.total_tokens
+            else:
+                lines = ["# 文献证据对比摘录", ""]
+                for pid in clean_pids:
+                    lines.extend([f"## {pid}", ""])
+                    paper_evidence = [
+                        item for item in evidence_records if item["paper_id"] == pid
+                    ]
+                    for item in paper_evidence:
+                        locator = item["locator"]
+                        location = ", ".join(
+                            f"{key}={value}" for key, value in locator.items()
+                        ) or "位置未标注"
+                        quote = " ".join(item["quote"].split())
+                        lines.append(
+                            f"- `{item['chunk_id']}` ({location})：{quote}"
+                        )
+                    lines.append("")
+                lines.append(
+                    "> 当前为确定性证据摘录；未调用模型，不对证据片段之外的优越性或因果关系作结论。"
+                )
+                content = "\n".join(lines)
+                tokens = 0
 
             # Persist artifact
             if self._artifact_store is not None:
@@ -347,6 +498,7 @@ class SkillRunner:
                     "category": skill.category.value,
                     "inputs": request.inputs,
                     "tool_traces": tool_traces,
+                    "evidence": evidence_records,
                 },
                 artifacts=tuple(artifacts),
                 elapsed_seconds=elapsed,
@@ -410,6 +562,15 @@ class SkillRunner:
             str_val = str(value) if not isinstance(value, (dict, list)) else str(value)
             rendered = rendered.replace(f"{{{key}}}", str_val)
         return rendered
+
+    @staticmethod
+    def _final_retrieval_hits(run: Any) -> tuple[Any, ...]:
+        text_run = getattr(run, "text_run", None)
+        if text_run is not None:
+            final = getattr(text_run, "final", None)
+            return tuple(getattr(final, "hits", ()) or ())
+        final = getattr(run, "final", None)
+        return tuple(getattr(final, "hits", ()) or ())
 
     def _generate_offline_skill_response(self, skill_id: str, inputs: dict[str, Any]) -> str:
         """Produce rich deterministic output for testing and zero-network environments."""
