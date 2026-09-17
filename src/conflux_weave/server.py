@@ -567,6 +567,7 @@ def create_app(
                         input={
                             "objective": request.question,
                             "max_subquestions": 3,
+                            **({"document_ids": list(request.document_ids)} if request.document_ids else {}),
                         },
                         requested_agent="durable_verified_research@v1",
                     )
@@ -748,6 +749,7 @@ def create_app(
                     conversation_mode=request.mode,
                     web_search=request.web_search,
                     thinking_depth=request.thinking_depth,
+                    document_ids=request.document_ids,
                 )
                 mark_library_usage([str(item.get("source_snapshot_id", "")) for item in result.get("citations", ())])
             else:

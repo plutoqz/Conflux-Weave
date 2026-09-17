@@ -1,5 +1,20 @@
 import React, { useState, useEffect } from "react";
-import { Cpu, Bookmark, Trash2, Server, RefreshCw, Plus, Copy, Check, Type } from "lucide-react";
+import {
+  Cpu,
+  Bookmark,
+  Trash2,
+  Server,
+  RefreshCw,
+  Plus,
+  Copy,
+  Check,
+  Type,
+  Layers,
+  Sparkles,
+  Search,
+  ShieldCheck,
+  Image as ImageIcon,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
@@ -7,6 +22,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { useWorkbenchStore, type FontSizePreference } from "@/stores/useWorkbenchStore";
 import { api } from "@/services/api";
+import { cn } from "@/lib/utils";
 import type { MCPServer } from "@/types/workbench";
 
 export const SettingsView: React.FC = () => {
@@ -402,6 +418,156 @@ export const SettingsView: React.FC = () => {
               </Button>
             </div>
           </form>
+        </CardContent>
+      </Card>
+
+      {/* Task Capability Matrix (U17) */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center space-x-2">
+            <Layers className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+            <div>
+              <CardTitle className="text-base">核心能力与任务就绪矩阵 (Task Capability Matrix)</CardTitle>
+              <CardDescription className="text-xs">
+                针对各业务任务模块的前置依赖与当前服务进程的实际就绪情况自检，清晰呈现降级行为。
+              </CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {/* 1. Chat */}
+            <div className="p-3.5 rounded-xl border border-border/70 bg-card/60 flex flex-col justify-between space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2 font-medium text-xs">
+                  <Sparkles className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                  <span className="font-semibold text-foreground">问答与对话 (Chat)</span>
+                </div>
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "text-[10px] font-mono",
+                    effective?.model
+                      ? "border-emerald-600/40 text-emerald-700 dark:text-emerald-300 bg-emerald-500/10"
+                      : "border-amber-600/40 text-amber-700 dark:text-amber-300 bg-amber-500/10"
+                  )}
+                >
+                  {effective?.model ? "就绪 (Ready)" : "未配置 (Unconfigured)"}
+                </Badge>
+              </div>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                驱动即时问答、学术导读、摘要提炼与对话草稿润色。
+              </p>
+              <div className="pt-2 border-t border-border/40 text-[11px] font-mono text-muted-foreground flex justify-between">
+                <span>依赖: model ({effective?.model || "未设置"})</span>
+                <span>{effective?.api_key_configured ? "Key ✓" : "Key ✗"}</span>
+              </div>
+            </div>
+
+            {/* 2. Embedding */}
+            <div className="p-3.5 rounded-xl border border-border/70 bg-card/60 flex flex-col justify-between space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2 font-medium text-xs">
+                  <Search className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                  <span className="font-semibold text-foreground">语义向量 (Embedding)</span>
+                </div>
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "text-[10px] font-mono",
+                    effective?.embedding_model
+                      ? "border-blue-600/40 text-blue-700 dark:text-blue-300 bg-blue-500/10"
+                      : "border-amber-600/40 text-amber-700 dark:text-amber-300 bg-amber-500/10"
+                  )}
+                >
+                  {effective?.embedding_model ? "向量就绪 (Vector Ready)" : "已降级 (Recency 兜底)"}
+                </Badge>
+              </div>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                资料库向量索引、RAG 语义检索与分层记忆语义召回。未配置时降级为时效性与关键词匹配。
+              </p>
+              <div className="pt-2 border-t border-border/40 text-[11px] font-mono text-muted-foreground">
+                <span>依赖: {effective?.embedding_model || "未指定（自动降级为 recency 兜底）"}</span>
+              </div>
+            </div>
+
+            {/* 3. Reranker */}
+            <div className="p-3.5 rounded-xl border border-border/70 bg-card/60 flex flex-col justify-between space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2 font-medium text-xs">
+                  <ShieldCheck className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+                  <span className="font-semibold text-foreground">证据精排 (Reranker)</span>
+                </div>
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "text-[10px] font-mono",
+                    effective?.reranker_model
+                      ? "border-purple-600/40 text-purple-700 dark:text-purple-300 bg-purple-500/10"
+                      : "border-slate-500/40 text-slate-600 dark:text-slate-400 bg-slate-500/10"
+                  )}
+                >
+                  {effective?.reranker_model ? "二阶精排启用" : "可选 (向量余弦截断)"}
+                </Badge>
+              </div>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                对知识库检索与网络搜索候选段落进行交叉精排。未配置时直接使用初始检索相似度分。
+              </p>
+              <div className="pt-2 border-t border-border/40 text-[11px] font-mono text-muted-foreground">
+                <span>依赖: {effective?.reranker_model || "未指定（可选能力）"}</span>
+              </div>
+            </div>
+
+            {/* 4. Visual Assets */}
+            <div className="p-3.5 rounded-xl border border-border/70 bg-card/60 flex flex-col justify-between space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2 font-medium text-xs">
+                  <ImageIcon className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                  <span className="font-semibold text-foreground">视觉图表实证 (Visual Assets)</span>
+                </div>
+                <Badge
+                  variant="outline"
+                  className="text-[10px] font-mono border-emerald-600/40 text-emerald-700 dark:text-emerald-300 bg-emerald-500/10"
+                >
+                  内置就绪 (Built-in)
+                </Badge>
+              </div>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                本地沙箱自动提取学术论文高清矢量图与位图插图，并在证据链、综述报告中直接图文对照。
+              </p>
+              <div className="pt-2 border-t border-border/40 text-[11px] font-mono text-muted-foreground">
+                <span>依赖: 本地 PyMuPDF / OCR 解析沙箱</span>
+              </div>
+            </div>
+
+            {/* 5. Deep Research */}
+            <div className="p-3.5 rounded-xl border border-border/70 bg-card/60 flex flex-col justify-between space-y-2 md:col-span-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2 font-medium text-xs">
+                  <Cpu className="h-4 w-4 text-emerald-700 dark:text-emerald-300" />
+                  <span className="font-semibold text-foreground">深度研究引擎 (Deep Research)</span>
+                </div>
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "text-[10px] font-mono",
+                    (effective?.engine_model || effective?.model)
+                      ? "border-emerald-600/40 text-emerald-700 dark:text-emerald-300 bg-emerald-500/10"
+                      : "border-amber-600/40 text-amber-700 dark:text-amber-300 bg-amber-500/10"
+                  )}
+                >
+                  {(effective?.engine_model || effective?.model) ? "流水线就绪" : "未就绪"}
+                </Badge>
+              </div>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                自主目标分解、文献与网络证据多阶段求交、动态反思与完整学术综述产出。优先使用专用 Engine 模型，未指定时平滑回退至主 Chat 模型。
+              </p>
+              <div className="pt-2 border-t border-border/40 text-[11px] font-mono text-muted-foreground flex justify-between">
+                <span>有效执行模型: {effective?.engine_model || effective?.model || "未配置"}</span>
+                <span>内置预算硬截断与死循环看门狗保护 ✓</span>
+              </div>
+            </div>
+          </div>
         </CardContent>
       </Card>
 

@@ -503,6 +503,7 @@ class ChatService:
         conversation_mode: str | None = None,
         web_search: bool = False,
         thinking_depth: str = "deep",
+        document_ids: Sequence[str] | None = None,
     ) -> dict:
         """W3.1 模式 B：本地语料检索 → 综合成文 → 确定性后检（未核验聚合）。"""
         if self._retrieval is None:
@@ -519,6 +520,7 @@ class ChatService:
         retrieval_started = time.monotonic()
         run = self._retrieval.search(normalized)
         retrieval_ms = int((time.monotonic() - retrieval_started) * 1000)
+        allowed_docs = set(document_ids) if document_ids else None
         text_source_hits = run.text_run.final.hits if hasattr(run, "text_run") and run.text_run else run.final.hits
         snippets = []
         for hit in text_source_hits:
@@ -526,25 +528,84 @@ class ChatService:
             document = self._retrieval.document_by_id.get(doc_id)
             if document is None:
                 continue
+            source_snap = getattr(hit, "source_snapshot_id", "") or (getattr(document, "source_snapshot_id", None) or "")
+            locator = getattr(hit, "locator", {}) or (getattr(document, "locator", None) or {})
+            if allowed_docs is not None:
+                matches = (
+                    doc_id in allowed_docs
+                    or source_snap in allowed_docs
+                    or (isinstance(locator, dict) and (
+                        locator.get("document_id") in allowed_docs
+                        or locator.get("paper_id") in allowed_docs
+                        or locator.get("source_id") in allowed_docs
+                    ))
+                )
+                if not matches:
+                    continue
             snippets.append(
                 {
                     "index": len(snippets) + 1,
                     "chunk_id": doc_id,
                     "score": getattr(hit, "score", 0.0),
-                    "source_snapshot_id": getattr(hit, "source_snapshot_id", "") or "",
-                    "locator": getattr(hit, "locator", {}) or {},
+                    "source_snapshot_id": source_snap,
+                    "locator": locator,
                     "text": document.text[:RAG_SNIPPET_CHARS],
                 }
             )
             if len(snippets) >= RAG_SNIPPET_LIMIT:
                 break
         if not snippets:
+            if allowed_docs is not None:
+                now = _utc_now()
+                self._append(
+                    ChatMessage(
+                        f"msg-{uuid4().hex}", conversation, "user", "rag", normalized, now, turn_id=turn_id, sequence=sequence
+                    ),
+                    conversation_mode=conversation_mode,
+                )
+                assistant = ChatMessage(
+                    f"msg-{uuid4().hex}", conversation, "assistant", "rag",
+                    "在您限定的文献集合中，未检索到与提问相关的有效支撑内容。限定资料不足以回答该问题，已避免超出选定文献范围进行推测。",
+                    _utc_now(),
+                    None, turn_id, sequence,
+                )
+                self._append(assistant, conversation_mode=conversation_mode)
+                return {
+                    "message_id": assistant.message_id,
+                    "conversation_id": conversation,
+                    "role": assistant.role,
+                    "mode": assistant.mode,
+                    "content": assistant.content,
+                    "created_at": assistant.created_at,
+                    "provider_response_id": "",
+                    "verification": VERIFICATION_UNVERIFIED_AGGREGATION,
+                    "checks": {
+                        "status": "degraded",
+                        "violations": ["insufficient_evidence_in_specified_scope"],
+                    },
+                    "citations": [],
+                    "timings_ms": {
+                        "retrieval": retrieval_ms,
+                        "total": int((time.monotonic() - started) * 1000),
+                    },
+                    "memory_candidates": (),
+                    "image_assets": (),
+                }
             raise ValueError("knowledge corpus returned no matching chunks")
 
         # 多模态图表与插图抽取（P2.3 / P9）
         image_assets = []
         for hit in getattr(run, "fused_hits", ()) or ():
             if getattr(hit, "modality", "") == "image" and getattr(hit, "asset_id", None):
+                snap = getattr(hit, "source_snapshot_id", "")
+                loc = getattr(hit, "locator", {}) or {}
+                if allowed_docs is not None:
+                    matches = (
+                        snap in allowed_docs
+                        or (isinstance(loc, dict) and (loc.get("document_id") in allowed_docs or loc.get("paper_id") in allowed_docs))
+                    )
+                    if not matches:
+                        continue
                 cap = getattr(hit, "text", "") or getattr(hit, "caption", "") or (hit.locator.get("caption") if isinstance(hit.locator, dict) else "") or "学术文献相关图表"
                 p = getattr(hit, "page", None) or (hit.locator.get("page") if isinstance(hit.locator, dict) else None)
                 score = getattr(hit, "score", 0.0)

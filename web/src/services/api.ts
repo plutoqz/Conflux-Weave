@@ -336,6 +336,7 @@ export const api = {
     mode?: string;
     web_search?: boolean;
     thinking_depth?: "quick" | "deep" | "rigorous";
+    document_ids?: string[];
   }) =>
     request<any>("/api/v1/chat", { method: "POST", body: JSON.stringify(data) }),
 
@@ -360,6 +361,37 @@ export const api = {
       `/api/v1/library/documents/${encodeURIComponent(documentId)}/lifecycle`,
       { method: "POST", body: JSON.stringify({ action }) }
     ),
+  uploadLibraryDocument: async (file: File) => {
+    const res = await fetch(`/api/v1/library/documents?filename=${encodeURIComponent(file.name)}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": file.type || "application/octet-stream",
+      },
+      body: file,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }));
+      throw new Error(err.message || `上传失败 (${res.status})`);
+    }
+    return res.json();
+  },
+  reindexLibraryDocument: (documentId: string) =>
+    request<{ status: string; document_id?: string; added_count?: number }>(
+      `/api/v1/library/documents/${encodeURIComponent(documentId)}/index`,
+      { method: "POST" }
+    ),
+  batchLibraryDocuments: (documentIds: string[], action: "index" | "remove") =>
+    request<{
+      status: string;
+      action: string;
+      document_count: number;
+      indexed_count?: number;
+      deleted_count?: number;
+      failures?: Array<{ document_id: string; error: string }>;
+    }>("/api/v1/library/documents/batch", {
+      method: "POST",
+      body: JSON.stringify({ document_ids: documentIds, action }),
+    }),
   searchPapers: (params: Record<string, string>) => {
     const qs = new URLSearchParams(params).toString();
     return request<{ items: any[]; total?: number; deduplicated_count?: number; sources?: any[] }>(

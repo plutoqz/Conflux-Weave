@@ -367,10 +367,23 @@ class DocumentAgent:
 
         # Dual-mode: If LLM chat_adapter is available, attempt structured Chinese analysis
         llm_note_data: dict[str, Any] | None = None
+        covered_segment_ids: set[str] = set()
         if self.chat_adapter is not None and imported.segments:
             try:
+                sample_segments = imported.segments[:12]
+                if focus:
+                    focus_lower = focus.lower()
+                    focus_matches = [
+                        s for s in imported.segments
+                        if focus_lower in str(s.locator.get("heading", "")).lower() or focus_lower in s.text[:200].lower()
+                    ]
+                    if focus_matches:
+                        other_segs = [s for s in imported.segments if s not in focus_matches]
+                        sample_segments = (focus_matches + other_segs)[:12]
+                covered_segment_ids.update(s.segment_id for s in sample_segments)
+
                 sample_texts = []
-                for s in imported.segments[:12]:
+                for s in sample_segments:
                     h = s.locator.get("heading", "")
                     sample_texts.append(f"### 章节: {h}\n{s.text[:1000]}")
                 context_text = "\n\n".join(sample_texts)
@@ -382,7 +395,7 @@ class DocumentAgent:
                     "2. 在技术方法/架构章节中，必须包含一个多维度技术机制对比 Markdown 表格（包含：对比维度、传统方案/基线、本文方案、技术突破）；\n"
                     "3. 在实验评测章节中，必须详细解读基准测试、核心指标与量化提升结果，并包含一个关键实验结果对比 Markdown 表格；\n"
                     "4. 每个章节正文直接围绕该章节的核心论点展开，随后展开技术机制或实验深度论述，严禁添加如“【本节研读与核心论点】”等模板化占位标签；\n"
-                    "【数学公式与 JSON 转义规范】：包含数学公式时使用标准 LaTeX 语法（行内 $...$，行间 $$...$$）。特别注意：在 JSON 字符串中，反斜杠必须使用双反斜杠转义（如 \\\\text, \\\\frac, \\\\theta, \\\\rho, \\\\tau），切勿输出单反斜杠导致转义错误；\n"
+                    "【数学公式与 JSON 转义规范】：包含数学公式时使用标准 LaTeX语法（行内 $...$，行间 $$...$$）。特别注意：在 JSON 字符串中，反斜杠必须使用双反斜杠转义（如 \\\\text, \\\\frac, \\\\theta, \\\\rho, \\\\tau），切勿输出单反斜杠导致转义错误；\n"
                     "输出格式必须为合法 JSON 字典，字段包括：\n"
                     "- title: string, 中文研读标题（若原题为英文，请给出严谨的中文译名）\n"
                     "- executive_summary: string, 核心结论与执行摘要（阐述核心问题、创新方案与核心贡献，200-400字）\n"
@@ -430,7 +443,7 @@ class DocumentAgent:
                         "definition": str(item["definition"]).strip(),
                     })
 
-            # Sections from LLM
+            # Sections from LLM with accurate source_segments anchoring
             for idx, sec_dict in enumerate(llm_note_data.get("sections", []), start=1):
                 if not isinstance(sec_dict, dict):
                     continue
@@ -440,13 +453,27 @@ class DocumentAgent:
                     a["asset_id"] for a in visual_assets
                     if stitle in str(a.get("caption", ""))
                 ]
+                matched_segs = [
+                    s.segment_id for s in imported.segments
+                    if s.segment_id in covered_segment_ids and (
+                        stitle in str(s.locator.get("heading", ""))
+                        or str(s.locator.get("heading", "")) in stitle
+                        or _translate_heading(str(s.locator.get("heading", ""))) in stitle
+                        or stitle in _translate_heading(str(s.locator.get("heading", "")))
+                    )
+                ]
+                if not matched_segs:
+                    matched_segs = [
+                        s.segment_id for s in imported.segments
+                        if s.segment_id in covered_segment_ids and s.text[:40] in scontent
+                    ]
                 sections.append(
                     NoteSection(
                         section_id=f"{imported.document_id}:sec-{idx:03d}",
                         title=stitle,
                         level=2,
                         content=scontent,
-                        source_segments=tuple(s.segment_id for s in imported.segments[:4]),
+                        source_segments=tuple(matched_segs),
                         citations=(f"{imported.document_id}#{stitle}",),
                         asset_refs=tuple(matched_assets),
                     )
@@ -454,6 +481,7 @@ class DocumentAgent:
 
         # Fallback / Deterministic Academic Chinese Synthesis
         if not sections:
+            covered_segment_ids.update(s.segment_id for s in imported.segments)
             heading_groups: dict[str, list[str]] = {}
             for seg in imported.segments:
                 h = str(seg.locator.get("heading", "") or "核心内容").strip()
@@ -484,13 +512,14 @@ class DocumentAgent:
                         f"{combined_text[:3000]}"
                     )
 
+                h_segs = tuple(s.segment_id for s in imported.segments if str(s.locator.get("heading", "") or "核心内容").strip() == h)
                 sections.append(
                     NoteSection(
                         section_id=sec_id,
                         title=cn_h,
                         level=2,
                         content=sec_content,
-                        source_segments=tuple(s.segment_id for s in imported.segments if s.locator.get("heading") == h),
+                        source_segments=h_segs,
                         citations=(f"{imported.document_id}#{cn_h}",),
                         asset_refs=tuple(matched_assets),
                     )
@@ -527,6 +556,51 @@ class DocumentAgent:
 
             if focus:
                 summary = f"【关注焦点: {focus}】\n" + summary
+
+        total_segs = len(imported.segments)
+        all_headings = []
+        seen_h = set()
+        for s in imported.segments:
+            h = str(s.locator.get("heading", "") or "正文").strip()
+            if h not in seen_h:
+                seen_h.add(h)
+                all_headings.append(h)
+
+        if focus:
+            reading_mode = "section_focused"
+            mode_label = "针对章节精读"
+        elif total_segs <= 12 or len(covered_segment_ids) >= total_segs:
+            reading_mode = "full_text"
+            mode_label = "覆盖全文的研读"
+        else:
+            reading_mode = "sampled_overview"
+            mode_label = "摘要与核心章节研读"
+
+        covered_headings = []
+        for s in imported.segments:
+            if s.segment_id in covered_segment_ids:
+                h = str(s.locator.get("heading", "") or "正文").strip()
+                if h not in covered_headings:
+                    covered_headings.append(h)
+
+        uncovered_headings = [h for h in all_headings if h not in covered_headings]
+        coverage_pct = round(len(covered_segment_ids) / max(1, total_segs) * 100, 1)
+
+        coverage_meta = {
+            "mode": reading_mode,
+            "mode_label": mode_label,
+            "total_segments": total_segs,
+            "covered_segments_count": len(covered_segment_ids),
+            "uncovered_segments_count": max(0, total_segs - len(covered_segment_ids)),
+            "coverage_percentage": coverage_pct,
+            "covered_headings": covered_headings,
+            "uncovered_headings": uncovered_headings,
+            "truncated": len(covered_segment_ids) < total_segs,
+        }
+
+        coverage_banner = f"【研读覆盖度: {mode_label}】覆盖 {len(covered_segment_ids)}/{total_segs} 个正文片段 ({coverage_pct}%){' · 未覆盖章节: ' + ', '.join(uncovered_headings[:3]) if uncovered_headings else ''}"
+        if coverage_banner not in summary:
+            summary = coverage_banner + "\n\n" + summary
 
         doc_full_text = "\n".join(seg.text for seg in imported.segments) if imported.segments else ""
         doc_char_count = len(doc_full_text)
@@ -572,6 +646,7 @@ class DocumentAgent:
                 "word_count": note_word_count,
                 "source_character_count": doc_char_count,
                 "source_word_count": doc_word_count,
+                "reading_coverage": coverage_meta,
             },
         )
 

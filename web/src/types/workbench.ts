@@ -129,6 +129,7 @@ export interface ChatMessage {
   created_at?: string;
   mode?: "auto" | "direct" | "rag" | "deep" | "document" | "project";
   run_id?: string;
+  document_ids?: string[];
   memory_candidates?: Array<{
     candidate_id: string;
     statement?: string;
@@ -249,7 +250,19 @@ export interface DocumentNote {
   content_markdown?: string;
   content_html?: string;
   created_at: string;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, any> & {
+    reading_coverage?: {
+      mode: string;
+      mode_label: string;
+      total_segments: number;
+      covered_segments_count: number;
+      uncovered_segments_count: number;
+      coverage_percentage: number;
+      covered_headings: string[];
+      uncovered_headings: string[];
+      truncated: boolean;
+    };
+  };
   revisions?: Array<{ note_id?: string; revision_id?: string; version: number; instruction?: string; created_at: string }>;
 }
 

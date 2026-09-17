@@ -86,6 +86,8 @@ class ChatMessageRequest(_ApiModel):
     mode: Literal["auto", "direct", "rag", "deep", "document", "project"] = "direct"
     web_search: bool = False
     thinking_depth: Literal["quick", "deep", "rigorous"] = "deep"
+    document_ids: tuple[str, ...] | None = None
+
 
 
 class RouterRequest(_ApiModel):
@@ -195,11 +197,13 @@ class VerifiedResearchTaskRequest(_ApiModel):
     objective: str = Field(min_length=1, max_length=4_000)
     mode: Literal["single", "managed"] = "single"
     max_subquestions: int = Field(default=4, ge=2, le=6)
+    document_ids: tuple[str, ...] | None = None
 
 
 class DeepResearchTaskRequest(_ApiModel):
     objective: str = Field(min_length=1, max_length=4_000)
     conversation_id: str | None = Field(default=None, max_length=64)
+    document_ids: tuple[str, ...] | None = None
 
     @field_validator("objective")
     @classmethod

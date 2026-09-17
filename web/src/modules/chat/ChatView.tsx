@@ -27,9 +27,15 @@ import { marked } from "marked";
 import { renderMarkdownWithMath } from "@/lib/math";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { api } from "@/services/api";
 import { cn } from "@/lib/utils";
-import type { ChatMessage, ConversationSummary } from "@/types/workbench";
+import type { ChatMessage, ConversationSummary, LibraryDocument } from "@/types/workbench";
 
 const renderMarkdown = (content: string) => {
   try {
@@ -414,6 +420,15 @@ export const ChatView: React.FC = () => {
       return {};
     }
   });
+  const [availableDocs, setAvailableDocs] = useState<LibraryDocument[]>([]);
+  const [selectedScopeDocIds, setSelectedScopeDocIds] = useState<string[]>([]);
+  const [scopeDialogOpen, setScopeDialogOpen] = useState<boolean>(false);
+
+  useEffect(() => {
+    api.getDocuments("active").then((res) => {
+      setAvailableDocs(res.items || []);
+    }).catch(() => {});
+  }, []);
 
   const handleCandidateAction = async (candidateId: string, action: "approve" | "reject") => {
     setCandidateActions((prev) => ({ ...prev, [candidateId]: "loading" }));
@@ -622,6 +637,7 @@ export const ChatView: React.FC = () => {
       role: "user",
       content: q,
       mode,
+      document_ids: selectedScopeDocIds.length > 0 ? selectedScopeDocIds : undefined,
       created_at: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, userMsg]);
@@ -638,6 +654,7 @@ export const ChatView: React.FC = () => {
         mode,
         web_search: webSearch,
         thinking_depth: thinkingDepth,
+        document_ids: selectedScopeDocIds.length > 0 ? selectedScopeDocIds : undefined,
       });
 
       const replyContent = res.answer || res.content || res.text || "已完成分析回答。";
@@ -942,7 +959,15 @@ export const ChatView: React.FC = () => {
                       )}
                     >
                       {isUser ? (
-                        <div className="whitespace-pre-wrap">{msg.content}</div>
+                        <div>
+                          <div className="whitespace-pre-wrap">{msg.content}</div>
+                          {msg.document_ids && msg.document_ids.length > 0 && (
+                            <div className="mt-1 flex items-center gap-1 text-[11px] text-emerald-200/90 font-mono">
+                              <BookOpen className="h-3 w-3" />
+                              <span>限定 {msg.document_ids.length} 篇文献检索</span>
+                            </div>
+                          )}
+                        </div>
                       ) : msg.run_id ? (
                         <DeepResearchMessageBubble
                           message={msg}
@@ -1159,6 +1184,25 @@ export const ChatView: React.FC = () => {
                     </button>
                   ))}
                 </div>
+
+                {/* 限定检索文献范围 (U18) */}
+                <button
+                  type="button"
+                  onClick={() => setScopeDialogOpen(true)}
+                  className={cn(
+                    "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-sans border transition cursor-pointer select-none",
+                    selectedScopeDocIds.length > 0
+                      ? "bg-emerald-50 text-emerald-800 border-emerald-300 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800 font-semibold shadow-2xs"
+                      : "border-border/70 text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                  )}
+                  title="限定 RAG 知识检索的文献范围"
+                >
+                  <BookOpen className={cn("h-3.5 w-3.5", selectedScopeDocIds.length > 0 ? "text-emerald-700 dark:text-emerald-400" : "text-muted-foreground")} />
+                  <span>限定范围</span>
+                  <span className={cn("text-[10px] px-1 py-0.2 rounded font-mono", selectedScopeDocIds.length > 0 ? "bg-emerald-700 text-white" : "bg-muted text-muted-foreground")}>
+                    {selectedScopeDocIds.length > 0 ? `${selectedScopeDocIds.length} 篇` : "全库"}
+                  </span>
+                </button>
               </div>
 
               {/* 发送按钮 */}
@@ -1207,6 +1251,83 @@ export const ChatView: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Scoped Documents Selection Dialog (U18) */}
+      <Dialog open={scopeDialogOpen} onOpenChange={setScopeDialogOpen}>
+        <DialogContent className="max-w-md max-h-[80vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center justify-between text-base">
+              <span>限定检索文献范围</span>
+              {selectedScopeDocIds.length > 0 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 text-xs text-muted-foreground hover:text-foreground"
+                  onClick={() => setSelectedScopeDocIds([])}
+                >
+                  重置为全库
+                </Button>
+              )}
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-xs text-muted-foreground">
+            选择限定检索范围后，问答将严格限制在所选文献集合内检索证据，避免全库泛化。
+          </p>
+          <div className="flex-1 overflow-y-auto divide-y divide-border/60 max-h-[360px] my-2 pr-1">
+            {availableDocs.length === 0 ? (
+              <div className="py-8 text-center text-xs text-muted-foreground">
+                暂无可用文献，请先在资料库导入文献
+              </div>
+            ) : (
+              availableDocs.map((doc) => {
+                const isSelected = selectedScopeDocIds.includes(doc.document_id);
+                return (
+                  <div
+                    key={doc.document_id}
+                    onClick={() => {
+                      setSelectedScopeDocIds((prev) =>
+                        isSelected ? prev.filter((id) => id !== doc.document_id) : [...prev, doc.document_id]
+                      );
+                    }}
+                    className={cn(
+                      "py-2 px-2.5 flex items-start gap-2.5 rounded-lg cursor-pointer transition text-xs",
+                      isSelected
+                        ? "bg-emerald-50/80 dark:bg-emerald-950/30 text-emerald-900 dark:text-emerald-200"
+                        : "hover:bg-muted/60 text-foreground"
+                    )}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => {}} // Handled by container click
+                      className="mt-0.5 rounded text-emerald-700 focus:ring-emerald-700 pointer-events-none"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium truncate">{doc.title || doc.document_id}</p>
+                      <div className="flex items-center gap-2 text-[10px] text-muted-foreground font-mono mt-0.5">
+                        <span>{doc.status || "ready"}</span>
+                        {doc.source_type && <span>· 来源: {doc.source_type}</span>}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+          <div className="flex items-center justify-between pt-2 border-t border-border/60">
+            <span className="text-xs text-muted-foreground">
+              已选 {selectedScopeDocIds.length} 篇文献
+            </span>
+            <Button
+              size="sm"
+              onClick={() => setScopeDialogOpen(false)}
+              className="h-8 px-4 bg-emerald-800 hover:bg-emerald-900 text-white text-xs"
+            >
+              确定
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

@@ -21,6 +21,7 @@ import {
   Loader2,
   Filter,
   Check,
+  Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -41,6 +42,22 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
   const [activeTab, setActiveTab] = useState<"documents" | "multimodal" | "assets" | "papers">("documents");
   const [documents, setDocuments] = useState<LibraryDocument[]>([]);
   const [docFilter, setDocFilter] = useState<"active" | "archived" | "deleted">("active");
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [indexingDocIds, setIndexingDocIds] = useState<Record<string, boolean>>({});
+  const [selectedDocIds, setSelectedDocIds] = useState<Set<string>>(new Set());
+  const [docSearchQuery, setDocSearchQuery] = useState("");
+  const filteredDocuments = React.useMemo(() => {
+    if (!docSearchQuery.trim()) return documents;
+    const q = docSearchQuery.trim().toLowerCase();
+    return documents.filter(
+      (d) =>
+        d.title?.toLowerCase().includes(q) ||
+        d.document_id?.toLowerCase().includes(q) ||
+        d.source_type?.toLowerCase().includes(q)
+    );
+  }, [documents, docSearchQuery]);
+  const [paperSourcesWarning, setPaperSourcesWarning] = useState<string | null>(null);
   const [overviewStats, setOverviewStats] = useState<{
     total: number;
     imported: number;
@@ -86,6 +103,59 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
     } catch (err) {
       alert(`操作失败: ${err instanceof Error ? err.message : err}`);
     }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      await api.uploadLibraryDocument(file);
+      await refreshDocuments();
+      alert(`文献《${file.name}》已成功解析入库并触发索引构建！`);
+    } catch (err: any) {
+      alert(`上传失败: ${err.message}`);
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const handleReindexDoc = async (docId: string) => {
+    setIndexingDocIds((prev) => ({ ...prev, [docId]: true }));
+    try {
+      await api.reindexLibraryDocument(docId);
+      await refreshDocuments();
+      alert("资料已完成重新索引构建，已在知识库中就绪！");
+    } catch (err: any) {
+      alert(`重建索引失败: ${err.message}`);
+    } finally {
+      setIndexingDocIds((prev) => ({ ...prev, [docId]: false }));
+    }
+  };
+
+  const handleBatchDocAction = async (action: "index" | "remove") => {
+    if (selectedDocIds.size === 0) return;
+    try {
+      const ids = Array.from(selectedDocIds);
+      const res = await api.batchLibraryDocuments(ids, action);
+      await refreshDocuments();
+      setSelectedDocIds(new Set());
+      alert(
+        action === "index"
+          ? `批量索引完成：成功 ${res.indexed_count || 0} / ${res.document_count} 份资料`
+          : `批量移出完成：已从索引删除 ${res.deleted_count || 0} 个切片`
+      );
+    } catch (err: any) {
+      alert(`批量操作失败: ${err.message}`);
+    }
+  };
+
+  const toggleDocSelection = (docId: string) => {
+    const next = new Set(selectedDocIds);
+    if (next.has(docId)) next.delete(docId);
+    else next.add(docId);
+    setSelectedDocIds(next);
   };
   const [papers, setPapers] = useState<PaperItem[]>([]);
   const [paperQuery, setPaperQuery] = useState("");
@@ -195,6 +265,14 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
 
       const res = await api.searchPapers(params);
       setPapers(res.items || []);
+      const failedSrc = (res.sources || []).filter((s: any) => s.status === "failed" || s.error);
+      if (failedSrc.length > 0) {
+        setPaperSourcesWarning(
+          `注意：数据源 ${failedSrc.map((s: any) => s.source || s.name || "在线索引").join("、")} 响应超时或检索异常。当前仅展示可用源结果，并非学术界无相关文献。`
+        );
+      } else {
+        setPaperSourcesWarning(null);
+      }
     } catch (err: any) {
       alert(`论文检索失败: ${err.message}`);
     } finally {
@@ -221,20 +299,42 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
     if (selectedPaperIds.size === 0) return;
     setBatchImporting(true);
     const selected = papers.filter((p) => selectedPaperIds.has(p.id));
-    let successCount = 0;
+    let metadataSaved = 0;
+    let fulltextObtained = 0;
+    let parseCompleted = 0;
+    let indexReady = 0;
+    let failedCount = 0;
     for (const paper of selected) {
       setImportingPaperIds((prev) => ({ ...prev, [paper.id]: "fetching" }));
       try {
-        await api.importPaper(paper, "fulltext");
+        const res = await api.importPaper(paper, "fulltext");
+        if (res.status === "knowledge_ready") {
+          fulltextObtained++;
+          parseCompleted++;
+          indexReady++;
+        } else if (res.status === "parsed") {
+          fulltextObtained++;
+          parseCompleted++;
+        } else if (res.status === "metadata") {
+          metadataSaved++;
+        } else {
+          indexReady++;
+        }
         setImportingPaperIds((prev) => ({ ...prev, [paper.id]: "done" }));
-        successCount++;
       } catch {
+        failedCount++;
         setImportingPaperIds((prev) => ({ ...prev, [paper.id]: "failed" }));
       }
     }
     setBatchImporting(false);
     await refreshDocuments();
-    alert(`批量入库完成：已成功入库 ${successCount} / ${selected.length} 篇论文，本地文献库已自动刷新！`);
+    alert(
+      `批量导入与索引统计（选定 ${selected.length} 篇）：\n` +
+      `- 知识库索引就绪: ${indexReady} 篇\n` +
+      `- 全文获取与解析: ${parseCompleted} 篇\n` +
+      `- 仅元数据记录: ${metadataSaved} 篇\n` +
+      `- 失败或未就绪: ${failedCount} 篇`
+    );
   };
 
   // Dynamic data for charts based on real documents and overviewStats
@@ -416,42 +516,114 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
 
           {/* Document Cards Grid */}
           <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm sm:text-base font-serif-academic font-semibold text-foreground">
-                已收录文献列表 ({documents.length})
-              </h3>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm sm:text-base font-serif-academic font-semibold text-foreground">
+                  已收录文献列表 ({docSearchQuery ? `${filteredDocuments.length} / ${documents.length}` : documents.length})
+                </h3>
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleFileUpload}
+                  accept=".pdf,.md,.markdown"
+                  className="hidden"
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={uploading}
+                  onClick={() => fileInputRef.current?.click()}
+                  className="h-7 px-2 text-xs font-serif-academic gap-1.5 border-emerald-700/40 text-emerald-800 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40"
+                >
+                  {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                  <span>{uploading ? "正在解析上传..." : "上传本地文献 (PDF / MD)"}</span>
+                </Button>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <div className="relative w-48 sm:w-64 max-w-full">
+                  <Search className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={docSearchQuery}
+                    onChange={(e) => setDocSearchQuery(e.target.value)}
+                    placeholder="搜索本地文献标题、路径..."
+                    className="h-7 pl-8 text-xs font-serif-academic"
+                  />
+                </div>
+              </div>
             </div>
 
-            <div className="flex items-center gap-1.5">
-              {([
-                ["active", "进行中"],
-                ["archived", "已归档"],
-                ["deleted", "回收站"],
-              ] as const).map(([value, label]) => (
-                <button
-                  key={value}
-                  onClick={() => {
-                    setDocFilter(value);
-                    refreshDocuments(value);
-                  }}
-                  className={cn(
-                    "text-xs px-2 py-1 rounded-md font-serif-academic transition cursor-pointer border",
-                    docFilter === value
-                      ? "bg-primary/10 text-primary dark:text-emerald-200 border-primary/30 font-semibold"
-                      : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/60"
-                  )}
-                >
-                  {label}
-                </button>
-              ))}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5">
+                {([
+                  ["active", "进行中"],
+                  ["archived", "已归档"],
+                  ["deleted", "回收站"],
+                ] as const).map(([value, label]) => (
+                  <button
+                    key={value}
+                    onClick={() => {
+                      setDocFilter(value);
+                      refreshDocuments(value);
+                    }}
+                    className={cn(
+                      "text-xs px-2 py-1 rounded-md font-serif-academic transition cursor-pointer border",
+                      docFilter === value
+                        ? "bg-primary/10 text-primary dark:text-emerald-200 border-primary/30 font-semibold"
+                        : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {selectedDocIds.size > 0 && (
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="font-semibold text-emerald-800 dark:text-emerald-300">
+                    已选 {selectedDocIds.size} 项
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleBatchDocAction("index")}
+                    className="h-6 text-[11px] px-2 border-emerald-600/40 text-emerald-800 dark:text-emerald-300"
+                  >
+                    批量建立/加入索引
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleBatchDocAction("remove")}
+                    className="h-6 text-[11px] px-2 border-amber-600/40 text-amber-800 dark:text-amber-300"
+                  >
+                    批量移出索引
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setSelectedDocIds(new Set())}
+                    className="h-6 text-[11px] px-1 text-muted-foreground"
+                  >
+                    取消
+                  </Button>
+                </div>
+              )}
             </div>
-            {documents.length === 0 ? (
+
+            {filteredDocuments.length === 0 ? (
               <div className="text-center py-16 text-foreground/70 text-xs sm:text-sm font-serif-academic">
-                {docFilter === "active" ? "本地知识库中尚无论元文档。可通过导入 PDF / Markdown 构建语料库。" : docFilter === "archived" ? "暂无已归档文档。" : "回收站为空。"}
+                {docSearchQuery
+                  ? "未找到匹配的本地文献。"
+                  : docFilter === "active"
+                  ? "本地知识库中尚无论元文档。可通过导入 PDF / Markdown 构建语料库。"
+                  : docFilter === "archived"
+                  ? "暂无已归档文档。"
+                  : "回收站为空。"}
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {documents.map((doc) => (
+                {filteredDocuments.map((doc) => (
                   <div
                     key={doc.document_id}
                     className="rounded-xl border border-border/80 bg-card p-4 shadow-xs top-bevel space-y-3 hover:border-emerald-800/40 transition flex flex-col justify-between"
@@ -459,6 +631,12 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
                     <div className="space-y-2">
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex items-start space-x-2.5 min-w-0">
+                          <input
+                            type="checkbox"
+                            checked={selectedDocIds.has(doc.document_id)}
+                            onChange={() => toggleDocSelection(doc.document_id)}
+                            className="mt-1 h-3.5 w-3.5 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                          />
                           <FileText className="h-5 w-5 text-emerald-800 dark:text-emerald-400 shrink-0 mt-0.5" />
                           <div className="min-w-0">
                             <h4
@@ -483,6 +661,53 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
                       <div className="text-xs text-foreground/75 font-mono bg-muted/40 p-2 rounded leading-tight break-all border border-border/40 flex items-center justify-between">
                         <span>ID: {doc.document_id.length > 32 ? `${doc.document_id.slice(0, 16)}...${doc.document_id.slice(-8)}` : doc.document_id}</span>
                         <span className="text-foreground ml-1 font-semibold whitespace-nowrap">{doc.chunk_count || 0} 切片</span>
+                      </div>
+
+                      {/* Dual-track status: lifecycle and index readiness */}
+                      <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                        <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-mono text-muted-foreground border-border/70">
+                          {doc.lifecycle === "archived" ? "已归档" : doc.lifecycle === "deleted" ? "回收站" : "活跃"}
+                        </Badge>
+
+                        {doc.status === "knowledge_ready" ? (
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-mono text-emerald-800 dark:text-emerald-300 border-emerald-500/40 bg-emerald-50/50 dark:bg-emerald-950/40">
+                            ✓ 索引就绪 (LanceDB)
+                          </Badge>
+                        ) : doc.status === "parsed" ? (
+                          <div className="flex items-center gap-1">
+                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-mono text-amber-800 dark:text-amber-300 border-amber-500/40 bg-amber-50/50 dark:bg-amber-950/40">
+                              未建索引
+                            </Badge>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={indexingDocIds[doc.document_id]}
+                              onClick={() => handleReindexDoc(doc.document_id)}
+                              className="h-5 text-[10px] px-1.5 border-emerald-600/40 text-emerald-800 dark:text-emerald-300 cursor-pointer"
+                            >
+                              {indexingDocIds[doc.document_id] ? "建索引中..." : "加入索引"}
+                            </Button>
+                          </div>
+                        ) : doc.status === "index_failed" ? (
+                          <div className="flex items-center gap-1">
+                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-mono text-rose-800 dark:text-rose-300 border-rose-500/40 bg-rose-50/50 dark:bg-rose-950/40">
+                              ✗ 索引失败
+                            </Badge>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={indexingDocIds[doc.document_id]}
+                              onClick={() => handleReindexDoc(doc.document_id)}
+                              className="h-5 text-[10px] px-1.5 border-rose-600/40 text-rose-800 dark:text-rose-300 cursor-pointer"
+                            >
+                              {indexingDocIds[doc.document_id] ? "重试中..." : "重试"}
+                            </Button>
+                          </div>
+                        ) : (
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-mono text-muted-foreground">
+                            {doc.status || "未就绪"}
+                          </Badge>
+                        )}
                       </div>
                     </div>
 
@@ -840,6 +1065,18 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
               {loading ? "检索中..." : "多源检索"}
             </Button>
           </form>
+
+          {paperSourcesWarning && (
+            <div className="p-3 rounded-lg border border-amber-500/40 bg-amber-50/70 dark:bg-amber-950/30 text-xs text-amber-800 dark:text-amber-300 flex items-center justify-between">
+              <span>{paperSourcesWarning}</span>
+              <button
+                onClick={() => setPaperSourcesWarning(null)}
+                className="text-muted-foreground hover:text-foreground cursor-pointer font-bold px-1.5"
+              >
+                ✕
+              </button>
+            </div>
+          )}
 
           {/* Natural language query suggestions */}
           <div className="flex flex-wrap items-center gap-1.5 text-xs">

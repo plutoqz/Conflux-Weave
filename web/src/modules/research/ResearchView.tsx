@@ -43,10 +43,45 @@ export const ResearchView: React.FC = () => {
   const [rightTab, setRightTab] = useState<"toc" | "evidence" | "activity">("toc");
   const [headings, setHeadings] = useState<Array<{ id: string; text: string; level: number }>>([]);
   const [evidenceList, setEvidenceList] = useState<any[]>([]);
+  const [totalEvidenceCount, setTotalEvidenceCount] = useState<number>(0);
+  const [allEvidenceIds, setAllEvidenceIds] = useState<string[]>([]);
+  const [loadingMoreEvidence, setLoadingMoreEvidence] = useState<boolean>(false);
   const [expandedEvidenceIds, setExpandedEvidenceIds] = useState<Set<string>>(new Set());
   const [previewImage, setPreviewImage] = useState<{ url: string; title: string } | null>(null);
   const [exporting, setExporting] = useState<string>("");
   const [exportError, setExportError] = useState<string>("");
+
+  const loadMoreEvidence = async () => {
+    if (!activeRunId || loadingMoreEvidence || evidenceList.length >= allEvidenceIds.length) return;
+    setLoadingMoreEvidence(true);
+    try {
+      const nextBatchIds = allEvidenceIds.slice(evidenceList.length, evidenceList.length + 30);
+      const evs = await Promise.all(
+        nextBatchIds.map((id) => api.getEvidence(id, activeRunId).catch(() => null))
+      );
+      setEvidenceList((prev) => [...prev, ...evs.filter(Boolean)]);
+    } catch (err) {
+      console.error("Failed to load more evidence:", err);
+    } finally {
+      setLoadingMoreEvidence(false);
+    }
+  };
+
+  const loadAllEvidence = async () => {
+    if (!activeRunId || loadingMoreEvidence || evidenceList.length >= allEvidenceIds.length) return;
+    setLoadingMoreEvidence(true);
+    try {
+      const remainingIds = allEvidenceIds.slice(evidenceList.length);
+      const evs = await Promise.all(
+        remainingIds.map((id) => api.getEvidence(id, activeRunId).catch(() => null))
+      );
+      setEvidenceList((prev) => [...prev, ...evs.filter(Boolean)]);
+    } catch (err) {
+      console.error("Failed to load all evidence:", err);
+    } finally {
+      setLoadingMoreEvidence(false);
+    }
+  };
 
   const toggleEvidenceExpanded = (id: string) => {
     setExpandedEvidenceIds((prev) => {
@@ -106,7 +141,9 @@ export const ResearchView: React.FC = () => {
 
       // 2. Fetch evidence list
       const evidenceIds = detail.delivery?.evidence_ids || detail.delivery?.evidence_refs || [];
+      setAllEvidenceIds(evidenceIds);
       if (evidenceIds.length > 0) {
+        setTotalEvidenceCount(evidenceIds.length);
         try {
           const evs = await Promise.all(
             evidenceIds.slice(0, 30).map((id) => api.getEvidence(id, runId).catch(() => null))
@@ -116,7 +153,11 @@ export const ResearchView: React.FC = () => {
           console.error("Failed to load evidence items:", err);
         }
       } else if (detail.evidence) {
+        setTotalEvidenceCount(detail.evidence.length);
         setEvidenceList(detail.evidence);
+      } else {
+        setTotalEvidenceCount(0);
+        setEvidenceList([]);
       }
     } catch (err) {
       console.error(err);
@@ -128,6 +169,8 @@ export const ResearchView: React.FC = () => {
     setLoading(true);
     setReportText("");
     setEvidenceList([]);
+    setAllEvidenceIds([]);
+    setTotalEvidenceCount(0);
 
     fetchRunData(activeRunId).finally(() => setLoading(false));
 
@@ -507,7 +550,7 @@ export const ResearchView: React.FC = () => {
                         </span>
                       </>
                     )}
-                    {evidenceList.length > 0 && (
+                    {totalEvidenceCount > 0 && (
                       <>
                         <span>·</span>
                         <button
@@ -517,7 +560,11 @@ export const ResearchView: React.FC = () => {
                           title="查看右侧全部核验证据明细"
                         >
                           <ShieldCheck className="h-4 w-4" />
-                          <span>{evidenceList.length} 处核验证据已锚定 (点击查看)</span>
+                          <span>
+                            {evidenceList.length < totalEvidenceCount
+                              ? `${evidenceList.length} / 共 ${totalEvidenceCount} 处核验证据已锚定 (点击查看)`
+                              : `${totalEvidenceCount} 处核验证据已锚定 (点击查看)`}
+                          </span>
                         </button>
                       </>
                     )}
@@ -602,7 +649,10 @@ export const ResearchView: React.FC = () => {
                 </TabsTrigger>
                 <TabsTrigger value="evidence" className="text-xs">
                   <ShieldCheck className="h-3.5 w-3.5 mr-1" />
-                  <span>证据 ({evidenceList.length})</span>
+                  <span>
+                    证据 ({evidenceList.length}
+                    {totalEvidenceCount > evidenceList.length ? ` / ${totalEvidenceCount}` : ""})
+                  </span>
                 </TabsTrigger>
                 <TabsTrigger value="activity" className="text-xs">
                   <Activity className="h-3.5 w-3.5 mr-1" />
@@ -700,7 +750,8 @@ export const ResearchView: React.FC = () => {
 
               <div className="flex items-center justify-between pt-2">
                 <span className="text-xs font-mono uppercase tracking-wider text-foreground/80 font-bold block">
-                  Grounding Facts / 事实证据卡片 ({evidenceList.length})
+                  Grounding Facts / 事实证据卡片 ({evidenceList.length}
+                  {totalEvidenceCount > evidenceList.length ? ` / 共 ${totalEvidenceCount} 条` : ""})
                 </span>
                 {evidenceList.length > 0 && (
                   <button
@@ -790,6 +841,33 @@ export const ResearchView: React.FC = () => {
                     </div>
                   );
                 })
+              )}
+
+              {totalEvidenceCount > evidenceList.length && (
+                <div className="p-3 bg-muted/40 border border-border/70 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                  <span className="text-muted-foreground font-mono">
+                    已载入 {evidenceList.length} 条，尚有 {totalEvidenceCount - evidenceList.length} 条未加载
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={loadingMoreEvidence}
+                      onClick={loadMoreEvidence}
+                      className="h-7 text-xs"
+                    >
+                      {loadingMoreEvidence ? "加载中..." : "加载下 30 条"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      disabled={loadingMoreEvidence}
+                      onClick={loadAllEvidence}
+                      className="h-7 text-xs bg-emerald-800 hover:bg-emerald-900 text-white"
+                    >
+                      {loadingMoreEvidence ? "加载中..." : "加载全部"}
+                    </Button>
+                  </div>
+                </div>
               )}
             </TabsContent>
 
