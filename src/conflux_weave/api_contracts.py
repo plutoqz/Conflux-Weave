@@ -560,6 +560,66 @@ class ProjectAuditReportResponse(_ApiModel):
     created_at: str
 
 
+class TopicCreateRequest(_ApiModel):
+    name: str = Field(min_length=1, max_length=120)
+    objective: str = Field(default="", max_length=2_000)
+    description: str = Field(default="", max_length=4_000)
+    tags: list[str] = Field(default_factory=list)
+    document_ids: list[str] = Field(default_factory=list)
+    note_ids: list[str] = Field(default_factory=list)
+    run_ids: list[str] = Field(default_factory=list)
+    project_ids: list[str] = Field(default_factory=list)
+    conversation_ids: list[str] = Field(default_factory=list)
+
+
+class TopicUpdateRequest(_ApiModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    objective: str | None = Field(default=None, max_length=2_000)
+    description: str | None = Field(default=None, max_length=4_000)
+    tags: list[str] | None = None
+
+
+class TopicLinkRequest(_ApiModel):
+    object_type: Literal["document", "note", "run", "project", "conversation"]
+    object_id: str = Field(min_length=1, max_length=128)
+    action: Literal["link", "unlink"] = "link"
+
+
+class TopicLocationRequest(_ApiModel):
+    section: str = Field(min_length=1, max_length=64)
+    object_id: str | None = Field(default=None, max_length=128)
+    label: str | None = Field(default=None, max_length=200)
+
+
+class TopicSummaryResponse(_ApiModel):
+    topic_id: str
+    name: str
+    objective: str = ""
+    description: str = ""
+    tags: tuple[str, ...] = ()
+    document_ids: tuple[str, ...] = ()
+    note_ids: tuple[str, ...] = ()
+    run_ids: tuple[str, ...] = ()
+    project_ids: tuple[str, ...] = ()
+    conversation_ids: tuple[str, ...] = ()
+    recent_location: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+    updated_at: str
+
+
+class TopicDetailResponse(TopicSummaryResponse):
+    documents: tuple[dict[str, Any], ...] = ()
+    notes: tuple[dict[str, Any], ...] = ()
+    runs: tuple[dict[str, Any], ...] = ()
+    projects: tuple[dict[str, Any], ...] = ()
+    conversations: tuple[dict[str, Any], ...] = ()
+
+
+class TopicListResponse(_ApiModel):
+    items: tuple[TopicSummaryResponse, ...] = ()
+    total: int
+
+
 class MemoryItemResponse(_ApiModel):
     memory_id: str
     scope: Literal["session", "project", "user"]
@@ -1667,6 +1727,13 @@ __all__ = [
     "DAGExecutionResultApiResponse",
     "AgentEventApiResponse",
     "AgentEventListResponse",
+    "TopicCreateRequest",
+    "TopicUpdateRequest",
+    "TopicLinkRequest",
+    "TopicLocationRequest",
+    "TopicSummaryResponse",
+    "TopicDetailResponse",
+    "TopicListResponse",
     "decode_run_cursor",
     "encode_run_cursor",
     "map_exception",

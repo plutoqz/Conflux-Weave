@@ -9,6 +9,7 @@ import { ChatView } from "@/modules/chat/ChatView";
 import { ResearchView } from "@/modules/research/ResearchView";
 import { LibraryView } from "@/modules/library/LibraryView";
 import { ProjectsView } from "@/modules/projects/ProjectsView";
+import { TopicsView } from "@/modules/topics/TopicsView";
 import { SkillsView } from "@/modules/skills/SkillsView";
 import { SettingsView } from "@/modules/settings/SettingsView";
 import { useWorkbenchStore } from "@/stores/useWorkbenchStore";
@@ -22,6 +23,8 @@ export const App: React.FC = () => {
     setRuns,
     setHealth,
     setActiveRunId,
+    activeTopicId,
+    setActiveTopicId,
     activeNoteDocId,
     isNoteStudioOpen,
     openNoteStudio,
@@ -48,7 +51,7 @@ export const App: React.FC = () => {
         pathRunId = sub || null;
       }
       if (
-        ["overview", "chat", "research", "library", "projects", "skills", "settings"].includes(base)
+        ["overview", "chat", "research", "library", "projects", "topics", "skills", "settings"].includes(base)
       ) {
         setSection(base as SectionType);
       }
@@ -62,6 +65,10 @@ export const App: React.FC = () => {
         if (docId) {
           openNoteStudio(docId);
         }
+        const topicId = params.get("topic") || params.get("topic_id") || params.get("id");
+        if (topicId) {
+          setActiveTopicId(topicId);
+        }
       }
       if (pathRunId && base === "research") {
         setActiveRunId(pathRunId);
@@ -69,11 +76,14 @@ export const App: React.FC = () => {
       if (pathRunId && base === "library") {
         openNoteStudio(pathRunId);
       }
+      if (pathRunId && base === "topics") {
+        setActiveTopicId(pathRunId);
+      }
     };
     handleHash();
     window.addEventListener("hashchange", handleHash);
     return () => window.removeEventListener("hashchange", handleHash);
-  }, [setSection, setActiveRunId]);
+  }, [setSection, setActiveRunId, setActiveTopicId]);
 
   // Initial fetch of runs and health status
   useEffect(() => {
@@ -117,6 +127,7 @@ export const App: React.FC = () => {
           {section === "research" && <ResearchView />}
           {section === "library" && <LibraryView onOpenNote={handleOpenNote} />}
           {section === "projects" && <ProjectsView />}
+          {section === "topics" && <TopicsView />}
           {section === "skills" && <SkillsView />}
           {section === "settings" && <SettingsView />}
         </main>

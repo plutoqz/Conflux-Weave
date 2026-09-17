@@ -4,6 +4,7 @@ export type SectionType =
   | "research"
   | "library"
   | "projects"
+  | "topics"
   | "skills"
   | "settings";
 
@@ -394,4 +395,74 @@ export interface AgentEvent {
   payload: Record<string, any>;
   timestamp: string;
 }
+
+export interface TopicRecord {
+  topic_id: string;
+  name: string;
+  objective?: string;
+  description?: string;
+  tags?: string[];
+  document_ids?: string[];
+  note_ids?: string[];
+  run_ids?: string[];
+  project_ids?: string[];
+  conversation_ids?: string[];
+  recent_location?: {
+    section?: string;
+    object_id?: string;
+    label?: string;
+    timestamp?: string;
+  };
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TopicDetail extends TopicRecord {
+  documents?: Array<{
+    document_id: string;
+    title: string;
+    lifecycle?: string;
+    process_state?: string;
+    available: boolean;
+  }>;
+  notes?: Array<{
+    note_id: string;
+    document_id?: string;
+    title: string;
+    version?: number;
+    available: boolean;
+  }>;
+  runs?: Array<{
+    run_id: string;
+    title: string;
+    state: string;
+    created_at: string;
+    available: boolean;
+  }>;
+  projects?: Array<{
+    project_id: string;
+    name: string;
+    root_path?: string;
+    description?: string;
+    available: boolean;
+  }>;
+  conversations?: Array<{
+    conversation_id: string;
+    title: string;
+    message_count?: number;
+    available: boolean;
+  }>;
+}
+
+export interface TopicListResponse {
+  items: TopicRecord[];
+  total: number;
+}
+
+export interface TopicLinkPayload {
+  object_type: "document" | "note" | "run" | "project" | "conversation";
+  object_id: string;
+  action: "link" | "unlink";
+}
+
 

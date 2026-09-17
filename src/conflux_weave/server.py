@@ -131,6 +131,13 @@ from conflux_weave.api_contracts import (
     DAGExecutionResultApiResponse,
     AgentEventApiResponse,
     AgentEventListResponse,
+    TopicCreateRequest,
+    TopicUpdateRequest,
+    TopicLinkRequest,
+    TopicLocationRequest,
+    TopicSummaryResponse,
+    TopicDetailResponse,
+    TopicListResponse,
     FixtureResearchTaskRequest,
     FollowUpResearchTaskRequest,
     ProviderConfigResponse,
@@ -178,6 +185,7 @@ from conflux_weave.orchestrator import (
     DAGTaskStatus,
 )
 from conflux_weave.projects import GitInspector, Project, ProjectScanner, ProjectStore
+from conflux_weave.topics import Topic, TopicStore
 from conflux_weave.project_agents import CodeProposal, CodingAgent, ProjectAgent, ProjectAnswer
 from conflux_weave.document_agent import DocumentAgent
 from conflux_weave.document_notes import (
@@ -426,6 +434,8 @@ def create_app(
     _reg_path = _base_dir / "projects-registry.json"
     _ws_root = Path(config_paths["workspace_root"]) if config_paths and config_paths.get("workspace_root") else None
     project_store = ProjectStore(_reg_path, default_workspace=_ws_root)
+    _topics_reg_path = _base_dir / "topics-registry.json"
+    topic_store = TopicStore(_topics_reg_path)
     skill_runner = SkillRunner(
         skill_registry,
         provider=chat_adapter,
@@ -4116,6 +4126,9 @@ def create_app(
     def _get_project_store() -> ProjectStore:
         return project_store
 
+    def _get_topic_store() -> TopicStore:
+        return topic_store
+
     def _get_project_agent() -> ProjectAgent:
         chat_adapter = getattr(chat_service, "_chat", None) if chat_service is not None else None
         return ProjectAgent(provider=chat_adapter, memory_agent=memory_agent)
@@ -4757,6 +4770,286 @@ def create_app(
             total_additions=diff.total_additions,
             total_deletions=diff.total_deletions,
             diff=diff.diff,
+        )
+
+    async def _resolve_topic_detail(topic: Topic) -> TopicDetailResponse:
+        docs_list = []
+        try:
+            overview = await library_overview()
+            items_by_id = {row.get("document_id") or row.get("paper_id"): row for row in overview.get("items", [])}
+        except Exception:
+            items_by_id = {}
+
+        for doc_id in topic.document_ids:
+            if doc_id in items_by_id:
+                row = items_by_id[doc_id]
+                docs_list.append({
+                    "document_id": doc_id,
+                    "title": row.get("title", doc_id),
+                    "lifecycle": row.get("lifecycle", "active"),
+                    "process_state": row.get("process_state", "unknown"),
+                    "available": True,
+                })
+            else:
+                docs_list.append({
+                    "document_id": doc_id,
+                    "title": doc_id,
+                    "lifecycle": "missing",
+                    "process_state": "unavailable",
+                    "available": False,
+                })
+
+        notes_list = []
+        try:
+            notes_reg = load_notes_registry()
+            notes_by_id = {item.get("note_id"): item for item in notes_reg if item.get("note_id")}
+        except Exception:
+            notes_by_id = {}
+
+        for note_id in topic.note_ids:
+            if note_id in notes_by_id:
+                item = notes_by_id[note_id]
+                notes_list.append({
+                    "note_id": note_id,
+                    "document_id": item.get("document_id", ""),
+                    "title": item.get("title", note_id),
+                    "version": item.get("version", 1),
+                    "available": True,
+                })
+            else:
+                notes_list.append({
+                    "note_id": note_id,
+                    "document_id": "",
+                    "title": note_id,
+                    "version": 0,
+                    "available": False,
+                })
+
+        runs_list = []
+        for run_id in topic.run_ids:
+            try:
+                run_obj = query_service.get_run(run_id) if query_service else None
+                if run_obj:
+                    runs_list.append({
+                        "run_id": run_id,
+                        "title": getattr(run_obj, "title", None) or getattr(run_obj, "query", run_id) or run_id,
+                        "state": getattr(run_obj, "state", getattr(run_obj, "status", "unknown")),
+                        "created_at": getattr(run_obj, "created_at", ""),
+                        "available": True,
+                    })
+                else:
+                    runs_list.append({
+                        "run_id": run_id,
+                        "title": run_id,
+                        "state": "missing",
+                        "created_at": "",
+                        "available": False,
+                    })
+            except Exception:
+                runs_list.append({
+                    "run_id": run_id,
+                    "title": run_id,
+                    "state": "missing",
+                    "created_at": "",
+                    "available": False,
+                })
+
+        projects_list = []
+        p_store = _get_project_store()
+        for project_id in topic.project_ids:
+            proj = p_store.get_project(project_id)
+            if proj:
+                projects_list.append({
+                    "project_id": project_id,
+                    "name": proj.name,
+                    "root_path": proj.root_path,
+                    "description": proj.description,
+                    "available": True,
+                })
+            else:
+                projects_list.append({
+                    "project_id": project_id,
+                    "name": project_id,
+                    "root_path": "",
+                    "description": "",
+                    "available": False,
+                })
+
+        convs_list = []
+        for conv_id in topic.conversation_ids:
+            try:
+                if chat_service:
+                    rec = chat_service.conversation_record(conv_id)
+                    convs_list.append({
+                        "conversation_id": conv_id,
+                        "title": rec.get("title", conv_id),
+                        "message_count": rec.get("message_count", 0),
+                        "available": True,
+                    })
+                else:
+                    convs_list.append({
+                        "conversation_id": conv_id,
+                        "title": conv_id,
+                        "message_count": 0,
+                        "available": False,
+                    })
+            except Exception:
+                convs_list.append({
+                    "conversation_id": conv_id,
+                    "title": conv_id,
+                    "message_count": 0,
+                    "available": False,
+                })
+
+        return TopicDetailResponse(
+            topic_id=topic.topic_id,
+            name=topic.name,
+            objective=topic.objective,
+            description=topic.description,
+            tags=tuple(topic.tags),
+            document_ids=tuple(topic.document_ids),
+            note_ids=tuple(topic.note_ids),
+            run_ids=tuple(topic.run_ids),
+            project_ids=tuple(topic.project_ids),
+            conversation_ids=tuple(topic.conversation_ids),
+            recent_location=topic.recent_location,
+            created_at=topic.created_at,
+            updated_at=topic.updated_at,
+            documents=tuple(docs_list),
+            notes=tuple(notes_list),
+            runs=tuple(runs_list),
+            projects=tuple(projects_list),
+            conversations=tuple(convs_list),
+        )
+
+    @app.get("/api/v1/topics", response_model=TopicListResponse)
+    async def list_topics_endpoint():
+        t_store = _get_topic_store()
+        topics = t_store.list_topics()
+        summaries = [
+            TopicSummaryResponse(
+                topic_id=t.topic_id,
+                name=t.name,
+                objective=t.objective,
+                description=t.description,
+                tags=tuple(t.tags),
+                document_ids=tuple(t.document_ids),
+                note_ids=tuple(t.note_ids),
+                run_ids=tuple(t.run_ids),
+                project_ids=tuple(t.project_ids),
+                conversation_ids=tuple(t.conversation_ids),
+                recent_location=t.recent_location,
+                created_at=t.created_at,
+                updated_at=t.updated_at,
+            )
+            for t in topics
+        ]
+        return TopicListResponse(items=tuple(summaries), total=len(summaries))
+
+    @app.post("/api/v1/topics", response_model=TopicDetailResponse)
+    async def create_topic_endpoint(request: TopicCreateRequest):
+        t_store = _get_topic_store()
+        try:
+            topic = t_store.create_topic(
+                name=request.name,
+                objective=request.objective,
+                description=request.description,
+                tags=request.tags,
+                document_ids=request.document_ids,
+                note_ids=request.note_ids,
+                run_ids=request.run_ids,
+                project_ids=request.project_ids,
+                conversation_ids=request.conversation_ids,
+            )
+            return await _resolve_topic_detail(topic)
+        except ValueError as ve:
+            return JSONResponse(status_code=400, content={"code": "invalid_topic_request", "message": str(ve)})
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.get("/api/v1/topics/{topic_id}", response_model=TopicDetailResponse)
+    async def get_topic_endpoint(topic_id: str):
+        t_store = _get_topic_store()
+        topic = t_store.get_topic(topic_id)
+        if topic is None:
+            return JSONResponse(status_code=404, content={"code": "topic_not_found", "message": f"研究专题 {topic_id} 不存在。"})
+        return await _resolve_topic_detail(topic)
+
+    @app.patch("/api/v1/topics/{topic_id}", response_model=TopicSummaryResponse)
+    async def update_topic_endpoint(topic_id: str, request: TopicUpdateRequest):
+        t_store = _get_topic_store()
+        updated = t_store.update_topic(
+            topic_id=topic_id,
+            name=request.name,
+            objective=request.objective,
+            description=request.description,
+            tags=request.tags,
+        )
+        if updated is None:
+            return JSONResponse(status_code=404, content={"code": "topic_not_found", "message": f"研究专题 {topic_id} 不存在。"})
+        return TopicSummaryResponse(
+            topic_id=updated.topic_id,
+            name=updated.name,
+            objective=updated.objective,
+            description=updated.description,
+            tags=tuple(updated.tags),
+            document_ids=tuple(updated.document_ids),
+            note_ids=tuple(updated.note_ids),
+            run_ids=tuple(updated.run_ids),
+            project_ids=tuple(updated.project_ids),
+            conversation_ids=tuple(updated.conversation_ids),
+            recent_location=updated.recent_location,
+            created_at=updated.created_at,
+            updated_at=updated.updated_at,
+        )
+
+    @app.delete("/api/v1/topics/{topic_id}")
+    async def delete_topic_endpoint(topic_id: str):
+        t_store = _get_topic_store()
+        deleted = t_store.delete_topic(topic_id)
+        if not deleted:
+            return JSONResponse(status_code=404, content={"code": "topic_not_found", "message": f"研究专题 {topic_id} 不存在。"})
+        return {"deleted": True, "topic_id": topic_id, "message": "专题已解除，底层资料与成果完好保留。"}
+
+    @app.post("/api/v1/topics/{topic_id}/link", response_model=TopicDetailResponse)
+    async def link_topic_object_endpoint(topic_id: str, request: TopicLinkRequest):
+        t_store = _get_topic_store()
+        try:
+            if request.action == "link":
+                topic = t_store.link_object(topic_id, request.object_type, request.object_id)
+            else:
+                topic = t_store.unlink_object(topic_id, request.object_type, request.object_id)
+            if topic is None:
+                return JSONResponse(status_code=404, content={"code": "topic_not_found", "message": f"研究专题 {topic_id} 不存在。"})
+            return await _resolve_topic_detail(topic)
+        except ValueError as ve:
+            return JSONResponse(status_code=400, content={"code": "invalid_link_request", "message": str(ve)})
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/topics/{topic_id}/location", response_model=TopicSummaryResponse)
+    async def update_topic_location_endpoint(topic_id: str, request: TopicLocationRequest):
+        t_store = _get_topic_store()
+        topic = t_store.update_recent_location(
+            topic_id,
+            {"section": request.section, "object_id": request.object_id, "label": request.label},
+        )
+        if topic is None:
+            return JSONResponse(status_code=404, content={"code": "topic_not_found", "message": f"研究专题 {topic_id} 不存在。"})
+        return TopicSummaryResponse(
+            topic_id=topic.topic_id,
+            name=topic.name,
+            objective=topic.objective,
+            description=topic.description,
+            tags=tuple(topic.tags),
+            document_ids=tuple(topic.document_ids),
+            note_ids=tuple(topic.note_ids),
+            run_ids=tuple(topic.run_ids),
+            project_ids=tuple(topic.project_ids),
+            conversation_ids=tuple(topic.conversation_ids),
+            recent_location=topic.recent_location,
+            created_at=topic.created_at,
+            updated_at=topic.updated_at,
         )
 
     @app.get("/api/v1/health/ready")

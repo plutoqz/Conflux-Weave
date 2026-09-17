@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { SectionType, RunSummary, RunDetail, HealthReady } from "@/types/workbench";
+import type { SectionType, RunSummary, RunDetail, HealthReady, TopicRecord } from "@/types/workbench";
 import { api } from "@/services/api";
 
 export type FontSizePreference = "normal" | "medium" | "large" | "xlarge";
@@ -59,6 +59,12 @@ interface WorkbenchState {
   setIsNewTaskOpen: (open: boolean) => void;
   isFollowUpOpen: boolean;
   setIsFollowUpOpen: (open: boolean) => void;
+
+  // Research Topics (Gate 5 U21)
+  topics: TopicRecord[];
+  setTopics: (topics: TopicRecord[]) => void;
+  activeTopicId: string | null;
+  setActiveTopicId: (id: string | null) => void;
 }
 
 const getInitialTheme = (): "light" | "dark" => {
@@ -175,4 +181,9 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
   setIsNewTaskOpen: (open) => set({ isNewTaskOpen: open }),
   isFollowUpOpen: false,
   setIsFollowUpOpen: (open) => set({ isFollowUpOpen: open }),
+
+  topics: [],
+  setTopics: (topics) => set({ topics }),
+  activeTopicId: null,
+  setActiveTopicId: (id) => set({ activeTopicId: id }),
 }));

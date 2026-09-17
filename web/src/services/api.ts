@@ -18,6 +18,10 @@ import type {
   ProjectMessage,
   CodingVerifyResult,
   CodingRevertResult,
+  TopicRecord,
+  TopicDetail,
+  TopicListResponse,
+  TopicLinkPayload,
 } from "@/types/workbench";
 
 const API_BASE = "";
@@ -706,4 +710,43 @@ export const api = {
     }),
   getAgentEvents: (runId: string) =>
     request<{ items: AgentEvent[]; count: number }>(`/api/v1/runs/${encodeURIComponent(runId)}/agent-events`),
+
+  // Research Topics (Gate 5 U21)
+  getTopics: () => request<TopicListResponse>("/api/v1/topics"),
+  getTopic: (topicId: string) => request<TopicDetail>(`/api/v1/topics/${encodeURIComponent(topicId)}`),
+  createTopic: (payload: {
+    name: string;
+    objective?: string;
+    description?: string;
+    tags?: string[];
+    document_ids?: string[];
+    note_ids?: string[];
+    run_ids?: string[];
+    project_ids?: string[];
+    conversation_ids?: string[];
+  }) => request<TopicDetail>("/api/v1/topics", { method: "POST", body: JSON.stringify(payload) }),
+  updateTopic: (topicId: string, payload: {
+    name?: string;
+    objective?: string;
+    description?: string;
+    tags?: string[];
+  }) => request<TopicRecord>(`/api/v1/topics/${encodeURIComponent(topicId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  }),
+  deleteTopic: (topicId: string) =>
+    request<{ deleted: boolean; topic_id: string; message: string }>(
+      `/api/v1/topics/${encodeURIComponent(topicId)}`,
+      { method: "DELETE" }
+    ),
+  linkTopicObject: (topicId: string, payload: TopicLinkPayload) =>
+    request<TopicDetail>(`/api/v1/topics/${encodeURIComponent(topicId)}/link`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateTopicLocation: (topicId: string, location: { section: string; object_id?: string; label?: string }) =>
+    request<TopicRecord>(`/api/v1/topics/${encodeURIComponent(topicId)}/location`, {
+      method: "POST",
+      body: JSON.stringify(location),
+    }),
 };
