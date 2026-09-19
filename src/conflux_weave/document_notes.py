@@ -993,6 +993,9 @@ def save_note_artifacts(
     }
 
 
+save_note_artifact = save_note_artifacts
+
+
 def load_note_artifact(identifier: str, store: LocalArtifactStore) -> DocumentNote:
     """Load DocumentNote from an ArtifactRef id (artifact-sha256-...) or note_id."""
     if identifier in _NOTE_CACHE:

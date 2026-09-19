@@ -119,6 +119,7 @@ class MultimodalFusionHit:
     parent_chunk_ids: tuple[str, ...] = ()
     embedding_model: str | None = None
     index_version: str | None = None
+    raw_score: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,6 +177,7 @@ def multimodal_reciprocal_rank_fusion(
             locator=dict(hit.locator or {}),
             text=text_content,
             page=page,
+            raw_score=getattr(hit, "score", None),
         )
 
     for hit in image_hits:
@@ -197,6 +199,7 @@ def multimodal_reciprocal_rank_fusion(
             parent_chunk_ids=hit.parent_chunk_ids,
             embedding_model=hit.embedding_model,
             index_version=hit.index_version,
+            raw_score=getattr(hit, "score", None),
         )
 
     sorted_items = sorted(
@@ -222,6 +225,7 @@ def multimodal_reciprocal_rank_fusion(
             parent_chunk_ids=item.parent_chunk_ids,
             embedding_model=item.embedding_model,
             index_version=item.index_version,
+            raw_score=item.raw_score,
         )
         for rank, item in enumerate(sorted_items, 1)
     )

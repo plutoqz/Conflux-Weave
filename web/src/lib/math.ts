@@ -154,9 +154,9 @@ export function renderMarkdownWithMath(
       `$1<span id="cite-$2" class="citation-source-target font-mono font-bold text-primary underline">$2</span>$3`
     );
 
-    // 5.3 Transform inline bracket citations (e.g. [1] or [sq1-claim-0001]) into interactive badges
+    // 5.3 Transform inline bracket citations (e.g. [1] or [sq1-claim-0001] or `[sq1-claim-0001]` or `[论点 sq1-claim-0001]`) into interactive badges
     processed = processed.replace(
-      /\[((?:sq\d+-|live-|paper-|review-|managed-)?claim-\d+|\d+)\]/g,
+      /`?\[(?:论点\s*|依据\s*|Claim\s*)?((?:sq\d+-|live-|paper-|review-|managed-)?claim-\d+|\d+)\]`?/gi,
       (match, id) => {
         let displayLabel = id;
         const sqMatch = id.match(/^sq(\d+)-claim-0*(\d+)$/i);
@@ -181,6 +181,14 @@ export function renderMarkdownWithMath(
 
   // Parse markdown
   let html = marked.parse(processed, { gfm: true, breaks: true }) as string;
+
+  // Defense: in case any citation badge got escaped or wrapped inside <code>...</code>
+  html = html.replace(/<code>\s*&lt;a class="citation-badge" href="#cite-([^"]+)" data-cite="([^"]+)"&gt;(\[.*?\])&lt;\/a&gt;\s*<\/code>/gi,
+    '<a class="citation-badge" href="#cite-$1" data-cite="$2">$3</a>'
+  );
+  html = html.replace(/&lt;a class="citation-badge" href="#cite-([^"]+)" data-cite="([^"]+)"&gt;(\[.*?\])&lt;\/a&gt;/gi,
+    '<a class="citation-badge" href="#cite-$1" data-cite="$2">$3</a>'
+  );
 
   // Restore math tokens safely
   for (const token of mathTokens) {

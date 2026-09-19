@@ -347,6 +347,16 @@ class NotePatchRequest(_ApiModel):
     quote_anchor: dict[str, Any] | None = None
 
 
+class NoteFromChatRequest(_ApiModel):
+    conversation_id: str | None = None
+    message_id: str | None = None
+    document_id: str | None = None
+    title: str | None = None
+    content: str = Field(min_length=1)
+    citations: tuple[dict[str, Any], ...] = ()
+    topic_id: str | None = None
+
+
 class NoteRevisionItem(_ApiModel):
     note_id: str
     version: int
@@ -739,6 +749,22 @@ class SkillListResponse(_ApiModel):
     total: int = 0
 
 
+class SkillCreateRequest(_ApiModel):
+    skill_id: str
+    name: str
+    description: str
+    category: Literal["research", "governance", "writing", "utility"] = "utility"
+    author: str = "custom"
+    version: str = "1.0.0"
+    required_tools: tuple[str, ...] = ()
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+    prompt_template: str
+    rules: tuple[str, ...] = ()
+    default_budget: SkillBudgetResponse = Field(default_factory=SkillBudgetResponse)
+    is_builtin: bool = False
+    status: Literal["active", "disabled"] = "active"
+
+
 class SkillExecuteApiRequest(_ApiModel):
     inputs: dict[str, Any] = Field(default_factory=dict)
     conversation_id: str | None = None
@@ -873,6 +899,14 @@ class AgentEventListResponse(_ApiModel):
 class RunPageResponse(_ApiModel):
     items: tuple[RunSummaryResponse, ...]
     next_cursor: str | None
+
+
+class StepResponse(_ApiModel):
+    step_id: str
+    kind: str
+    status: str
+    attempt: int
+    created_at: str | None = None
 
 
 class RunDetailResponse(RunSummaryResponse):
@@ -1331,6 +1365,15 @@ class WorkbenchQueryService:
         pending_step = next((step for step in steps if step.status is StepStatus.PENDING), None)
         current_step = running_step or pending_step
         last_event_record = self.repository.get_latest_run_event(run_id)
+        step_responses = tuple(
+            StepResponse(
+                step_id=step.step_id,
+                kind=step.kind,
+                status=step.status.value if hasattr(step.status, "value") else str(step.status),
+                attempt=step.attempt,
+            )
+            for step in steps
+        )
         return RunDetailResponse(
             **summary.model_dump(),
             progress=ProgressResponse(
@@ -1711,9 +1754,11 @@ __all__ = [
     "SkillBudgetResponse",
     "SkillSummaryResponse",
     "SkillDetailResponse",
+    "SkillCreateRequest",
     "SkillListResponse",
     "SkillExecuteApiRequest",
     "SkillExecuteApiResponse",
+    "StepResponse",
     "MCPToolInfoResponse",
     "MCPServerResponse",
     "MCPServerListResponse",
@@ -1734,6 +1779,7 @@ __all__ = [
     "TopicSummaryResponse",
     "TopicDetailResponse",
     "TopicListResponse",
+    "NoteFromChatRequest",
     "decode_run_cursor",
     "encode_run_cursor",
     "map_exception",

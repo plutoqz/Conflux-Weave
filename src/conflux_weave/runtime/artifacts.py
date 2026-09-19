@@ -103,7 +103,15 @@ class LocalArtifactStore:
     def path_for_digest(self, digest: str) -> Path:
         if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
             raise ValueError("digest must be a lowercase SHA-256 hex string")
-        return self.root / digest[:2] / digest
+        sha_dir = self.root / "sha256" / digest[:2] / digest
+        if sha_dir.is_file():
+            return sha_dir
+        direct = self.root / digest[:2] / digest
+        if direct.is_file():
+            return direct
+        if (self.root / "sha256").is_dir():
+            return sha_dir
+        return direct
 
     @staticmethod
     def _parse_content_hash(content_hash: str) -> str:

@@ -4,6 +4,12 @@ import { api } from "@/services/api";
 
 export type FontSizePreference = "normal" | "medium" | "large" | "xlarge";
 
+export interface NoteStudioOptions {
+  tab?: "html" | "md" | "source";
+  page?: number;
+  segmentId?: string;
+}
+
 export interface GlobalBackgroundTask {
   id: string;
   title: string;
@@ -50,9 +56,14 @@ interface WorkbenchState {
 
   // Global Note Studio Opener
   activeNoteDocId: string | null;
+  activeNoteOptions: NoteStudioOptions | null;
   isNoteStudioOpen: boolean;
-  openNoteStudio: (docId: string) => void;
+  openNoteStudio: (docId: string, options?: NoteStudioOptions) => void;
   closeNoteStudio: () => void;
+
+  // Global Scoped Documents (for cross-section zero-copy golden loop)
+  activeScopeDocIds: string[];
+  setActiveScopeDocIds: (ids: string[] | ((prev: string[]) => string[])) => void;
 
   // Modals
   isNewTaskOpen: boolean;
@@ -92,6 +103,21 @@ const getInitialFontSize = (): FontSizePreference => {
   return "normal";
 };
 
+const getInitialActiveScopeDocIds = (): string[] => {
+  try {
+    const saved = localStorage.getItem("cw_active_scope_doc_ids");
+    return saved ? JSON.parse(saved) : [];
+  } catch {}
+  return [];
+};
+
+const getInitialActiveTopicId = (): string | null => {
+  try {
+    return localStorage.getItem("cw_active_topic_id") || null;
+  } catch {}
+  return null;
+};
+
 const initialTheme = getInitialTheme();
 if (initialTheme === "dark") {
   document.documentElement.classList.add("dark");
@@ -101,6 +127,8 @@ if (initialTheme === "dark") {
 
 const initialFontSize = getInitialFontSize();
 document.documentElement.setAttribute("data-font-size", initialFontSize);
+const initialActiveScopeDocIds = getInitialActiveScopeDocIds();
+const initialActiveTopicId = getInitialActiveTopicId();
 
 export const useWorkbenchStore = create<WorkbenchState>((set) => ({
   section: "overview",
@@ -173,9 +201,26 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
     })),
 
   activeNoteDocId: null,
+  activeNoteOptions: null,
   isNoteStudioOpen: false,
-  openNoteStudio: (docId) => set({ activeNoteDocId: docId, isNoteStudioOpen: true }),
-  closeNoteStudio: () => set({ isNoteStudioOpen: false }),
+  openNoteStudio: (docId, options) =>
+    set({ activeNoteDocId: docId, activeNoteOptions: options || null, isNoteStudioOpen: true }),
+  closeNoteStudio: () => set({ isNoteStudioOpen: false, activeNoteOptions: null }),
+
+  activeScopeDocIds: initialActiveScopeDocIds,
+  setActiveScopeDocIds: (updater) => {
+    set((state) => {
+      const next = typeof updater === "function" ? updater(state.activeScopeDocIds) : updater;
+      try {
+        if (next && next.length > 0) {
+          localStorage.setItem("cw_active_scope_doc_ids", JSON.stringify(next));
+        } else {
+          localStorage.removeItem("cw_active_scope_doc_ids");
+        }
+      } catch {}
+      return { activeScopeDocIds: next || [] };
+    });
+  },
 
   isNewTaskOpen: false,
   setIsNewTaskOpen: (open) => set({ isNewTaskOpen: open }),
@@ -184,6 +229,12 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
 
   topics: [],
   setTopics: (topics) => set({ topics }),
-  activeTopicId: null,
-  setActiveTopicId: (id) => set({ activeTopicId: id }),
+  activeTopicId: initialActiveTopicId,
+  setActiveTopicId: (id) => {
+    try {
+      if (id) localStorage.setItem("cw_active_topic_id", id);
+      else localStorage.removeItem("cw_active_topic_id");
+    } catch {}
+    set({ activeTopicId: id });
+  },
 }));

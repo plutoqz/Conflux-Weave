@@ -483,3 +483,89 @@ def test_markdown_table_and_rich_html_rendering(tmp_path: Path) -> None:
     assert "O(1)" in note.html_content
 
 
+@pytest.mark.anyio
+async def test_create_note_from_chat_api(tmp_path: Path) -> None:
+    from httpx import ASGITransport, AsyncClient
+
+    app = build_test_app(tmp_path)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Create a dummy imported document
+        doc_file = tmp_path / "quantum_computing.md"
+        doc_file.write_text(
+            "# 量子纠错与容错架构研究\n\n表面码在保真度阈值上具有理论优势。\n",
+            encoding="utf-8",
+        )
+        analyze_res = await client.post(
+            "/api/v1/documents/analyze",
+            json={"path": str(doc_file)},
+        )
+        assert analyze_res.status_code == 200
+        doc_data = analyze_res.json()
+        doc_id = doc_data["document_id"]
+
+        # 2. Call POST /api/v1/notes/from-chat
+        chat_req = {
+            "conversation_id": "conv-test-999",
+            "message_id": "msg-test-888",
+            "document_id": doc_id,
+            "content": "### 表面码的理论优势\n表面码凭借二维最近邻拓扑与较高门容错阈值（~1%），成为容错量子计算的主流方案。",
+            "citations": [
+                {
+                    "index": 1,
+                    "chunk_id": f"{doc_id}-chunk-0",
+                    "source_snapshot_id": doc_id,
+                    "locator": {"page": 2, "section": "理论优势"},
+                }
+            ],
+            "topic_id": "topic-quantum-01",
+        }
+        res1 = await client.post("/api/v1/notes/from-chat", json=chat_req)
+        assert res1.status_code == 200
+        note1 = res1.json()
+        assert note1["document_id"] == doc_id
+        # Analyze generated version 1, so the first chat note is version 2
+        assert note1["version"] == 2
+        assert "表面码" in note1["title"]
+        assert "容错量子计算" in note1["executive_summary"]
+        assert len(note1["sections"]) >= 1
+        assert '<div class="note-container"' in note1["html_content"]
+
+        # Check that note is retrievable via GET /api/v1/notes/{note_id} and GET /api/v1/notes
+        single_res = await client.get(f"/api/v1/notes/{note1['note_id']}")
+        assert single_res.status_code == 200
+        assert single_res.json()["note_id"] == note1["note_id"]
+
+        notes_res = await client.get("/api/v1/notes")
+        assert notes_res.status_code == 200
+        notes_list = notes_res.json()["items"]
+        assert any(n["note_id"] == note1["note_id"] for n in notes_list)
+
+        # 3. Call from-chat again for the same document to verify version increment
+        chat_req2 = {
+            "conversation_id": "conv-test-999",
+            "message_id": "msg-test-889",
+            "document_id": doc_id,
+            "content": "### 逻辑量子比特开销\n在物理比特错误率为 1e-3 时，合成一个保真度 1e-15 的逻辑量子比特约需数千个物理比特。",
+            "citations": [],
+            "topic_id": "topic-quantum-01",
+        }
+        res2 = await client.post("/api/v1/notes/from-chat", json=chat_req2)
+        assert res2.status_code == 200
+        note2 = res2.json()
+        assert note2["document_id"] == doc_id
+        assert note2["version"] == 3
+        assert note2["parent_note_id"] == note1["note_id"]
+
+        # 4. Also verify synthesis without existing document_id (freeform chat note)
+        free_req = {
+            "content": "### 多模态证据求交模型\n提出了基于向量检索与语义切片的图文互验证明。",
+            "citations": [],
+        }
+        res3 = await client.post("/api/v1/notes/from-chat", json=free_req)
+        assert res3.status_code == 200
+        note3 = res3.json()
+        assert note3["document_id"].startswith("chat-")
+        assert note3["version"] == 1
+
+

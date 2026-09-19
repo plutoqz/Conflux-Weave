@@ -2,6 +2,7 @@ import type {
   HealthReady,
   RunSummary,
   RunDetail,
+  StepRecord,
   ChatMessage,
   ConversationSummary,
   LibraryDocument,
@@ -225,6 +226,8 @@ export const api = {
     request<RunDetail>(`/api/v1/runs/${encodeURIComponent(runId)}/cancel`, {
       method: "POST",
     }),
+  getRunSteps: (runId: string) =>
+    request<{ run_id: string; items: StepRecord[]; count: number }>(`/api/v1/runs/${encodeURIComponent(runId)}/steps`),
   rerunRun: (runId: string) => request(`/api/v1/runs/${encodeURIComponent(runId)}/rerun`, { method: "POST" }),
   followUpRun: (runId: string, query: string) =>
     request(`/api/v1/runs/${encodeURIComponent(runId)}/follow-up`, {
@@ -434,6 +437,7 @@ export const api = {
     ),
 
   // Document Notes
+  listNotes: () => request<{ items: any[]; total: number }>("/api/v1/notes"),
   getDocumentNote: (noteId: string) => request<DocumentNote>(`/api/v1/notes/${encodeURIComponent(noteId)}`),
   getLatestDocumentNote: (docId: string) => request<DocumentNote>(`/api/v1/documents/${encodeURIComponent(docId)}/note`),
   getDocumentNoteRevisions: (noteId: string) => request<{ note_id: string; revisions: any[] }>(`/api/v1/notes/${encodeURIComponent(noteId)}/revisions`),
@@ -466,6 +470,19 @@ export const api = {
       `/api/v1/notes/${encodeURIComponent(noteId)}/save-to-research`,
       { method: "POST" }
     ),
+  createNoteFromChat: (data: {
+    conversation_id?: string;
+    message_id?: string;
+    document_id?: string;
+    title?: string;
+    content: string;
+    citations?: any[];
+    topic_id?: string;
+  }) =>
+    request<DocumentNote>("/api/v1/notes/from-chat", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
 
   // Multimodal RAG & Visual Assets
   searchLibraryMultimodal: (query: string, topK = 10, imageK = 5) =>
@@ -679,6 +696,11 @@ export const api = {
   // Skills Studio (P5.1)
   getSkills: () => request<{ items: SkillSummary[]; count: number }>("/api/v1/skills"),
   getSkill: (skillId: string) => request<SkillDetail>(`/api/v1/skills/${encodeURIComponent(skillId)}`),
+  createSkill: (data: Record<string, any>) =>
+    request<SkillDetail>("/api/v1/skills", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
   executeSkill: (skillId: string, inputs: Record<string, any>) =>
     request<SkillExecuteResult>(`/api/v1/skills/${encodeURIComponent(skillId)}/execute`, {
       method: "POST",

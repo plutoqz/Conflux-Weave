@@ -13,6 +13,9 @@ import {
   Wrench,
   Clock,
   Cpu,
+  Plus,
+  Upload,
+  FolderUp,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -70,6 +73,158 @@ export const SkillsView: React.FC = () => {
   const [executing, setExecuting] = useState(false);
   const [executeResult, setExecuteResult] = useState<SkillExecuteResult | null>(null);
   const [copied, setCopied] = useState(false);
+
+  // Skill Creation / Import modal state
+  const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [createTab, setCreateTab] = useState<"form" | "json">("form");
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+
+  // Form fields
+  const [newSkillId, setNewSkillId] = useState("");
+  const [newName, setNewName] = useState("");
+  const [newCategory, setNewCategory] = useState<"research" | "governance" | "writing" | "utility">("research");
+  const [newDescription, setNewDescription] = useState("");
+  const [newAuthor, setNewAuthor] = useState("custom");
+  const [newVersion, setNewVersion] = useState("1.0.0");
+  const [newTools, setNewTools] = useState("retrieval, python_repl");
+  const [newPromptTemplate, setNewPromptTemplate] = useState("");
+  const [newRules, setNewRules] = useState("必须提供具体依据\n产出需结构化且可验证");
+  const [newMaxTokens, setNewMaxTokens] = useState("8000");
+  const [newMaxSeconds, setNewMaxSeconds] = useState("180");
+
+  // JSON input
+  const [jsonContent, setJsonContent] = useState("");
+
+  const resetCreateForm = () => {
+    setNewSkillId("");
+    setNewName("");
+    setNewCategory("research");
+    setNewDescription("");
+    setNewAuthor("custom");
+    setNewVersion("1.0.0");
+    setNewTools("retrieval, python_repl");
+    setNewPromptTemplate("");
+    setNewRules("必须提供具体依据\n产出需结构化且可验证");
+    setNewMaxTokens("8000");
+    setNewMaxSeconds("180");
+    setJsonContent("");
+    setCreateError(null);
+  };
+
+  const handleOpenCreate = () => {
+    resetCreateForm();
+    setCreateTab("form");
+    setCreateModalOpen(true);
+  };
+
+  const handleOpenImport = () => {
+    resetCreateForm();
+    setCreateTab("json");
+    setJsonContent(
+      JSON.stringify(
+        {
+          skill_id: "custom_paper_insight",
+          name: "文献核心洞见提炼",
+          category: "research",
+          description: "深度剖析收录文献的研究背景、核心方法、实验论证与潜在缺陷",
+          author: "custom",
+          version: "1.0.0",
+          required_tools: ["retrieval", "python_repl"],
+          prompt_template:
+            "你是一个资深学术分析助手。请深度阅读以下材料，并提炼关键科学问题与方法亮点：\\n\\n{text_content}\\n\\n请按【研究动机与背景】、【创新方法设计】、【实验论证成效】、【边界与局限】四维度给出结构化学术分析。",
+          rules: ["必须引用具体实验数据或定理支撑", "客观评价文献的局限性与改进空间"],
+          default_budget: {
+            max_tokens: 8000,
+            max_seconds: 180,
+          },
+        },
+        null,
+        2
+      )
+    );
+    setCreateModalOpen(true);
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const text = event.target?.result as string;
+        JSON.parse(text);
+        setJsonContent(text);
+        setCreateError(null);
+      } catch (err: any) {
+        setCreateError(`文件不是合法的 JSON 格式: ${err.message}`);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleSaveSkill = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCreating(true);
+    setCreateError(null);
+
+    let payload: any = {};
+    if (createTab === "form") {
+      if (!newSkillId.trim()) {
+        setCreateError("技能唯一标识 (skill_id) 不能为空");
+        setCreating(false);
+        return;
+      }
+      if (!newName.trim()) {
+        setCreateError("技能名称 (name) 不能为空");
+        setCreating(false);
+        return;
+      }
+      if (!newPromptTemplate.trim()) {
+        setCreateError("Prompt 模板 (prompt_template) 不能为空");
+        setCreating(false);
+        return;
+      }
+      payload = {
+        skill_id: newSkillId.trim(),
+        name: newName.trim(),
+        category: newCategory,
+        description: newDescription.trim(),
+        author: newAuthor.trim() || "custom",
+        version: newVersion.trim() || "1.0.0",
+        required_tools: newTools.split(",").map((s) => s.trim()).filter(Boolean),
+        prompt_template: newPromptTemplate.trim(),
+        rules: newRules.split("\n").map((s) => s.trim()).filter(Boolean),
+        default_budget: {
+          max_tokens: Number(newMaxTokens) || 8000,
+          max_seconds: Number(newMaxSeconds) || 180,
+        },
+      };
+    } else {
+      try {
+        payload = JSON.parse(jsonContent);
+      } catch (err: any) {
+        setCreateError(`JSON 语法解析失败: ${err.message}`);
+        setCreating(false);
+        return;
+      }
+      if (!payload.skill_id || !payload.name || !payload.prompt_template) {
+        setCreateError("JSON 必须包含 skill_id、name 和 prompt_template 字段");
+        setCreating(false);
+        return;
+      }
+    }
+
+    try {
+      await api.createSkill(payload);
+      setCreateModalOpen(false);
+      await fetchSkills();
+    } catch (err: any) {
+      setCreateError(err.message || "创建或导入技能失败");
+    } finally {
+      setCreating(false);
+    }
+  };
 
   useEffect(() => {
     fetchSkills();
@@ -197,17 +352,39 @@ export const SkillsView: React.FC = () => {
   return (
     <div className="max-w-6xl mx-auto p-4 sm:p-6 space-y-6">
       {/* Header Banner */}
-      <div className="space-y-1.5 border-b border-border/60 pb-5">
-        <div className="flex items-center space-x-2 text-xs font-mono text-emerald-700 dark:text-emerald-400">
-          <Sparkles className="h-3.5 w-3.5" />
-          <span>Skills Studio · 05</span>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-border/60 pb-5">
+        <div className="space-y-1.5">
+          <div className="flex items-center space-x-2 text-xs font-mono text-emerald-700 dark:text-emerald-400">
+            <Sparkles className="h-3.5 w-3.5" />
+            <span>Skills Studio · 05</span>
+          </div>
+          <h1 className="text-2xl sm:text-3xl font-serif-academic font-bold tracking-tight text-foreground">
+            学术技能工坊
+          </h1>
+          <p className="text-xs sm:text-sm text-muted-foreground max-w-2xl font-serif-academic leading-relaxed">
+            声明式学术能力与结构化工作流。支持新建自定义技能、导入标准化 JSON 技能配置，审查完整 Prompt 指令与规则约束。
+          </p>
         </div>
-        <h1 className="text-2xl sm:text-3xl font-serif-academic font-bold tracking-tight text-foreground">
-          学术技能工坊
-        </h1>
-        <p className="text-xs sm:text-sm text-muted-foreground max-w-2xl font-serif-academic leading-relaxed">
-          声明式学术能力与结构化工作流。点击可审查完整 Prompt 指令与规则约束，支持多 Agent 异步并发编排、工具约束与可验证产出。
-        </p>
+
+        <div className="flex items-center space-x-2.5 shrink-0">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleOpenImport}
+            className="h-9 px-3 text-xs font-serif-academic gap-1.5 border-border/80 hover:bg-muted/60 cursor-pointer"
+          >
+            <Upload className="h-3.5 w-3.5 text-muted-foreground" />
+            <span>导入技能</span>
+          </Button>
+          <Button
+            size="sm"
+            onClick={handleOpenCreate}
+            className="h-9 px-3.5 text-xs font-serif-academic bg-emerald-800 hover:bg-emerald-700 text-white gap-1.5 shadow-xs cursor-pointer"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            <span>新建技能</span>
+          </Button>
+        </div>
       </div>
 
       {/* Category Filter Pills */}
@@ -779,6 +956,250 @@ export const SkillsView: React.FC = () => {
               </div>
             );
           })()}
+        </DialogContent>
+      </Dialog>
+
+      {/* Create / Import Skill Modal Dialog */}
+      <Dialog open={createModalOpen} onOpenChange={setCreateModalOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <div className="flex items-center space-x-2 text-xs font-mono text-emerald-700 dark:text-emerald-400">
+              <Sparkles className="h-4 w-4" />
+              <span>Skills Studio · Definition & Registration</span>
+            </div>
+            <DialogTitle className="text-lg sm:text-xl font-serif-academic font-bold pt-1 text-foreground">
+              {createTab === "form" ? "新建学术技能" : "导入技能配置"}
+            </DialogTitle>
+            <DialogDescription className="text-xs sm:text-sm text-muted-foreground font-serif-academic">
+              注册新的声明式能力或导入外部标准化 Prompt 蓝图与验证约束。
+            </DialogDescription>
+          </DialogHeader>
+
+          {/* Mode Switch Tabs */}
+          <div className="flex border-b border-border/70 pb-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setCreateTab("form")}
+              className={`px-3 py-1.5 text-xs font-serif-academic rounded-md transition cursor-pointer ${
+                createTab === "form"
+                  ? "bg-muted font-bold text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              表单可视化配置
+            </button>
+            <button
+              type="button"
+              onClick={() => setCreateTab("json")}
+              className={`px-3 py-1.5 text-xs font-serif-academic rounded-md transition cursor-pointer ${
+                createTab === "json"
+                  ? "bg-muted font-bold text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              JSON 导入 / 粘贴
+            </button>
+          </div>
+
+          <form onSubmit={handleSaveSkill} className="space-y-4 pt-1">
+            {createError && (
+              <div className="p-3 rounded-md bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 text-xs font-mono flex items-center gap-2">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>{createError}</span>
+              </div>
+            )}
+
+            {createTab === "form" ? (
+              <div className="space-y-3.5 text-xs">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="font-semibold text-foreground">
+                      技能唯一标识 (ID) <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. academic_paper_audit"
+                      value={newSkillId}
+                      onChange={(e) => setNewSkillId(e.target.value)}
+                      className="w-full h-8 px-2.5 rounded-md border border-border/80 bg-background font-mono text-xs focus:outline-hidden focus:ring-1 focus:ring-emerald-700"
+                      required
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-semibold text-foreground">
+                      技能名称 <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. 论文深度审计"
+                      value={newName}
+                      onChange={(e) => setNewName(e.target.value)}
+                      className="w-full h-8 px-2.5 rounded-md border border-border/80 bg-background font-serif-academic text-xs focus:outline-hidden focus:ring-1 focus:ring-emerald-700"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="space-y-1">
+                    <label className="font-semibold text-foreground">所属分类</label>
+                    <select
+                      value={newCategory}
+                      onChange={(e) => setNewCategory(e.target.value as any)}
+                      className="w-full h-8 px-2 rounded-md border border-border/80 bg-background text-xs focus:outline-hidden focus:ring-1 focus:ring-emerald-700"
+                    >
+                      <option value="research">学术研究 (research)</option>
+                      <option value="governance">工程架构 (governance)</option>
+                      <option value="writing">学术写作 (writing)</option>
+                      <option value="utility">实用工具 (utility)</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-semibold text-foreground">作者</label>
+                    <input
+                      type="text"
+                      value={newAuthor}
+                      onChange={(e) => setNewAuthor(e.target.value)}
+                      className="w-full h-8 px-2.5 rounded-md border border-border/80 bg-background font-mono text-xs focus:outline-hidden focus:ring-1 focus:ring-emerald-700"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-semibold text-foreground">版本号</label>
+                    <input
+                      type="text"
+                      value={newVersion}
+                      onChange={(e) => setNewVersion(e.target.value)}
+                      className="w-full h-8 px-2.5 rounded-md border border-border/80 bg-background font-mono text-xs focus:outline-hidden focus:ring-1 focus:ring-emerald-700"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="font-semibold text-foreground">描述说明</label>
+                  <input
+                    type="text"
+                    placeholder="简要概括该技能的功能与适用场景"
+                    value={newDescription}
+                    onChange={(e) => setNewDescription(e.target.value)}
+                    className="w-full h-8 px-2.5 rounded-md border border-border/80 bg-background font-serif-academic text-xs focus:outline-hidden focus:ring-1 focus:ring-emerald-700"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="font-semibold text-foreground">
+                    所需工具 (逗号分隔)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. retrieval, python_repl, academic_search"
+                    value={newTools}
+                    onChange={(e) => setNewTools(e.target.value)}
+                    className="w-full h-8 px-2.5 rounded-md border border-border/80 bg-background font-mono text-xs focus:outline-hidden focus:ring-1 focus:ring-emerald-700"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <label className="font-semibold text-foreground">
+                      Prompt 蓝图模板 <span className="text-rose-500">*</span>
+                    </label>
+                    <span className="text-[10px] text-muted-foreground font-mono">
+                      支持 &#123;input&#125; 等变量占位
+                    </span>
+                  </div>
+                  <textarea
+                    rows={4}
+                    placeholder="输入 Prompt 蓝图模板，例如：请对以下材料进行严谨的同行评议：&#10;&#10;{text_content}"
+                    value={newPromptTemplate}
+                    onChange={(e) => setNewPromptTemplate(e.target.value)}
+                    className="w-full p-2.5 rounded-md border border-border/80 bg-background font-mono text-xs focus:outline-hidden focus:ring-1 focus:ring-emerald-700 leading-relaxed"
+                    required
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <label className="font-semibold text-foreground">规则与约束</label>
+                    <span className="text-[10px] text-muted-foreground font-mono">
+                      每行一条约束规则
+                    </span>
+                  </div>
+                  <textarea
+                    rows={2}
+                    value={newRules}
+                    onChange={(e) => setNewRules(e.target.value)}
+                    className="w-full p-2 rounded-md border border-border/80 bg-background font-serif-academic text-xs focus:outline-hidden focus:ring-1 focus:ring-emerald-700"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="font-semibold text-foreground">最大 Token 预算</label>
+                    <input
+                      type="number"
+                      value={newMaxTokens}
+                      onChange={(e) => setNewMaxTokens(e.target.value)}
+                      className="w-full h-8 px-2.5 rounded-md border border-border/80 bg-background font-mono text-xs focus:outline-hidden focus:ring-1 focus:ring-emerald-700"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-semibold text-foreground">超时限制 (秒)</label>
+                    <input
+                      type="number"
+                      value={newMaxSeconds}
+                      onChange={(e) => setNewMaxSeconds(e.target.value)}
+                      className="w-full h-8 px-2.5 rounded-md border border-border/80 bg-background font-mono text-xs focus:outline-hidden focus:ring-1 focus:ring-emerald-700"
+                    />
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3 text-xs">
+                <div className="flex items-center justify-between">
+                  <label className="font-semibold text-foreground">技能 JSON 定义规范</label>
+                  <label className="cursor-pointer inline-flex items-center gap-1 text-[11px] font-mono text-emerald-800 dark:text-emerald-300 hover:underline">
+                    <FolderUp className="h-3.5 w-3.5" />
+                    <span>选择 JSON 文件上传</span>
+                    <input
+                      type="file"
+                      accept=".json"
+                      onChange={handleFileUpload}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+                <textarea
+                  rows={12}
+                  value={jsonContent}
+                  onChange={(e) => setJsonContent(e.target.value)}
+                  placeholder="在此处粘贴完整 JSON 技能配置..."
+                  className="w-full p-3 rounded-md border border-border/80 bg-muted/20 font-mono text-xs focus:outline-hidden focus:ring-1 focus:ring-emerald-700 leading-relaxed"
+                  required
+                />
+              </div>
+            )}
+
+            <div className="pt-3 border-t border-border/60 flex items-center justify-end space-x-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setCreateModalOpen(false)}
+                disabled={creating}
+                className="text-xs font-serif-academic cursor-pointer"
+              >
+                取消
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={creating}
+                className="text-xs font-serif-academic bg-emerald-800 hover:bg-emerald-900 text-white min-w-[80px] cursor-pointer"
+              >
+                {creating ? "保存中..." : createTab === "form" ? "创建技能" : "导入配置"}
+              </Button>
+            </div>
+          </form>
         </DialogContent>
       </Dialog>
     </div>

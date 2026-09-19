@@ -162,10 +162,17 @@ def evaluate_single_case(
             # Target asset must be an image hit
             is_match = False
             if h.modality == "image":
-                if case.expected_asset_id and h.asset_id == case.expected_asset_id:
-                    is_match = True
-                elif h.document_id == case.expected_document_id and h.page == case.expected_page:
-                    is_match = True
+                if case.expected_asset_id:
+                    # 严谨评测：期望图片 ID 明确时，必须精确匹配预期图片 ID 或高精度 BBox，严禁同页错图误判为命中
+                    is_match = (h.asset_id == case.expected_asset_id) or (
+                        h.document_id == case.expected_document_id
+                        and h.page == case.expected_page
+                        and _bbox_matches(h.bbox, case.expected_bbox, tol=0.05)
+                    )
+                elif case.expected_document_id and case.expected_page is not None:
+                    # 未指定具体 asset_id 时，至少需文献、页码与 BBox 一致
+                    bbox_ok = _bbox_matches(h.bbox, case.expected_bbox, tol=0.08) if case.expected_bbox else True
+                    is_match = (h.document_id == case.expected_document_id and h.page == case.expected_page and bbox_ok)
 
             if is_match and target_rank is None:
                 target_rank = rank
@@ -178,9 +185,18 @@ def evaluate_single_case(
                     art_ok = bool(h.artifact_ref and h.artifact_ref.startswith("artifact-sha256-"))
                     localization_correct = page_ok and bbox_ok and art_ok
 
-                    # Evidence closure: must have asset_id, artifact_ref, page & bbox
+                    # 严谨证据闭环：必须包含合法 asset_id, artifact_ref, 有效页码, 以及有效 BBox
+                    has_valid_bbox = (
+                        isinstance(h.bbox, dict)
+                        and float(h.bbox.get("width", 0.0)) > 0
+                        and float(h.bbox.get("height", 0.0)) > 0
+                    )
                     evidence_closed = bool(
-                        h.asset_id and h.artifact_ref and h.page is not None and h.bbox is not None
+                        h.asset_id
+                        and art_ok
+                        and h.page is not None
+                        and h.page >= 1
+                        and has_valid_bbox
                     )
                 break
     else:

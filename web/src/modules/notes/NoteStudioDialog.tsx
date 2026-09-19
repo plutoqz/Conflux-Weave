@@ -41,7 +41,7 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
   open,
   onOpenChange,
 }) => {
-  const { addBackgroundTask, updateBackgroundTask } = useWorkbenchStore();
+  const { addBackgroundTask, updateBackgroundTask, activeNoteOptions } = useWorkbenchStore();
   const [note, setNote] = useState<DocumentNote | null>(null);
   const [activeTab, setActiveTab] = useState<"html" | "md" | "source">("html");
   const [patchPrompt, setPatchPrompt] = useState("");
@@ -145,6 +145,36 @@ export const NoteStudioDialog: React.FC<NoteStudioDialogProps> = ({
     }
     loadNote(false);
   }, [open, documentId]);
+
+  useEffect(() => {
+    if (open && activeNoteOptions?.tab) {
+      setActiveTab(activeNoteOptions.tab);
+    }
+  }, [open, activeNoteOptions]);
+
+  useEffect(() => {
+    if (!open || activeTab !== "source" || segments.length === 0) return;
+    const targetSegmentId = activeNoteOptions?.segmentId;
+    const targetPage = activeNoteOptions?.page;
+    if (!targetSegmentId && typeof targetPage !== "number") return;
+
+    const timer = setTimeout(() => {
+      let targetEl: HTMLElement | null = null;
+      if (targetSegmentId) {
+        targetEl = document.querySelector(`[data-segment-id="${targetSegmentId}"]`);
+      }
+      if (!targetEl && typeof targetPage === "number") {
+        targetEl = document.querySelector(`[data-page="${targetPage}"]`);
+      }
+      if (targetEl) {
+        targetEl.scrollIntoView({ behavior: "smooth", block: "center" });
+        targetEl.classList.add("highlight-flash");
+        setTimeout(() => targetEl?.classList.remove("highlight-flash"), 2500);
+      }
+    }, 200);
+
+    return () => clearTimeout(timer);
+  }, [open, activeTab, segments, activeNoteOptions]);
 
   const handleSelectRevision = async (noteId: string) => {
     if (!noteId) return;

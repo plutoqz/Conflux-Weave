@@ -50,6 +50,7 @@ export const ResearchView: React.FC = () => {
   const [previewImage, setPreviewImage] = useState<{ url: string; title: string } | null>(null);
   const [exporting, setExporting] = useState<string>("");
   const [exportError, setExportError] = useState<string>("");
+  const [runSteps, setRunSteps] = useState<any[]>([]);
 
   const loadMoreEvidence = async () => {
     if (!activeRunId || loadingMoreEvidence || evidenceList.length >= allEvidenceIds.length) return;
@@ -159,6 +160,18 @@ export const ResearchView: React.FC = () => {
         setTotalEvidenceCount(0);
         setEvidenceList([]);
       }
+
+      // 3. Fetch execution trajectory steps
+      try {
+        const stepsRes = await api.getRunSteps(runId);
+        if (stepsRes && Array.isArray(stepsRes.items)) {
+          setRunSteps(stepsRes.items);
+        } else if (Array.isArray(stepsRes)) {
+          setRunSteps(stepsRes);
+        }
+      } catch (err) {
+        console.warn("Failed to load run steps:", err);
+      }
     } catch (err) {
       console.error(err);
     }
@@ -171,6 +184,7 @@ export const ResearchView: React.FC = () => {
     setEvidenceList([]);
     setAllEvidenceIds([]);
     setTotalEvidenceCount(0);
+    setRunSteps([]);
 
     fetchRunData(activeRunId).finally(() => setLoading(false));
 
@@ -313,9 +327,9 @@ export const ResearchView: React.FC = () => {
       `$1<span id="cite-$2" class="citation-source-target font-mono font-bold text-primary underline">$2</span>$3`
     );
 
-    // 3. Transform inline bracket citations (e.g. [1] or [sq1-claim-0001]) into interactive badges
+    // 3. Transform inline bracket citations (e.g. [1] or [sq1-claim-0001] or `[sq1-claim-0001]` or `[论点 sq1-claim-0001]`) into interactive badges
     md = md.replace(
-      /\[((?:sq\d+-|live-|paper-|review-|managed-)?claim-\d+|\d+)\]/g,
+      /`?\[(?:论点\s*|依据\s*|Claim\s*)?((?:sq\d+-|live-|paper-|review-|managed-)?claim-\d+|\d+)\]`?/gi,
       (match, id) => {
         let displayLabel = id;
         const sqMatch = id.match(/^sq(\d+)-claim-0*(\d+)$/i);
@@ -338,6 +352,15 @@ export const ResearchView: React.FC = () => {
     );
 
     let html = m.parse(md, { gfm: true, breaks: true }) as string;
+
+    // Defense: in case any citation badge got escaped or wrapped inside <code>...</code>
+    html = html.replace(/<code>\s*&lt;a class="citation-badge" href="#cite-([^"]+)" data-cite="([^"]+)"&gt;(\[.*?\])&lt;\/a&gt;\s*<\/code>/gi,
+      '<a class="citation-badge" href="#cite-$1" data-cite="$2">$3</a>'
+    );
+    html = html.replace(/&lt;a class="citation-badge" href="#cite-([^"]+)" data-cite="([^"]+)"&gt;(\[.*?\])&lt;\/a&gt;/gi,
+      '<a class="citation-badge" href="#cite-$1" data-cite="$2">$3</a>'
+    );
+
     for (const token of mathTokens) {
       html = html.split(token.id).join(token.html);
     }
@@ -426,7 +449,7 @@ export const ResearchView: React.FC = () => {
   const delivery = activeRunDetail?.delivery;
   const limitations = delivery?.limitations || [];
   const recoveryActions = delivery?.recovery_actions || [];
-  const steps = activeRunDetail?.steps || [];
+  const steps = runSteps.length > 0 ? runSteps : (activeRunDetail?.steps || []);
   const currentStatus = activeRunDetail?.state || activeRunDetail?.status || (loading ? "loading" : "unknown");
   const runQuery = activeRunDetail?.query || activeRunDetail?.task_input?.query || activeRunDetail?.task_input?.objective || activeRunDetail?.research_context?.query || activeRunId;
 
@@ -871,27 +894,95 @@ export const ResearchView: React.FC = () => {
               )}
             </TabsContent>
 
-            {/* Tab: Activity Logs */}
-            <TabsContent value="activity" className="flex-1 overflow-y-auto p-3 space-y-2 mt-0">
-              <span className="text-xs font-mono uppercase tracking-wider text-foreground/80 font-bold block">
-                Execution Steps / 执行轨迹
-              </span>
-              {steps.map((st) => (
-                <div
-                  key={st.step_id}
-                  className="p-2.5 rounded-md border border-border/60 bg-muted/20 text-xs sm:text-sm space-y-1"
-                >
-                  <div className="flex justify-between items-center">
-                    <span className="font-mono text-foreground font-semibold">{st.kind}</span>
-                    <Badge variant={st.status === "completed" ? "moss" : "secondary"} className="text-xs font-mono">
-                      {st.status}
-                    </Badge>
-                  </div>
-                  <div className="text-xs text-foreground/70 font-mono">
-                    Attempt #{st.attempt}
-                  </div>
+            {/* Tab: Activity Logs / Execution Trajectory */}
+            <TabsContent value="activity" className="flex-1 overflow-y-auto p-3 space-y-3 mt-0">
+              <div className="flex items-center justify-between pb-1 border-b border-border/60">
+                <span className="text-xs font-mono uppercase tracking-wider text-foreground/80 font-bold block">
+                  Execution Steps / 执行轨迹
+                </span>
+                {activeRunDetail?.progress && (
+                  <span className="text-[11px] font-mono text-muted-foreground">
+                    进度: {activeRunDetail.progress.completed_steps} / {activeRunDetail.progress.total_steps}
+                  </span>
+                )}
+              </div>
+
+              {activeRunDetail?.progress?.current_phase && (
+                <div className="p-2 rounded bg-emerald-500/10 border border-emerald-500/20 text-xs font-serif-academic text-emerald-800 dark:text-emerald-300">
+                  <span className="font-semibold">当前阶段：</span>
+                  {activeRunDetail.progress.current_phase}
                 </div>
-              ))}
+              )}
+
+              {steps.length === 0 ? (
+                <div className="text-center py-12 text-xs text-muted-foreground font-serif-academic space-y-1">
+                  <Activity className="h-6 w-6 mx-auto text-muted-foreground/50 mb-2" />
+                  <p>暂无底层执行步骤明细</p>
+                  <p className="text-[11px] text-muted-foreground/70">
+                    {activeRunDetail?.progress?.last_event_message || "任务状态已由调度平面接管"}
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {steps.map((st, idx) => {
+                    const kindName =
+                      st.kind === "execute_research"
+                        ? "多源文献深度检索与证据交叉论证"
+                        : st.kind === "publish_delivery"
+                        ? "成果合成与闭环报告发布"
+                        : st.kind === "document_reading"
+                        ? "文献研读精读归档"
+                        : st.kind === "subquestion_plan"
+                        ? "研究目标分解与子课题规划"
+                        : st.kind;
+                    const isSuccess = st.status === "completed" || (st.status as string) === "succeeded";
+                    const isRunning = st.status === "running";
+                    const isFailed = st.status === "failed";
+
+                    return (
+                      <div
+                        key={st.step_id || idx}
+                        className="p-3 rounded-lg border border-border/70 bg-card text-xs space-y-1.5 shadow-2xs top-bevel"
+                      >
+                        <div className="flex justify-between items-start gap-2">
+                          <div className="space-y-0.5">
+                            <span className="font-serif-academic text-foreground font-semibold block text-xs sm:text-sm">
+                              {kindName}
+                            </span>
+                            <span className="font-mono text-[10px] text-muted-foreground block">
+                              ID: {st.step_id}
+                            </span>
+                          </div>
+                          <Badge
+                            variant={isSuccess ? "default" : isFailed ? "destructive" : "secondary"}
+                            className={`text-[10px] font-mono shrink-0 ${
+                              isSuccess
+                                ? "bg-emerald-700 text-white"
+                                : isRunning
+                                ? "bg-blue-600 text-white animate-pulse"
+                                : ""
+                            }`}
+                          >
+                            {isSuccess
+                              ? "✓ 成功完成"
+                              : isRunning
+                              ? "执行中..."
+                              : isFailed
+                              ? "✕ 执行失败"
+                              : st.status}
+                          </Badge>
+                        </div>
+                        <div className="flex items-center justify-between text-[11px] text-muted-foreground font-mono pt-1 border-t border-border/40">
+                          <span>Attempt #{st.attempt}</span>
+                          <span className="text-[10px] uppercase font-mono tracking-wider">
+                            {st.kind}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </TabsContent>
           </Tabs>
         </aside>

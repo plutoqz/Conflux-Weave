@@ -190,7 +190,44 @@ def test_multimodal_metrics_unit_calculations():
     assert summary.evidence_closure_rate == 1.0
 
 
+def test_evaluator_rejects_wrong_image_on_same_page():
+    """Verify that an image hit on the same page with a different asset_id and mismatched bbox is rejected."""
+    case = MultimodalEvaluationCase(
+        case_id="mm-case-test-01",
+        query="show the architecture flowchart",
+        figure_kind="flowchart",
+        expected_answerable=True,
+        expected_document_id="doc-transformer",
+        expected_source_snapshot_id="snap-1",
+        expected_asset_id="asset-sha256-correct",
+        expected_page=3,
+        expected_bbox={"x": 50.0, "y": 100.0, "width": 200.0, "height": 150.0},
+        expected_caption="Figure 1: Model architecture",
+    )
+    wrong_hit = EvaluatedHit(
+        hit_id="asset-sha256-wrong",
+        modality="image",
+        score=0.08,
+        rank=1,
+        asset_id="asset-sha256-wrong",
+        document_id="doc-transformer",
+        page=3,
+        bbox={"x": 300.0, "y": 500.0, "width": 100.0, "height": 80.0},
+        caption="Figure 2: Irrelevant parameter table",
+        artifact_ref="artifact-sha256-" + "c" * 64,
+    )
+    ev = evaluate_single_case(case, [wrong_hit], condition="joint_embedding")
+    assert ev.target_rank is None
+    assert ev.hit_in_top_5 is False
+    assert ev.reciprocal_rank == 0.0
+
+
 def test_p2_benchmark_reaches_frozen_thresholds_offline():
+    """Verify threshold mathematics across simulated hit distributions.
+
+    NOTE: This test verifies the aggregation and threshold math formulas;
+    it simulates hits to ensure metric calculations remain robust.
+    """
     cases = load_benchmark_cases(DATASET_DIR)
 
     # Build simulated realistic hits across the 3 conditions

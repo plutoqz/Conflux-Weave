@@ -151,7 +151,7 @@ export interface ChatMessage {
     index: number;
     chunk_id: string;
     source_snapshot_id: string;
-    locator?: string;
+    locator?: string | Record<string, any>;
   }>;
   verification?: "model-knowledge" | "unverified-aggregation" | "durable-run-dispatched";
 }

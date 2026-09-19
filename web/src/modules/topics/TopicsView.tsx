@@ -45,6 +45,7 @@ export const TopicsView: React.FC = () => {
     setSection,
     setActiveRunId,
     openNoteStudio,
+    setActiveScopeDocIds,
   } = useWorkbenchStore();
 
   const [search, setSearch] = useState("");
@@ -114,17 +115,17 @@ export const TopicsView: React.FC = () => {
     api.getRuns().then((r) => setAvailableRuns(r.items || [])).catch(() => {});
     api.getProjects().then((r) => setAvailableProjects(r || [])).catch(() => {});
     api.getConversations().then((r) => setAvailableConvs(r.items || [])).catch(() => {});
-    // Extract notes from docs
-    api.getDocuments("active").then((r) => {
-      const notes = (r.items || [])
-        .filter((d: any) => Boolean(d.document_id))
-        .map((d: any) => ({
-          note_id: (d.note_id as string) || `note-${d.document_id}`,
-          title: d.title || d.document_id,
-          document_id: d.document_id,
-        }));
+    // Fetch real notes from registry
+    api.listNotes().then((r) => {
+      const notes = (r.items || []).map((n: any) => ({
+        note_id: n.note_id,
+        title: n.title || n.note_id,
+        document_id: n.document_id,
+      }));
       setAvailableNotes(notes);
-    }).catch(() => {});
+    }).catch(() => {
+      setAvailableNotes([]);
+    });
   }, [isPickerOpen]);
 
   // All tags
@@ -435,6 +436,29 @@ export const TopicsView: React.FC = () => {
 
                 <div className="flex items-center space-x-2">
                   <Button
+                    size="sm"
+                    className="h-8 text-xs bg-emerald-800 hover:bg-emerald-700 text-white flex items-center space-x-1.5 cursor-pointer font-serif-academic shadow-xs"
+                    onClick={() => {
+                      const docIds = (activeDetail.documents || [])
+                        .filter((d) => d.available !== false)
+                        .map((d) => d.document_id);
+                      if (docIds.length > 0) {
+                        setActiveScopeDocIds(docIds);
+                      }
+                      setActiveTopicId(activeDetail.topic_id);
+                      setSection("chat");
+                    }}
+                    title="以本专题为工作上下文，跳转学术对话继续深度研讨"
+                  >
+                    <MessageSquare className="h-3.5 w-3.5" />
+                    <span>以此继续研讨</span>
+                    {activeDetail.documents && activeDetail.documents.length > 0 && (
+                      <span className="ml-1 text-[10px] bg-emerald-950/60 text-emerald-200 px-1 py-0.2 rounded font-mono">
+                        {activeDetail.documents.length} 篇
+                      </span>
+                    )}
+                  </Button>
+                  <Button
                     variant="outline"
                     size="sm"
                     onClick={() => {
@@ -556,15 +580,32 @@ export const TopicsView: React.FC = () => {
                             <Badge variant="destructive" className="text-[9px] px-1 py-0">已失效</Badge>
                           )}
                         </div>
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          onClick={() => handleLinkObject("document", doc.document_id, "unlink")}
-                          className="opacity-0 group-hover:opacity-100 transition text-muted-foreground hover:text-rose-500 h-6 w-6"
-                          title="解除关联"
-                        >
-                          <Unlink className="h-3 w-3" />
-                        </Button>
+                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-1.5 text-[11px] text-emerald-800 dark:text-emerald-300 hover:bg-emerald-500/10 cursor-pointer"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveScopeDocIds([doc.document_id]);
+                              setActiveTopicId(activeDetail.topic_id);
+                              setSection("chat");
+                            }}
+                            title="以此篇文献发起研讨"
+                          >
+                            <MessageSquare className="h-3 w-3 mr-0.5" />
+                            <span>研讨</span>
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            onClick={() => handleLinkObject("document", doc.document_id, "unlink")}
+                            className="text-muted-foreground hover:text-rose-500 h-6 w-6"
+                            title="解除关联"
+                          >
+                            <Unlink className="h-3 w-3" />
+                          </Button>
+                        </div>
                       </div>
                     ))
                   )}

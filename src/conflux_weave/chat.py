@@ -10,6 +10,7 @@ chat_messages 表。模式 A 问题原样发送到 LLM，回答即模型知识�
 
 from __future__ import annotations
 
+import base64
 import json
 import time
 import re
@@ -615,12 +616,16 @@ class ChatService:
                 cap = getattr(hit, "text", "") or getattr(hit, "caption", "") or (hit.locator.get("caption") if isinstance(hit.locator, dict) else "") or "学术文献相关图表"
                 p = getattr(hit, "page", None) or (hit.locator.get("page") if isinstance(hit.locator, dict) else None)
                 score = getattr(hit, "score", 0.0)
+                raw_score = getattr(hit, "raw_score", None)
+                art_ref = getattr(hit, "artifact_ref", None)
                 image_assets.append({
                     "asset_id": hit.asset_id,
                     "caption": cap,
                     "page": p,
                     "url": f"/api/v1/library/assets/{hit.asset_id}/content",
                     "score": score,
+                    "raw_score": raw_score if raw_score is not None else score,
+                    "artifact_ref": art_ref,
                 })
         if not image_assets and hasattr(run, "image_hits"):
             for hit in getattr(run, "image_hits", ()) or ():
@@ -629,12 +634,15 @@ class ChatService:
                     caption = getattr(hit, "caption", "") or (hit.locator.get("caption") if isinstance(hit.locator, dict) else "") or "相关图表插图"
                     page = getattr(hit, "page", None) or (hit.locator.get("page") if isinstance(hit.locator, dict) else None)
                     score = getattr(hit, "score", 0.0)
+                    art_ref = getattr(hit, "artifact_ref", None)
                     image_assets.append({
                         "asset_id": asset_id,
                         "caption": caption,
                         "page": page,
                         "url": f"/api/v1/library/assets/{asset_id}/content",
                         "score": score,
+                        "raw_score": score,
+                        "artifact_ref": art_ref,
                     })
 
         multimodal_keywords = (
@@ -643,11 +651,24 @@ class ChatService:
             "figure", "fig.", "chart", "diagram", "plot", "illustration"
         )
         multimodal_intent = any(k in normalized.lower() for k in multimodal_keywords)
-        # 仅当用户明确提问视觉图表或可视化、且相关度 >= 0.55 时，才启用图表资产注入与渲染；纯文本问答保持纯粹聚焦
+
+        # 兼顾 RRF 融合分数量纲（约 0.01~0.016）与原始余弦相似度量纲（约 0~1）
+        def _is_relevant_image(img: dict) -> bool:
+            raw = img.get("raw_score")
+            rrf = img.get("score", 0.0)
+            if raw is not None and raw != rrf:
+                return raw >= 0.35 or rrf >= 0.012
+            if rrf < 0.1:
+                return rrf >= 0.012
+            return rrf >= 0.35
+
+        has_high_conf_image = any(
+            (img.get("raw_score", 0.0) >= 0.65 or img.get("score", 0.0) >= 0.015)
+            for img in image_assets
+        )
         filtered_image_assets = [
-            img for img in image_assets
-            if img.get("score", 0.0) >= 0.55
-        ][:3] if multimodal_intent else []
+            img for img in image_assets if _is_relevant_image(img)
+        ][:3] if (multimodal_intent or has_high_conf_image) else []
 
         input_persist_started = time.monotonic()
         self._append(
@@ -667,6 +688,7 @@ class ChatService:
         ]
 
         visual_prompt_block = ""
+        vision_payload_images: list[str] = []
         if filtered_image_assets:
             visual_lines = [
                 f"- 图表资产 `{img['asset_id']}`"
@@ -679,8 +701,19 @@ class ChatService:
             visual_prompt_block = (
                 "\n\n【检索到的学术论文多模态图表/插图资源】\n"
                 + "\n".join(visual_lines)
-                + "\n\n【多模态嵌入规范】：若上述图表与当前核心论据高度相关，请在正文相应论述句末使用 Markdown 语法插入该图片（语法：`![简要说明](图片地址)`），并用一两句话针对性解读其实证结论；若图表与论述主题不吻合，严禁强行插入或编造解读！"
+                + "\n\n【多模态实证规范】：相关图表已注入视觉感知通道。请结合真实图片细节核验证据；若图表与核心论据高度相关，请在正文相应论述句末使用 Markdown 语法插入该图片（语法：`![简要说明](图片地址)`），并根据图中数值或走势解读其实证结论；若图表与论述主题不吻合，严禁强行插入或编造解读！"
             )
+            if self._store is not None:
+                for img in filtered_image_assets[:3]:
+                    art_ref = img.get("artifact_ref")
+                    if art_ref:
+                        try:
+                            raw_bytes = self._store.read_bytes_by_id(art_ref)
+                            b64 = base64.b64encode(raw_bytes).decode("ascii")
+                            mime = "image/png" if raw_bytes.startswith(b"\x89PNG") else "image/jpeg"
+                            vision_payload_images.append(f"data:{mime};base64,{b64}")
+                        except Exception:
+                            pass
 
         depth_instruction = {
             "quick": "【回答风格】：精炼、快速，先直接给结论，再用必要文献论据支持。",
@@ -717,6 +750,7 @@ class ChatService:
                     base_user_prompt if attempt == 0
                     else base_user_prompt + _rag_retry_feedback(violations)
                 ),
+                images=vision_payload_images or None,
                 max_output_tokens=4096,
                 temperature=0.2,
                 json_object=False,
@@ -730,8 +764,10 @@ class ChatService:
         answer = _normalize_rag_citations(answer, len(snippets))
         violations = _check_rag_answer(answer, len(snippets))
         if filtered_image_assets and multimodal_intent and "![" not in answer:
-            # 仅当首选图表相关度达到极高置信度（>= 0.65）且用户显式要求图表时，才作为后备实证挂载
-            high_conf_images = [img for img in filtered_image_assets if img.get("score", 0.0) >= 0.65]
+            high_conf_images = [
+                img for img in filtered_image_assets
+                if (img.get("raw_score", 0.0) >= 0.55 or img.get("score", 0.0) >= 0.014)
+            ]
             if high_conf_images:
                 fig_blocks = ["\n\n### 🖼 关联学术图表实证\n"]
                 for img in high_conf_images[:2]:

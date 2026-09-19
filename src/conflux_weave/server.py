@@ -75,6 +75,7 @@ from conflux_weave.api_contracts import (
     DocumentNoteResponse,
     DocumentNoteSectionResponse,
     NotePatchRequest,
+    NoteFromChatRequest,
     NoteRevisionItem,
     NoteRevisionsResponse,
     MultimodalFusionHitResponse,
@@ -115,6 +116,7 @@ from conflux_weave.api_contracts import (
     SkillBudgetResponse,
     SkillSummaryResponse,
     SkillDetailResponse,
+    SkillCreateRequest,
     SkillListResponse,
     SkillExecuteApiRequest,
     SkillExecuteApiResponse,
@@ -195,6 +197,7 @@ from conflux_weave.document_notes import (
     NoteSection,
     PatchOperation,
     load_note_artifact,
+    save_note_artifact,
 )
 from conflux_weave.documents import LocalDocumentImporter
 from conflux_weave.global_search import GlobalSearchService
@@ -1299,6 +1302,57 @@ def create_app(
             updated_at=skill.updated_at,
         )
 
+    @app.post("/api/v1/skills", response_model=SkillDetailResponse)
+    async def create_skill_endpoint(request: SkillCreateRequest):
+        try:
+            from conflux_weave.skills.registry import SkillSpec, SkillCategory, SkillStatus, SkillBudget
+            cat = SkillCategory(request.category)
+            stat = SkillStatus(request.status)
+            budget = SkillBudget(
+                max_tokens=request.default_budget.max_tokens,
+                max_steps=request.default_budget.max_steps,
+                estimated_time_seconds=request.default_budget.estimated_time_seconds,
+            )
+            spec = SkillSpec(
+                skill_id=request.skill_id.strip(),
+                version=request.version.strip() or "1.0.0",
+                name=request.name.strip(),
+                description=request.description.strip(),
+                category=cat,
+                author=request.author.strip() or "custom",
+                input_schema=request.input_schema,
+                required_tools=tuple(request.required_tools),
+                prompt_template=request.prompt_template,
+                rules=tuple(request.rules),
+                default_budget=budget,
+                is_builtin=request.is_builtin,
+                status=stat,
+            )
+            registered = skill_registry.register_skill(spec)
+            return SkillDetailResponse(
+                skill_id=registered.skill_id,
+                version=registered.version,
+                name=registered.name,
+                description=registered.description,
+                category=registered.category.value,
+                author=registered.author,
+                required_tools=registered.required_tools,
+                default_budget=SkillBudgetResponse(
+                    max_tokens=registered.default_budget.max_tokens,
+                    max_steps=registered.default_budget.max_steps,
+                    estimated_time_seconds=registered.default_budget.estimated_time_seconds,
+                ),
+                is_builtin=registered.is_builtin,
+                status=registered.status.value,
+                input_schema=registered.input_schema,
+                prompt_template=registered.prompt_template,
+                rules=registered.rules,
+                created_at=registered.created_at,
+                updated_at=registered.updated_at,
+            )
+        except Exception as exc:
+            return error_response(exc)
+
     @app.post("/api/v1/skills/{skill_id}/execute", response_model=SkillExecuteApiResponse)
     async def execute_skill_endpoint(skill_id: str, request: SkillExecuteApiRequest):
         try:
@@ -1717,6 +1771,26 @@ def create_app(
     async def get_run(run_id: str):
         try:
             return query_service.get_run(run_id)
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.get("/api/v1/runs/{run_id}/steps")
+    async def list_run_steps(run_id: str):
+        """返回指定 Run 的完整底层执行步骤与状态轨迹。"""
+        try:
+            repository.get_run(run_id)
+            steps = repository.get_steps(run_id)
+            items = [
+                {
+                    "step_id": s.step_id,
+                    "kind": s.kind,
+                    "status": s.status.value if hasattr(s.status, "value") else str(s.status),
+                    "attempt": s.attempt,
+                    "created_at": getattr(s, "created_at", None),
+                }
+                for s in steps
+            ]
+            return {"run_id": run_id, "items": items, "count": len(items)}
         except Exception as exc:
             return error_response(exc)
 
@@ -2607,39 +2681,17 @@ def create_app(
     ):
         overview = await library_overview()
         items = overview.get("items", [])
-        all_assets = []
+        doc_title_map = {}
         for item in items:
-            doc_id = str(item.get("document_id") or item.get("paper_id") or item.get("record_id") or "")
-            if document_id and doc_id != document_id:
-                continue
-            doc_title = item.get("title") or doc_id
-            payload = await get_or_extract_document_assets(item)
-            if not payload:
-                continue
-            for a in payload.get("assets", []):
-                # Filter out icons / decorative graphic noise
-                if a.get("asset_kind") == "icon":
-                    continue
-                bbox = a.get("bbox") or {}
-                w_pt = float(bbox.get("width", 0) or 0)
-                h_pt = float(bbox.get("height", 0) or 0)
-                w_px = int(a.get("width_px", 0) or 0)
-                if (w_pt > 0 and h_pt > 0 and ((w_pt <= 120 and h_pt <= 120) or (w_pt * h_pt < 10000))):
-                    continue
-                if (w_px > 0 and h_px > 0 and ((w_px <= 130 and h_px <= 130) or (w_px * h_px < 15000 and (w_pt == 0 or w_pt * h_pt < 12000)))):
-                    continue
-                if asset_type and a.get("asset_type") != asset_type:
-                    continue
-                detail = _build_asset_detail_response(a).model_dump()
-                detail["document_title"] = doc_title
-                all_assets.append(detail)
-                if len(all_assets) >= limit:
-                    break
-            if len(all_assets) >= limit:
-                break
+            did = str(item.get("document_id") or item.get("paper_id") or item.get("record_id") or "")
+            if did:
+                doc_title_map[did] = item.get("title") or did
 
-        # Fallback to LanceDB image_assets_v1 if no assets were extracted from overview manifests
-        if not all_assets and retrieval_pipeline is not None and getattr(retrieval_pipeline, "image_index", None) is not None:
+        all_assets = []
+        seen_asset_ids = set()
+
+        # 1. First priority: Direct query from LanceDB image_assets_v1 table if available (fast & pre-indexed)
+        if retrieval_pipeline is not None and getattr(retrieval_pipeline, "image_index", None) is not None:
             try:
                 tbl = retrieval_pipeline.image_index.table
                 where_clause = None
@@ -2651,6 +2703,9 @@ def create_app(
                     search_builder = search_builder.where(where_clause)
                 rows = search_builder.limit(limit).to_list()
                 for r in rows:
+                    aid = r["asset_id"]
+                    if aid in seen_asset_ids:
+                        continue
                     loc = {}
                     if r.get("locator_json"):
                         try:
@@ -2659,7 +2714,7 @@ def create_app(
                             pass
                     asset_dict = {
                         "schema_version": "conflux-weave.document-asset.v1",
-                        "asset_id": r["asset_id"],
+                        "asset_id": aid,
                         "document_id": r.get("document_id", ""),
                         "source_snapshot_id": r.get("source_snapshot_id", ""),
                         "page": r.get("page", 1),
@@ -2677,12 +2732,54 @@ def create_app(
                         "extraction_status": "extracted",
                         "warnings": [],
                     }
-                    _asset_by_id_cache[r["asset_id"]] = asset_dict
+                    _asset_by_id_cache[aid] = asset_dict
                     detail = _build_asset_detail_response(asset_dict).model_dump()
-                    detail["document_title"] = r.get("document_id", "")
+                    detail["document_title"] = doc_title_map.get(r.get("document_id", ""), r.get("document_id", ""))
                     all_assets.append(detail)
+                    seen_asset_ids.add(aid)
+                    if len(all_assets) >= limit:
+                        break
             except Exception:
                 pass
+
+        # 2. Also check cached manifests for already-extracted document assets
+        if len(all_assets) < limit:
+            for item in items:
+                art_id = item.get("assets_artifact_id")
+                if not art_id or not str(art_id).startswith("artifact-sha256-"):
+                    continue
+                doc_id = str(item.get("document_id") or item.get("paper_id") or item.get("record_id") or "")
+                if document_id and doc_id != document_id:
+                    continue
+                doc_title = item.get("title") or doc_id
+                payload = _load_manifest_payload(str(art_id))
+                if not payload:
+                    continue
+                for a in payload.get("assets", []):
+                    aid = a.get("asset_id")
+                    if aid in seen_asset_ids:
+                        continue
+                    if a.get("asset_kind") == "icon":
+                        continue
+                    bbox = a.get("bbox") or {}
+                    w_pt = float(bbox.get("width", 0) or 0)
+                    h_pt = float(bbox.get("height", 0) or 0)
+                    w_px = int(a.get("width_px", 0) or 0)
+                    h_px = int(a.get("height_px", 0) or 0)
+                    if (w_pt > 0 and h_pt > 0 and ((w_pt <= 120 and h_pt <= 120) or (w_pt * h_pt < 10000))):
+                        continue
+                    if (w_px > 0 and h_px > 0 and ((w_px <= 130 and h_px <= 130) or (w_px * h_px < 15000 and (w_pt == 0 or w_pt * h_pt < 12000)))):
+                        continue
+                    if asset_type and a.get("asset_type") != asset_type:
+                        continue
+                    detail = _build_asset_detail_response(a).model_dump()
+                    detail["document_title"] = doc_title
+                    all_assets.append(detail)
+                    seen_asset_ids.add(aid)
+                    if len(all_assets) >= limit:
+                        break
+                if len(all_assets) >= limit:
+                    break
 
         return {
             "total": len(all_assets),
@@ -3984,6 +4081,148 @@ def create_app(
             revisions=tuple(items),
         )
 
+    @app.post("/api/v1/notes/from-chat", response_model=DocumentNoteResponse)
+    async def create_note_from_chat_endpoint(request: NoteFromChatRequest):
+        store = getattr(repository, "artifact_store", None)
+        if store is None:
+            return JSONResponse(status_code=503, content={"code": "service_unavailable", "message": "笔记存储服务未就绪。"})
+
+        content = request.content.strip()
+        if not content:
+            return JSONResponse(status_code=400, content={"code": "empty_content", "message": "笔记内容不能为空。"})
+
+        # 1. 确定关联文档与文献快照
+        doc_id = request.document_id
+        if not doc_id and request.citations:
+            for c in request.citations:
+                snap = c.get("source_snapshot_id") or c.get("chunk_id")
+                loc = c.get("locator") or {}
+                cand = snap or (loc.get("document_id") if isinstance(loc, dict) else None)
+                if cand:
+                    doc_id = str(cand)
+                    break
+
+        if not doc_id and request.conversation_id and chat_service is not None:
+            try:
+                hist = chat_service.conversation(request.conversation_id, limit=10)
+                for msg in hist:
+                    if getattr(msg, "document_ids", None):
+                        doc_id = msg.document_ids[0]
+                        break
+            except Exception:
+                pass
+
+        if not doc_id:
+            doc_id = f"chat-synthesis-{uuid4().hex[:8]}"
+
+        # 2. 生成学术笔记标题
+        title = request.title
+        if not title:
+            first_line = content.splitlines()[0].lstrip("#").strip().strip("*")
+            if first_line and len(first_line) <= 60:
+                title = f"研读笔记：{first_line}"
+            else:
+                title = f"学术对话研读结论 ({doc_id[:16]})"
+
+        # 3. 提取引用与片段
+        citation_labels = []
+        source_segments = []
+        for c in request.citations:
+            idx = c.get("index")
+            chunk = c.get("chunk_id")
+            snap = c.get("source_snapshot_id")
+            loc = c.get("locator") or {}
+            label = f"[{idx}] {snap or chunk}" if idx else str(snap or chunk or "")
+            if isinstance(loc, dict) and loc.get("page"):
+                label += f" (第 {loc['page']} 页)"
+            citation_labels.append(label)
+            if chunk:
+                source_segments.append(str(chunk))
+
+        # 4. 确定版本 (同一 document_id 若已有笔记，递增版本并链接 parent_note_id)
+        entries = [item for item in load_notes_registry() if item.get("document_id") == doc_id]
+        tip_version = max((int(x.get("version") or 0) for x in entries), default=0)
+        version = tip_version + 1
+        note_id = f"note-{uuid4().hex[:12]}"
+        parent_note_id = None
+        if tip_version > 0:
+            parent_entry = next((x for x in entries if int(x.get("version") or 0) == tip_version), None)
+            if parent_entry:
+                parent_note_id = parent_entry.get("note_id")
+
+        # 5. 构建 DocumentNote 结构
+        sec_title = "核心研讨结论与论证"
+        sections = (
+            NoteSection(
+                section_id=f"{doc_id}:note-sec-001",
+                title=sec_title,
+                level=2,
+                content=content,
+                source_segments=tuple(source_segments),
+                citations=tuple(citation_labels),
+            ),
+        )
+
+        metadata = {
+            "source": "chat",
+            "conversation_id": request.conversation_id,
+            "message_id": request.message_id,
+            "created_from": "chat_synthesis",
+        }
+
+        note_obj = DocumentNote(
+            note_id=note_id,
+            document_id=doc_id,
+            title=title,
+            version=version,
+            parent_note_id=parent_note_id,
+            executive_summary=content[:300].strip(),
+            sections=sections,
+            metadata=metadata,
+        )
+
+        # 6. 持久化至 ArtifactStore 与 notes-registry
+        save_note_artifact(note_obj, store)
+        save_note_entry(note_obj)
+
+        # 7. 若提供了 topic_id，自动关联到该专题工作区
+        if request.topic_id:
+            try:
+                t_store = _get_topic_store()
+                t_store.link_object(request.topic_id, "note", note_obj.note_id)
+                if not doc_id.startswith("chat-synthesis-"):
+                    t_store.link_object(request.topic_id, "document", doc_id)
+            except Exception:
+                pass
+
+        return DocumentNoteResponse(
+            note_id=note_obj.note_id,
+            document_id=note_obj.document_id,
+            title=note_obj.title,
+            version=note_obj.version,
+            parent_note_id=note_obj.parent_note_id,
+            applied_patch_id=note_obj.applied_patch_id,
+            executive_summary=note_obj.executive_summary,
+            sections=tuple(
+                DocumentNoteSectionResponse(
+                    section_id=s.section_id,
+                    title=s.title,
+                    level=s.level,
+                    content=s.content,
+                    source_segments=s.source_segments,
+                    citations=s.citations,
+                    asset_refs=s.asset_refs,
+                )
+                for s in note_obj.sections
+            ),
+            key_concepts=note_obj.key_concepts,
+            visual_assets=note_obj.visual_assets,
+            metadata=note_obj.metadata,
+            markdown_content=note_obj.markdown_content,
+            html_content=note_obj.html_content,
+            created_at=note_obj.created_at,
+        )
+
     @app.post("/api/v1/notes/{note_id}/save-to-research")
     async def save_note_to_research(note_id: str):
         store = getattr(repository, "artifact_store", None)
@@ -5078,6 +5317,11 @@ def create_app(
             updated_at=topic.updated_at,
         )
 
+    @app.get("/api/v1/notes")
+    async def list_notes_endpoint():
+        notes = load_notes_registry()
+        return {"items": notes, "total": len(notes)}
+
     @app.get("/api/v1/health/ready")
     async def ready_health():
         return query_service.readiness(provider_configured=provider_configured)
@@ -5286,6 +5530,12 @@ def build_research_runtimes(
                     DeterministicImageEmbeddingAdapter,
                 )
                 dim = image_index.vector_dimensions() or 1024
+                logger.warning(
+                    "[MULTIMODAL DEGRADATION] Neither image_embedding_model nor "
+                    "CONFLUX_WEAVE_IMAGE_EMBEDDING_MODEL is configured. Multimodal retrieval is falling back "
+                    "to DeterministicImageEmbeddingAdapter (offline hash pseudo-features). "
+                    "Visual semantic search is NOT grounded in real vision embeddings!"
+                )
                 image_embedding = DeterministicImageEmbeddingAdapter(store, dimensions=dim)
 
             multimodal_pipeline = MultimodalRetrievalPipeline(

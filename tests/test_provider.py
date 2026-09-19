@@ -294,3 +294,29 @@ def test_adapter_does_not_auto_retry_server_errors(tmp_path) -> None:
 
     assert excinfo.value.code == "provider_http_failed"
     assert len(transport.bodies) == 1
+
+
+def test_adapter_supports_multimodal_images(tmp_path) -> None:
+    transport = FakeTransport(response(valid_response()))
+    store = LocalArtifactStore(tmp_path)
+    adapter = OpenAICompatibleChatAdapter(
+        store,
+        ProviderConfig("https://provider.example/v1", "fixture-secret", "fixture-model"),
+        transport=transport,
+    )
+    result = adapter.complete(
+        system_prompt="system prompt",
+        user_prompt="describe this chart",
+        images=["data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="],
+    )
+    assert result.content == "fixture answer"
+    assert len(transport.calls) == 1
+    sent_body = json.loads(transport.calls[0][2].decode("utf-8"))
+    user_msg = sent_body["messages"][1]
+    assert user_msg["role"] == "user"
+    assert isinstance(user_msg["content"], list)
+    assert user_msg["content"][0] == {"type": "text", "text": "describe this chart"}
+    assert user_msg["content"][1] == {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="},
+    }

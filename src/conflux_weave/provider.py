@@ -194,6 +194,7 @@ class OpenAICompatibleChatAdapter:
         *,
         system_prompt: str,
         user_prompt: str,
+        images: Sequence[str | dict[str, Any]] | None = None,
         max_output_tokens: int = 2048,
         temperature: float = 0.0,
         json_object: bool = False,
@@ -209,11 +210,27 @@ class OpenAICompatibleChatAdapter:
         if not 0.0 <= temperature <= 2.0:
             raise ValueError("temperature must be between 0 and 2")
 
+        if images:
+            user_content: list[dict[str, Any]] = [{"type": "text", "text": user_prompt}]
+            for img in images:
+                if isinstance(img, str):
+                    url = img if (img.startswith("data:") or img.startswith("http")) else f"data:image/jpeg;base64,{img}"
+                    user_content.append({"type": "image_url", "image_url": {"url": url}})
+                elif isinstance(img, dict):
+                    if "type" in img:
+                        user_content.append(img)
+                    elif "url" in img:
+                        user_content.append({"type": "image_url", "image_url": img})
+                    else:
+                        user_content.append({"type": "image_url", "image_url": {"url": img.get("image_url", "")}})
+        else:
+            user_content = user_prompt
+
         payload = {
             "model": self.config.model,
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
+                {"role": "user", "content": user_content},
             ],
             "temperature": temperature,
             "max_tokens": max_output_tokens,

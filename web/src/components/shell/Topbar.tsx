@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import {
   Sun,
   Moon,
@@ -10,11 +10,14 @@ import {
   XCircle,
   ExternalLink,
   Trash2,
+  Square,
+  Bookmark,
 } from "lucide-react";
 import { useWorkbenchStore, type GlobalBackgroundTask } from "@/stores/useWorkbenchStore";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { GlobalSearch } from "@/components/shell/GlobalSearch";
+import { api } from "@/services/api";
 import type { SectionType } from "@/types/workbench";
 
 const navItems: Array<{ id: SectionType; label: string }> = [
@@ -37,12 +40,65 @@ export const Topbar: React.FC = () => {
     health,
     runs,
     backgroundTasks,
+    addBackgroundTask,
+    updateBackgroundTask,
     removeBackgroundTask,
+    refreshRuns,
     openNoteStudio,
     setActiveRunId,
+    topics,
+    setTopics,
+    activeTopicId,
   } = useWorkbenchStore();
 
   const [isTaskCenterOpen, setIsTaskCenterOpen] = useState(false);
+  const [stoppingTaskId, setStoppingTaskId] = useState<string | null>(null);
+
+  const handleStopTask = async (task: GlobalBackgroundTask) => {
+    setStoppingTaskId(task.id);
+    let cancelSuccess = true;
+    let cancelError: string | null = null;
+    try {
+      if (task.type === "research" || task.id.startsWith("run-")) {
+        await api.cancelRun(task.id);
+      }
+    } catch (err: any) {
+      cancelSuccess = false;
+      cancelError = err?.message || "取消接口请求失败";
+      console.warn("Failed to cancel task via API:", err);
+    } finally {
+      const existsInBg = backgroundTasks.some((t) => t.id === task.id);
+      if (cancelSuccess) {
+        const updatePayload = {
+          status: "failed" as const,
+          message: "任务已由用户手动停止",
+        };
+        if (existsInBg) {
+          updateBackgroundTask(task.id, updatePayload);
+        } else {
+          addBackgroundTask({
+            ...task,
+            ...updatePayload,
+          });
+        }
+      } else {
+        const updatePayload = {
+          status: "running" as const,
+          message: `停止请求失败: ${cancelError}（任务可能仍在后台运行）`,
+        };
+        if (existsInBg) {
+          updateBackgroundTask(task.id, updatePayload);
+        } else {
+          addBackgroundTask({
+            ...task,
+            ...updatePayload,
+          });
+        }
+      }
+      await refreshRuns();
+      setStoppingTaskId(null);
+    }
+  };
 
   const activeRunsAsTasks: GlobalBackgroundTask[] = useMemo(() => {
     return (runs || [])
@@ -76,6 +132,18 @@ export const Topbar: React.FC = () => {
       setSection("projects");
     }
   };
+
+  useEffect(() => {
+    if (topics.length === 0) {
+      api.getTopics().then((res) => {
+        if (res.items) setTopics(res.items);
+      }).catch(() => {});
+    }
+  }, [topics.length, setTopics]);
+
+  const activeTopic = useMemo(() => {
+    return topics.find((t) => t.topic_id === activeTopicId) || null;
+  }, [topics, activeTopicId]);
 
   return (
     <header className="sticky top-0 z-40 flex h-14 w-full items-center justify-between border-b border-border/70 bg-background/80 px-4 backdrop-blur-md">
@@ -126,6 +194,22 @@ export const Topbar: React.FC = () => {
 
       {/* Right Actions */}
       <div className="flex items-center space-x-2 sm:space-x-3">
+        {/* Active Topic Context Anchor */}
+        {activeTopic && (
+          <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-600/25 text-xs text-foreground font-serif-academic">
+            <Bookmark className="h-3 w-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+            <span className="text-[11px] text-muted-foreground font-sans">专题:</span>
+            <button
+              type="button"
+              onClick={() => setSection("topics")}
+              className="font-semibold text-emerald-800 dark:text-emerald-300 hover:underline max-w-[140px] truncate cursor-pointer bg-transparent border-none p-0 text-inherit"
+              title={`当前聚焦专题：${activeTopic.name} (点击进入专题看板)`}
+            >
+              {activeTopic.name}
+            </button>
+          </div>
+        )}
+
         {/* A1 全局搜索 */}
         <GlobalSearch />
 
@@ -231,6 +315,23 @@ export const Topbar: React.FC = () => {
                                 <ExternalLink className="h-3 w-3" />
                                 <span>打开</span>
                               </Button>
+                              {t.status === "running" && (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => handleStopTask(t)}
+                                  disabled={stoppingTaskId === t.id}
+                                  className="h-6 px-2 text-[11px] text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 hover:text-rose-700 dark:hover:text-rose-300 gap-1 font-serif-academic cursor-pointer"
+                                  title="停止正在执行的任务"
+                                >
+                                  {stoppingTaskId === t.id ? (
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                  ) : (
+                                    <Square className="h-3 w-3 fill-current" />
+                                  )}
+                                  <span>停止</span>
+                                </Button>
+                              )}
                               {t.status !== "running" && (
                                 <button
                                   onClick={() => removeBackgroundTask(t.id)}

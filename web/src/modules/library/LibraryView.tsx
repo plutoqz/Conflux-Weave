@@ -22,6 +22,7 @@ import {
   Filter,
   Check,
   Upload,
+  MessageSquare,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,9 +37,11 @@ import {
 import { DonutChart, HistogramChart } from "@/components/common/Charts";
 import { api } from "@/services/api";
 import { cn } from "@/lib/utils";
+import { useWorkbenchStore } from "@/stores/useWorkbenchStore";
 import type { LibraryDocument, PaperItem } from "@/types/workbench";
 
 export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = ({ onOpenNote }) => {
+  const { setSection, setActiveScopeDocIds } = useWorkbenchStore();
   const [activeTab, setActiveTab] = useState<"documents" | "multimodal" | "assets" | "papers">("documents");
   const [documents, setDocuments] = useState<LibraryDocument[]>([]);
   const [docFilter, setDocFilter] = useState<"active" | "archived" | "deleted">("active");
@@ -601,6 +604,18 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
                   </Button>
                   <Button
                     size="sm"
+                    onClick={() => {
+                      setActiveScopeDocIds(Array.from(selectedDocIds));
+                      setSection("chat");
+                    }}
+                    className="h-6 text-[11px] px-2.5 bg-emerald-800 hover:bg-emerald-700 text-white font-serif-academic gap-1 cursor-pointer"
+                    title="将所选文献作为范围，跳转对话入口发起研讨"
+                  >
+                    <MessageSquare className="h-3 w-3" />
+                    <span>以此发起研讨</span>
+                  </Button>
+                  <Button
+                    size="sm"
                     variant="ghost"
                     onClick={() => setSelectedDocIds(new Set())}
                     className="h-6 text-[11px] px-1 text-muted-foreground"
@@ -729,15 +744,30 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
                           </button>
                         )}
                       </div>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="text-xs sm:text-sm text-emerald-800 dark:text-emerald-300 font-serif-academic gap-1.5 hover:bg-emerald-900/10 font-medium"
-                        onClick={() => onOpenNote?.(doc.document_id)}
-                      >
-                        <Sparkles className="h-4 w-4" />
-                        <span>AI 研读 / 生成权威笔记</span>
-                      </Button>
+                      <div className="flex items-center gap-1.5">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs text-emerald-800 dark:text-emerald-300 font-serif-academic gap-1 border-emerald-600/40 hover:bg-emerald-900/10 cursor-pointer"
+                          onClick={() => {
+                            setActiveScopeDocIds([doc.document_id]);
+                            setSection("chat");
+                          }}
+                          title="限定此文档并发起学术研讨"
+                        >
+                          <MessageSquare className="h-3.5 w-3.5" />
+                          <span>以此研讨</span>
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 text-xs sm:text-sm text-emerald-800 dark:text-emerald-300 font-serif-academic gap-1.5 hover:bg-emerald-900/10 font-medium"
+                          onClick={() => onOpenNote?.(doc.document_id)}
+                        >
+                          <Sparkles className="h-4 w-4" />
+                          <span>AI 研读 / 权威笔记</span>
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -967,9 +997,20 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
           {(() => {
             const filteredAssets = allAssets.filter((asset) => {
               if (asset.asset_kind === "icon") return false;
-              const bbox = asset.bbox;
-              if (bbox && ((bbox.width <= 120 && bbox.height <= 120) || bbox.width * bbox.height < 10000)) return false;
-              if (asset.width_px > 0 && asset.height_px > 0 && ((asset.width_px <= 130 && asset.height_px <= 130) || asset.width_px * asset.height_px < 15000)) return false;
+              const bbox: any = asset.bbox;
+              if (bbox) {
+                let w = 0;
+                let h = 0;
+                if (Array.isArray(bbox) && bbox.length >= 4) {
+                  w = Math.abs(bbox[2] - bbox[0]);
+                  h = Math.abs(bbox[3] - bbox[1]);
+                } else if (typeof bbox === "object") {
+                  w = Number(bbox.width) || 0;
+                  h = Number(bbox.height) || 0;
+                }
+                if (w > 0 && h > 0 && ((w <= 40 && h <= 40) || w * h < 2000)) return false;
+              }
+              if (asset.width_px > 0 && asset.height_px > 0 && ((asset.width_px <= 40 && asset.height_px <= 40) || asset.width_px * asset.height_px < 2000)) return false;
               return true;
             });
             return assetsLoading ? (

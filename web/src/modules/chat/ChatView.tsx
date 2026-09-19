@@ -35,6 +35,7 @@ import {
 } from "@/components/ui/dialog";
 import { api } from "@/services/api";
 import { cn } from "@/lib/utils";
+import { useWorkbenchStore } from "@/stores/useWorkbenchStore";
 import type { ChatMessage, ConversationSummary, LibraryDocument } from "@/types/workbench";
 
 const renderMarkdown = (content: string) => {
@@ -421,14 +422,56 @@ export const ChatView: React.FC = () => {
     }
   });
   const [availableDocs, setAvailableDocs] = useState<LibraryDocument[]>([]);
-  const [selectedScopeDocIds, setSelectedScopeDocIds] = useState<string[]>([]);
+  const {
+    activeScopeDocIds: selectedScopeDocIds,
+    setActiveScopeDocIds: setSelectedScopeDocIds,
+    activeTopicId,
+    openNoteStudio,
+  } = useWorkbenchStore();
   const [scopeDialogOpen, setScopeDialogOpen] = useState<boolean>(false);
+  const [savingNoteMsgId, setSavingNoteMsgId] = useState<string | null>(null);
+  const [savedNoteMap, setSavedNoteMap] = useState<Record<string, { noteId: string; docId: string }>>({});
+
+  useEffect(() => {
+    if (selectedScopeDocIds.length > 0 && mode === "direct") {
+      setMode("rag");
+    }
+  }, [selectedScopeDocIds]);
 
   useEffect(() => {
     api.getDocuments("active").then((res) => {
       setAvailableDocs(res.items || []);
     }).catch(() => {});
   }, []);
+
+  const handleSaveMessageAsNote = async (msg: ChatMessage) => {
+    const msgId = msg.message_id || msg.id;
+    if (!msgId || savingNoteMsgId) return;
+    setSavingNoteMsgId(msgId);
+    try {
+      const primaryDocId =
+        (msg.citations && msg.citations[0]?.source_snapshot_id) ||
+        (selectedScopeDocIds.length > 0 ? selectedScopeDocIds[0] : undefined);
+
+      const res = await api.createNoteFromChat({
+        conversation_id: activeConversationId || undefined,
+        message_id: msgId,
+        document_id: primaryDocId,
+        content: msg.content,
+        citations: msg.citations,
+        topic_id: activeTopicId || undefined,
+      });
+
+      setSavedNoteMap((prev) => ({
+        ...prev,
+        [msgId]: { noteId: res.note_id, docId: res.document_id },
+      }));
+    } catch (err: any) {
+      alert(`沉淀为笔记失败: ${err.message || err}`);
+    } finally {
+      setSavingNoteMsgId(null);
+    }
+  };
 
   const handleCandidateAction = async (candidateId: string, action: "approve" | "reject") => {
     setCandidateActions((prev) => ({ ...prev, [candidateId]: "loading" }));
@@ -997,23 +1040,102 @@ export const ChatView: React.FC = () => {
                               dangerouslySetInnerHTML={renderMarkdown(msg.content)}
                             />
                           )}
+
+                          {/* Evidence Deep Link Pills */}
+                          {msg.citations && msg.citations.length > 0 && (
+                            <div className="pt-2.5 mt-2.5 border-t border-border/40 space-y-1.5 font-sans">
+                              <div className="text-[11px] font-mono text-muted-foreground flex items-center justify-between">
+                                <span className="flex items-center gap-1 text-emerald-800 dark:text-emerald-300 font-semibold">
+                                  <BookOpen className="h-3 w-3" />
+                                  文献实证引用 ({msg.citations.length} 处)
+                                </span>
+                                <span className="text-[10px] text-muted-foreground">点击定位原文页码与切片</span>
+                              </div>
+                              <div className="flex flex-wrap gap-1.5">
+                                {msg.citations.map((cite, cIdx) => {
+                                  const docIdentifier = cite.source_snapshot_id || cite.chunk_id;
+                                  const page =
+                                    typeof cite.locator === "object" && cite.locator !== null && typeof cite.locator.page === "number"
+                                      ? cite.locator.page
+                                      : undefined;
+                                  return (
+                                    <button
+                                      key={cIdx}
+                                      type="button"
+                                      onClick={() => {
+                                        if (docIdentifier) {
+                                          openNoteStudio(docIdentifier, {
+                                            tab: "source",
+                                            page,
+                                            segmentId: cite.chunk_id,
+                                          });
+                                        }
+                                      }}
+                                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono border border-emerald-700/30 bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100/60 dark:hover:bg-emerald-900/40 transition cursor-pointer"
+                                      title={`跳转研读窗格：${docIdentifier}${page ? ` (第 ${page} 页)` : ""}`}
+                                    >
+                                      <span className="font-bold">[{cite.index}]</span>
+                                      <span className="max-w-[140px] truncate">{docIdentifier}</span>
+                                      {page && <span className="text-emerald-600 dark:text-emerald-400">P.{page}</span>}
+                                      <ExternalLink className="h-2.5 w-2.5 opacity-70 ml-0.5" />
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+
                           {msg.message_id && (
-                            <div className="pt-2 mt-3 border-t border-border/40 flex items-center gap-2.5 text-xs font-mono text-muted-foreground">
-                              <span className="flex items-center gap-1">
-                                <Download className="h-3 w-3" />
-                                导出
-                              </span>
-                              {(["markdown", "json"] as const).map((format) => (
-                                <button
-                                  key={format}
-                                  type="button"
-                                  disabled={exportingAnswer === msg.message_id}
-                                  onClick={() => handleExportAnswer(msg.message_id!, format)}
-                                  className="hover:text-foreground hover:underline bg-transparent border-none p-0 cursor-pointer"
-                                >
-                                  {exportingAnswer === msg.message_id ? "导出中…" : format.toUpperCase()}
-                                </button>
-                              ))}
+                            <div className="pt-2 mt-3 border-t border-border/40 flex items-center justify-between text-xs font-mono text-muted-foreground flex-wrap gap-2">
+                              <div className="flex items-center gap-2.5">
+                                <span className="flex items-center gap-1">
+                                  <Download className="h-3 w-3" />
+                                  导出
+                                </span>
+                                {(["markdown", "json"] as const).map((format) => (
+                                  <button
+                                    key={format}
+                                    type="button"
+                                    disabled={exportingAnswer === msg.message_id}
+                                    onClick={() => handleExportAnswer(msg.message_id!, format)}
+                                    className="hover:text-foreground hover:underline bg-transparent border-none p-0 cursor-pointer"
+                                  >
+                                    {exportingAnswer === msg.message_id ? "导出中…" : format.toUpperCase()}
+                                  </button>
+                                ))}
+                              </div>
+
+                              <div className="flex items-center gap-2">
+                                {savedNoteMap[msg.message_id] ? (
+                                  <div className="flex items-center gap-1.5 text-emerald-800 dark:text-emerald-300 font-sans">
+                                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                                    <span>已沉淀为笔记</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => openNoteStudio(savedNoteMap[msg.message_id!].docId)}
+                                      className="underline hover:text-emerald-700 ml-1 cursor-pointer bg-transparent border-none p-0"
+                                    >
+                                      查看
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    disabled={savingNoteMsgId === msg.message_id}
+                                    onClick={() => handleSaveMessageAsNote(msg)}
+                                    className="h-6 px-2 text-[11px] font-serif-academic text-emerald-800 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 gap-1 cursor-pointer"
+                                    title="将本条问答论据与结论沉淀为文献研读笔记"
+                                  >
+                                    {savingNoteMsgId === msg.message_id ? (
+                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                    ) : (
+                                      <BookmarkPlus className="h-3 w-3" />
+                                    )}
+                                    <span>沉淀为研读笔记</span>
+                                  </Button>
+                                )}
+                              </div>
                             </div>
                           )}
                         </div>
@@ -1128,95 +1250,143 @@ export const ChatView: React.FC = () => {
         </div>
 
         {/* Bottom Input Composer */}
-        <footer className="shrink-0 border-t border-border/70 bg-card/70 px-4 py-3 flex justify-center backdrop-blur-sm">
-          <form onSubmit={handleSend} className="w-full max-w-3xl flex flex-col rounded-2xl border border-border/80 bg-background/95 p-3 shadow-xs focus-within:ring-2 focus-within:ring-emerald-800/30 focus-within:border-emerald-800/60 transition-all">
-            <textarea
-              rows={2}
-              value={input}
-              onChange={(e) => handleInputChange(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder={`输入学术问题（Enter 发送，Shift+Enter 换行）...`}
-              className="w-full text-xs sm:text-sm p-1 border-0 bg-transparent focus:outline-none focus:ring-0 resize-none min-h-[48px] max-h-[140px] leading-relaxed text-foreground placeholder:text-muted-foreground"
-            />
-            {/* Toolbar row with Web Search, Thinking Depth, and Send button perfectly aligned */}
-            <div className="flex items-center justify-between pt-2 mt-1 border-t border-border/40 gap-2">
-              <div className="flex items-center gap-2 flex-wrap">
-                {/* 联网搜索开关 */}
-                <button
-                  type="button"
-                  onClick={() => setWebSearch((prev) => !prev)}
-                  className={cn(
-                    "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-sans border transition cursor-pointer select-none",
-                    webSearch
-                      ? "bg-blue-50 text-blue-700 border-blue-300 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800 font-semibold shadow-2xs"
-                      : "border-border/70 text-muted-foreground hover:text-foreground hover:bg-muted/60"
-                  )}
-                  title="开启后将通过实时搜索引擎检索最新权威资讯并注入上下文"
-                >
-                  <Globe className={cn("h-3.5 w-3.5", webSearch ? "text-blue-600 dark:text-blue-400" : "text-muted-foreground")} />
-                  <span>联网搜索</span>
-                  <span className={cn("text-[10px] px-1 py-0.2 rounded font-mono", webSearch ? "bg-blue-600 text-white" : "bg-muted text-muted-foreground")}>
-                    {webSearch ? "ON" : "OFF"}
+        <footer className="shrink-0 border-t border-border/70 bg-card/70 px-4 py-3 flex flex-col items-center backdrop-blur-sm">
+          <div className="w-full max-w-3xl flex flex-col">
+            {/* Scoped Documents Banner */}
+            {selectedScopeDocIds.length > 0 && (
+              <div className="mb-2 flex items-center justify-between gap-2 px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-600/20 text-xs text-foreground">
+                <div className="flex items-center gap-2 overflow-hidden">
+                  <span className="shrink-0 inline-flex items-center gap-1 font-semibold text-emerald-800 dark:text-emerald-300">
+                    <BookOpen className="h-3.5 w-3.5" />
+                    已锁定研讨范围 ({selectedScopeDocIds.length} 篇文献):
                   </span>
-                </button>
+                  <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5">
+                    {selectedScopeDocIds.map((docId) => {
+                      const doc = availableDocs.find((d) => d.document_id === docId);
+                      const title = doc?.title || docId;
+                      return (
+                        <span
+                          key={docId}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-background/90 border border-border/60 text-[11px] font-mono text-muted-foreground truncate max-w-[220px]"
+                          title={title}
+                        >
+                          {title}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="shrink-0 flex items-center gap-1">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 px-2 text-[11px] text-muted-foreground hover:text-foreground cursor-pointer"
+                    onClick={() => setScopeDialogOpen(true)}
+                  >
+                    调整
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 px-2 text-[11px] text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30 cursor-pointer"
+                    onClick={() => setSelectedScopeDocIds([])}
+                  >
+                    清除
+                  </Button>
+                </div>
+              </div>
+            )}
+            <form onSubmit={handleSend} className="w-full flex flex-col rounded-2xl border border-border/80 bg-background/95 p-3 shadow-xs focus-within:ring-2 focus-within:ring-emerald-800/30 focus-within:border-emerald-800/60 transition-all">
+              <textarea
+                rows={2}
+                value={input}
+                onChange={(e) => handleInputChange(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder={`输入学术问题（Enter 发送，Shift+Enter 换行）...`}
+                className="w-full text-xs sm:text-sm p-1 border-0 bg-transparent focus:outline-none focus:ring-0 resize-none min-h-[48px] max-h-[140px] leading-relaxed text-foreground placeholder:text-muted-foreground"
+              />
+              {/* Toolbar row with Web Search, Thinking Depth, and Send button perfectly aligned */}
+              <div className="flex items-center justify-between pt-2 mt-1 border-t border-border/40 gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  {/* 联网搜索开关 */}
+                  <button
+                    type="button"
+                    onClick={() => setWebSearch((prev) => !prev)}
+                    className={cn(
+                      "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-sans border transition cursor-pointer select-none",
+                      webSearch
+                        ? "bg-blue-50 text-blue-700 border-blue-300 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800 font-semibold shadow-2xs"
+                        : "border-border/70 text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                    )}
+                    title="开启后将通过实时搜索引擎检索最新权威资讯并注入上下文"
+                  >
+                    <Globe className={cn("h-3.5 w-3.5", webSearch ? "text-blue-600 dark:text-blue-400" : "text-muted-foreground")} />
+                    <span>联网搜索</span>
+                    <span className={cn("text-[10px] px-1 py-0.2 rounded font-mono", webSearch ? "bg-blue-600 text-white" : "bg-muted text-muted-foreground")}>
+                      {webSearch ? "ON" : "OFF"}
+                    </span>
+                  </button>
 
-                {/* 思考深度控制 */}
-                <div className="flex items-center rounded-md border border-border/70 p-0.5 bg-muted/40 text-xs">
-                  <span className="text-[11px] text-muted-foreground px-1.5 font-serif-academic select-none">思考深度:</span>
-                  {([
-                    { id: "quick", label: "⚡ 快速", desc: "紧凑响应 · 降低延迟" },
-                    { id: "deep", label: "🧠 深度", desc: "详尽推演 · 严谨论证" },
-                    { id: "rigorous", label: "🔬 极致研判", desc: "闭环交叉反思 · 证据求交" },
-                  ] as const).map((t) => (
-                    <button
-                      key={t.id}
-                      type="button"
-                      onClick={() => setThinkingDepth(t.id)}
-                      title={t.desc}
-                      className={cn(
-                        "px-2 py-0.5 rounded text-xs transition cursor-pointer",
-                        thinkingDepth === t.id
-                          ? "bg-background text-foreground font-semibold shadow-2xs border border-border/40"
-                          : "text-muted-foreground hover:text-foreground"
-                      )}
-                    >
-                      {t.label}
-                    </button>
-                  ))}
+                  {/* 思考深度控制 */}
+                  <div className="flex items-center rounded-md border border-border/70 p-0.5 bg-muted/40 text-xs">
+                    <span className="text-[11px] text-muted-foreground px-1.5 font-serif-academic select-none">思考深度:</span>
+                    {([
+                      { id: "quick", label: "⚡ 快速", desc: "紧凑响应 · 降低延迟" },
+                      { id: "deep", label: "🧠 深度", desc: "详尽推演 · 严谨论证" },
+                      { id: "rigorous", label: "🔬 极致研判", desc: "闭环交叉反思 · 证据求交" },
+                    ] as const).map((t) => (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => setThinkingDepth(t.id)}
+                        title={t.desc}
+                        className={cn(
+                          "px-2 py-0.5 rounded text-xs transition cursor-pointer",
+                          thinkingDepth === t.id
+                            ? "bg-background text-foreground font-semibold shadow-2xs border border-border/40"
+                            : "text-muted-foreground hover:text-foreground"
+                        )}
+                      >
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* 限定检索文献范围 (U18) */}
+                  <button
+                    type="button"
+                    onClick={() => setScopeDialogOpen(true)}
+                    className={cn(
+                      "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-sans border transition cursor-pointer select-none",
+                      selectedScopeDocIds.length > 0
+                        ? "bg-emerald-50 text-emerald-800 border-emerald-300 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800 font-semibold shadow-2xs"
+                        : "border-border/70 text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                    )}
+                    title="限定 RAG 知识检索的文献范围"
+                  >
+                    <BookOpen className={cn("h-3.5 w-3.5", selectedScopeDocIds.length > 0 ? "text-emerald-700 dark:text-emerald-400" : "text-muted-foreground")} />
+                    <span>限定范围</span>
+                    <span className={cn("text-[10px] px-1 py-0.2 rounded font-mono", selectedScopeDocIds.length > 0 ? "bg-emerald-700 text-white" : "bg-muted text-muted-foreground")}>
+                      {selectedScopeDocIds.length > 0 ? `${selectedScopeDocIds.length} 篇` : "全库"}
+                    </span>
+                  </button>
                 </div>
 
-                {/* 限定检索文献范围 (U18) */}
-                <button
-                  type="button"
-                  onClick={() => setScopeDialogOpen(true)}
-                  className={cn(
-                    "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-sans border transition cursor-pointer select-none",
-                    selectedScopeDocIds.length > 0
-                      ? "bg-emerald-50 text-emerald-800 border-emerald-300 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800 font-semibold shadow-2xs"
-                      : "border-border/70 text-muted-foreground hover:text-foreground hover:bg-muted/60"
-                  )}
-                  title="限定 RAG 知识检索的文献范围"
+                {/* 发送按钮 */}
+                <Button
+                  type="submit"
+                  size="sm"
+                  disabled={!input.trim() || loading}
+                  className="h-8 px-3.5 rounded-lg bg-emerald-800 hover:bg-emerald-900 text-white flex items-center gap-1.5 shadow-xs font-medium cursor-pointer shrink-0"
                 >
-                  <BookOpen className={cn("h-3.5 w-3.5", selectedScopeDocIds.length > 0 ? "text-emerald-700 dark:text-emerald-400" : "text-muted-foreground")} />
-                  <span>限定范围</span>
-                  <span className={cn("text-[10px] px-1 py-0.2 rounded font-mono", selectedScopeDocIds.length > 0 ? "bg-emerald-700 text-white" : "bg-muted text-muted-foreground")}>
-                    {selectedScopeDocIds.length > 0 ? `${selectedScopeDocIds.length} 篇` : "全库"}
-                  </span>
-                </button>
+                  <span>发送</span>
+                  <Send className="h-3.5 w-3.5" />
+                </Button>
               </div>
-
-              {/* 发送按钮 */}
-              <Button
-                type="submit"
-                size="sm"
-                disabled={!input.trim() || loading}
-                className="h-8 px-3.5 rounded-lg bg-emerald-800 hover:bg-emerald-900 text-white flex items-center gap-1.5 shadow-xs font-medium cursor-pointer shrink-0"
-              >
-                <span>发送</span>
-                <Send className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-          </form>
+            </form>
+          </div>
         </footer>
       </div>
 
