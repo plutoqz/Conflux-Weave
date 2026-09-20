@@ -25,6 +25,7 @@ from conflux_weave.multimodal_retrieval import (
     MULTIMODAL_ENV_FLAG,
     MultimodalRetrievalPipeline,
     MultimodalRetrievalRun,
+    intra_modal_image_rrf,
     is_multimodal_env_enabled,
 )
 from conflux_weave.provider import (
@@ -760,3 +761,102 @@ def test_vector_dimensions_absent_table_returns_none(tmp_path):
     store = LocalArtifactStore(tmp_path / "artifacts")
     empty_index = LanceDBImageIndex(tmp_path / "empty_db", artifact_store=store)
     assert empty_index.vector_dimensions() is None
+
+
+def test_intra_modal_image_rrf():
+    """Verify rank-based intra-modal image RRF fusion across vector and caption streams."""
+    v_hit1 = MultimodalRetrievalHit(
+        asset_id="asset-1",
+        score=0.95,
+        rank=1,
+        modality="image",
+        source_snapshot_id="snap-1",
+        document_id="doc-1",
+        page=1,
+        bbox={"x": 10.0, "y": 10.0, "width": 100.0, "height": 100.0},
+        coordinate_space="pdf_points",
+        parent_chunk_ids=(),
+        caption="Figure 1: Vector match caption",
+        artifact_ref="artifact-sha256-img1",
+        thumbnail_artifact_ref=None,
+        embedding_model="jina-clip-v2",
+        index_version="1",
+        locator={},
+        referencing_text=None,
+        ocr_text=None,
+    )
+    v_hit2 = MultimodalRetrievalHit(
+        asset_id="asset-2",
+        score=0.75,
+        rank=2,
+        modality="image",
+        source_snapshot_id="snap-1",
+        document_id="doc-1",
+        page=2,
+        bbox={"x": 20.0, "y": 20.0, "width": 100.0, "height": 100.0},
+        coordinate_space="pdf_points",
+        parent_chunk_ids=(),
+        caption="Figure 2: Only in vector",
+        artifact_ref="artifact-sha256-img2",
+        thumbnail_artifact_ref=None,
+        embedding_model="jina-clip-v2",
+        index_version="1",
+        locator={},
+        referencing_text=None,
+        ocr_text=None,
+    )
+    c_hit1 = MultimodalRetrievalHit(
+        asset_id="asset-1",
+        score=14.2,  # BM25 lexical score
+        rank=1,
+        modality="image",
+        source_snapshot_id="snap-1",
+        document_id="doc-1",
+        page=1,
+        bbox={"x": 10.0, "y": 10.0, "width": 100.0, "height": 100.0},
+        coordinate_space="pdf_points",
+        parent_chunk_ids=(),
+        caption="Figure 1: Rich caption with lexical match",
+        artifact_ref="artifact-sha256-img1",
+        thumbnail_artifact_ref=None,
+        embedding_model="",
+        index_version="1",
+        locator={},
+        referencing_text="As shown in Figure 1, the model achieves SOTA.",
+        ocr_text="Transformer Blocks",
+    )
+    c_hit3 = MultimodalRetrievalHit(
+        asset_id="asset-3",
+        score=8.5,
+        rank=2,
+        modality="image",
+        source_snapshot_id="snap-1",
+        document_id="doc-1",
+        page=3,
+        bbox={"x": 30.0, "y": 30.0, "width": 100.0, "height": 100.0},
+        coordinate_space="pdf_points",
+        parent_chunk_ids=(),
+        caption="Figure 3: Only in caption",
+        artifact_ref="artifact-sha256-img3",
+        thumbnail_artifact_ref=None,
+        embedding_model="",
+        index_version="1",
+        locator={},
+        referencing_text=None,
+        ocr_text=None,
+    )
+
+    # Fuse with k=60
+    fused = intra_modal_image_rrf([v_hit1, v_hit2], [c_hit1, c_hit3], k=60, top_k=5)
+    assert len(fused) == 3
+    # asset-1 appears in both streams at rank 1: score = 1/(60+1) + 1/(60+1) = 2/61
+    assert fused[0].asset_id == "asset-1"
+    assert round(fused[0].score, 6) == round(2.0 / 61.0, 6)
+    assert fused[0].rank == 1
+    # Enriched metadata from caption hit (referencing_text and ocr_text)
+    assert fused[0].referencing_text == "As shown in Figure 1, the model achieves SOTA."
+    assert fused[0].ocr_text == "Transformer Blocks"
+
+    # asset-2 and asset-3 both have score = 1/(60+2) = 1/62
+    assert {fused[1].asset_id, fused[2].asset_id} == {"asset-2", "asset-3"}
+

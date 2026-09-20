@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Protocol, Sequence, runtime_checkable
 
 from conflux_weave.evidence.contracts import EvidenceRef
 from conflux_weave.hybrid_retrieval import HybridRetrievalPipeline, HybridRetrievalRun
@@ -62,6 +63,209 @@ class MultimodalRetrievalRun:
     image_degradation: str | None = None
 
 
+@runtime_checkable
+class MultimodalCrossReranker(Protocol):
+    """Protocol for cross-modal relevance reranking and negative candidate pruning."""
+
+    def rerank(
+        self,
+        query: str,
+        candidates: Sequence[MultimodalRetrievalHit],
+        *,
+        top_k: int = 5,
+        min_relevance_threshold: float = 0.30,
+    ) -> tuple[MultimodalRetrievalHit, ...]:
+        ...
+
+
+_ENGLISH_STOP_WORDS = frozenset({
+    "a", "an", "the", "and", "or", "but", "if", "then", "else", "when", "at",
+    "by", "for", "with", "about", "against", "between", "into", "through",
+    "during", "before", "after", "above", "below", "to", "from", "up", "down",
+    "in", "out", "on", "off", "over", "under", "again", "further", "once",
+    "here", "there", "all", "any", "both", "each", "few", "more", "most",
+    "other", "some", "such", "no", "nor", "not", "only", "own", "same", "so",
+    "than", "too", "very", "can", "will", "just", "should", "now", "of",
+    "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+})
+
+
+class DefaultMultimodalCrossReranker:
+    """Lightweight cross-modal reranker and unanswerable candidate pruner.
+
+    Combines vector similarity, caption/OCR/referencing lexical grounding,
+    and penalizes purely incidental page-cooccurrence hits that lack topical relevance.
+    """
+
+    def __init__(
+        self,
+        *,
+        min_relevance_threshold: float = 0.30,
+        page_hit_penalty_without_lexical: float = 0.45,
+    ) -> None:
+        self.min_relevance_threshold = min_relevance_threshold
+        self.page_hit_penalty_without_lexical = page_hit_penalty_without_lexical
+
+    def rerank(
+        self,
+        query: str,
+        candidates: Sequence[MultimodalRetrievalHit],
+        *,
+        top_k: int = 5,
+        min_relevance_threshold: float | None = None,
+    ) -> tuple[MultimodalRetrievalHit, ...]:
+        thresh = min_relevance_threshold if min_relevance_threshold is not None else self.min_relevance_threshold
+        query_tokens = [
+            t.lower() for t in re.findall(r"[\w\u4e00-\u9fff]+", query)
+            if len(t) > 1 and t.lower() not in _ENGLISH_STOP_WORDS
+        ]
+        if not query_tokens:
+            query_tokens = [
+                t.lower() for t in re.findall(r"[\w\u4e00-\u9fff]+", query)
+                if len(t) > 1
+            ]
+
+        # Group hits by asset_id to combine multi-modal signals (vector, caption, page)
+        candidates_by_id: dict[str, list[MultimodalRetrievalHit]] = {}
+        for hit in candidates:
+            candidates_by_id.setdefault(hit.asset_id, []).append(hit)
+
+        scored_candidates: list[tuple[float, MultimodalRetrievalHit]] = []
+        for asset_id, hits in candidates_by_id.items():
+            rep_hit = max(hits, key=lambda h: (1 if h.caption else 0, getattr(h, "score", 0.0)))
+            max_base_score = max(float(getattr(h, "score", 0.0)) for h in hits)
+
+            text_corpus = f"{rep_hit.caption or ''} {rep_hit.ocr_text or ''} {rep_hit.referencing_text or ''}".lower()
+            corpus_tokens = set(re.findall(r"[\w\u4e00-\u9fff]+", text_corpus))
+            lexical_matches = sum(1 for tok in query_tokens if tok in corpus_tokens)
+            lexical_ratio = lexical_matches / max(1, len(query_tokens))
+
+            # Prune ungrounded out-of-domain noise candidates
+            max_vec_score = max((float(h.score) for h in hits if getattr(h, "embedding_model", None) and float(h.score) <= 1.0), default=0.0)
+            if len(query_tokens) >= 3 and lexical_ratio < 0.25 and max_vec_score < 0.45:
+                continue
+
+            adjusted_score = max_base_score
+            # Penalize incidental page hits with zero lexical overlap
+            if lexical_matches == 0 and max_base_score <= 0.65:
+                adjusted_score *= self.page_hit_penalty_without_lexical
+            elif lexical_ratio >= 0.25:
+                adjusted_score += min(0.3, lexical_matches * 0.08)
+
+            if adjusted_score >= thresh:
+                scored_candidates.append((adjusted_score, rep_hit))
+
+        scored_candidates.sort(key=lambda x: x[0], reverse=True)
+
+        reranked_hits: list[MultimodalRetrievalHit] = []
+        for rank, (score, hit) in enumerate(scored_candidates[:top_k], 1):
+            reranked_hits.append(
+                MultimodalRetrievalHit(
+                    asset_id=hit.asset_id,
+                    score=score,
+                    rank=rank,
+                    modality=hit.modality,
+                    source_snapshot_id=hit.source_snapshot_id,
+                    document_id=hit.document_id,
+                    page=hit.page,
+                    bbox=hit.bbox,
+                    coordinate_space=hit.coordinate_space,
+                    parent_chunk_ids=hit.parent_chunk_ids,
+                    caption=hit.caption,
+                    artifact_ref=hit.artifact_ref,
+                    thumbnail_artifact_ref=hit.thumbnail_artifact_ref,
+                    embedding_model=hit.embedding_model,
+                    index_version=hit.index_version,
+                    locator=hit.locator,
+                    referencing_text=hit.referencing_text,
+                    ocr_text=hit.ocr_text,
+                )
+            )
+        return tuple(reranked_hits)
+
+
+def intra_modal_image_rrf(
+    vector_hits: Sequence[MultimodalRetrievalHit],
+    caption_hits: Sequence[MultimodalRetrievalHit],
+    *,
+    k: int = 60,
+    top_k: int = 10,
+) -> tuple[MultimodalRetrievalHit, ...]:
+    """Fuse intra-modal image candidate streams (vector similarity + caption lexical) using Reciprocal Rank Fusion.
+
+    Eliminates scale mismatch between cosine similarity [-1, 1] and BM25 scores [0, inf).
+    Computes RRF score = sum(1 / (k + rank)) across streams, merges identical asset_ids
+    while preserving the richest metadata (caption, OCR, referencing text, bbox),
+    and outputs top_k fused MultimodalRetrievalHits with rank-normalized scores.
+    """
+    if top_k <= 0 or k <= 0:
+        raise ValueError("top_k and k must be positive")
+
+    rrf_scores: dict[str, float] = {}
+    best_hit: dict[str, MultimodalRetrievalHit] = {}
+
+    for rank, h in enumerate(vector_hits, 1):
+        rrf_scores[h.asset_id] = rrf_scores.get(h.asset_id, 0.0) + 1.0 / (k + rank)
+        best_hit[h.asset_id] = h
+
+    for rank, h in enumerate(caption_hits, 1):
+        rrf_scores[h.asset_id] = rrf_scores.get(h.asset_id, 0.0) + 1.0 / (k + rank)
+        if h.asset_id not in best_hit or not best_hit[h.asset_id].caption:
+            best_hit[h.asset_id] = h
+        else:
+            cur = best_hit[h.asset_id]
+            if (not cur.referencing_text and h.referencing_text) or (not cur.ocr_text and h.ocr_text):
+                best_hit[h.asset_id] = MultimodalRetrievalHit(
+                    asset_id=cur.asset_id,
+                    score=cur.score,
+                    rank=cur.rank,
+                    modality=cur.modality,
+                    source_snapshot_id=cur.source_snapshot_id,
+                    document_id=cur.document_id,
+                    page=cur.page,
+                    bbox=cur.bbox,
+                    coordinate_space=cur.coordinate_space,
+                    parent_chunk_ids=cur.parent_chunk_ids,
+                    caption=cur.caption or h.caption,
+                    artifact_ref=cur.artifact_ref,
+                    thumbnail_artifact_ref=cur.thumbnail_artifact_ref,
+                    embedding_model=cur.embedding_model,
+                    index_version=cur.index_version,
+                    locator=cur.locator,
+                    referencing_text=cur.referencing_text or h.referencing_text,
+                    ocr_text=cur.ocr_text or h.ocr_text,
+                )
+
+    sorted_ids = sorted(rrf_scores.keys(), key=lambda aid: (-rrf_scores[aid], aid))
+    fused_image_hits: list[MultimodalRetrievalHit] = []
+    for rank, aid in enumerate(sorted_ids[:top_k], 1):
+        h = best_hit[aid]
+        fused_image_hits.append(
+            MultimodalRetrievalHit(
+                asset_id=h.asset_id,
+                score=rrf_scores[aid],
+                rank=rank,
+                modality="image",
+                source_snapshot_id=h.source_snapshot_id,
+                document_id=h.document_id,
+                page=h.page,
+                bbox=h.bbox,
+                coordinate_space=h.coordinate_space,
+                parent_chunk_ids=h.parent_chunk_ids,
+                caption=h.caption,
+                artifact_ref=h.artifact_ref,
+                thumbnail_artifact_ref=h.thumbnail_artifact_ref,
+                embedding_model=h.embedding_model,
+                index_version=h.index_version,
+                locator=h.locator,
+                referencing_text=h.referencing_text,
+                ocr_text=h.ocr_text,
+            )
+        )
+    return tuple(fused_image_hits)
+
+
+
 class MultimodalRetrievalPipeline:
     """Unified retrieval pipeline coordinating text hybrid search and multimodal image search."""
 
@@ -74,6 +278,8 @@ class MultimodalRetrievalPipeline:
         *,
         enabled: bool | None = None,
         joint_multimodal_space: bool | None = None,
+        cross_reranker: MultimodalCrossReranker | None = None,
+        score_weighted_rrf: bool = False,
     ) -> None:
         self.text_pipeline = text_pipeline
         self.image_index = image_index
@@ -81,6 +287,8 @@ class MultimodalRetrievalPipeline:
         self.artifact_store = artifact_store
         self.enabled = is_multimodal_env_enabled() if enabled is None else enabled
         self.joint_multimodal_space = joint_multimodal_space
+        self.cross_reranker = cross_reranker
+        self.score_weighted_rrf = score_weighted_rrf
         self.documents = text_pipeline.documents
         self.document_by_id = text_pipeline.document_by_id
 
@@ -327,6 +535,9 @@ class MultimodalRetrievalPipeline:
         text_weight: float = 1.0,
         image_weight: float = 1.0,
         document_ids: Sequence[str] | None = None,
+        cross_rerank: bool = True,
+        score_weighted: bool | None = None,
+        score_threshold: float | None = None,
     ) -> MultimodalRetrievalRun:
         """Execute text hybrid search + image search, then combine results via RRF."""
         if not query or not query.strip():
@@ -398,19 +609,21 @@ class MultimodalRetrievalPipeline:
                     doc_pages.append((th.document_id, p or 1))
                 page_hits = list(self.image_index.search_by_document_pages(doc_pages, top_k=image_k))
 
-            merged: list[MultimodalRetrievalHit] = []
-            seen = set()
-            candidate_hits = vector_hits + caption_hits + page_hits
-            candidate_hits.sort(key=lambda h: getattr(h, "score", 0.0), reverse=True)
-            for h in candidate_hits:
-                if h.asset_id not in seen and getattr(h, "score", 0.0) >= 0.30:
-                    seen.add(h.asset_id)
-                    merged.append(h)
-                    if len(merged) >= image_k:
-                        break
-            image_hits = tuple(merged)
+            # Stage 1: Intra-modal image RRF fusion between vector stream and caption stream
+            intra_fused = intra_modal_image_rrf(vector_hits, caption_hits, k=60, top_k=image_k * 3)
+            candidate_hits = list(intra_fused) + vector_hits + caption_hits + page_hits
+
+            reranker = self.cross_reranker if cross_rerank else None
+            if reranker is None and cross_rerank:
+                reranker = DefaultMultimodalCrossReranker()
+
+            if reranker is not None:
+                image_hits = reranker.rerank(query, candidate_hits, top_k=image_k)
+            else:
+                image_hits = intra_fused[:image_k]
 
         text_by_id = {doc.document_id: doc.text for doc in self.documents}
+        use_score_weighted = self.score_weighted_rrf if score_weighted is None else score_weighted
         fused_hits = multimodal_reciprocal_rank_fusion(
             text_run.final.hits,
             image_hits,
@@ -418,6 +631,8 @@ class MultimodalRetrievalPipeline:
             top_k=fusion_k,
             text_weight=text_weight,
             image_weight=image_weight,
+            score_weighted=use_score_weighted,
+            score_threshold=score_threshold,
         )
 
         # Build duck-typed RetrievalQueryResult for consumers expecting RetrievalHit sequence

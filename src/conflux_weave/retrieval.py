@@ -120,6 +120,8 @@ class MultimodalFusionHit:
     embedding_model: str | None = None
     index_version: str | None = None
     raw_score: float | None = None
+    referencing_text: str | None = None
+    ocr_text: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,12 +144,20 @@ def multimodal_reciprocal_rank_fusion(
     k: int = 60,
     text_weight: float = 1.0,
     image_weight: float = 1.0,
+    score_weighted: bool = False,
+    score_threshold: float | None = None,
+    min_score_multiplier: float = 0.05,
 ) -> tuple[MultimodalFusionHit, ...]:
-    """Fuse text hits and image hits using Reciprocal Rank Fusion without comparing raw cosine scores.
+    """Fuse text hits and image hits using standard or Score-Weighted Reciprocal Rank Fusion.
 
     Formula:
-        For text hit at 1-based rank r: score = text_weight / (k + r)
-        For image hit at 1-based rank r: score = image_weight / (k + r)
+        Standard:
+            score = weight / (k + r)
+        Score-Weighted (when score_weighted=True):
+            score = (weight * max(min_score_multiplier, min(1.0, raw_score))) / (k + r)
+
+    Pruning:
+        If score_threshold is set, candidates with raw_score < score_threshold are omitted.
 
     Tie-breaking: (-score, hit_id).
     Returns top_k fused hits.
@@ -160,7 +170,18 @@ def multimodal_reciprocal_rank_fusion(
     fused_items: dict[str, MultimodalFusionHit] = {}
 
     for hit in text_hits:
-        rrf_score = text_weight / (k + hit.rank)
+        raw_score = getattr(hit, "score", None)
+        if score_threshold is not None and raw_score is not None and float(raw_score) < score_threshold:
+            continue
+        if score_weighted:
+            multiplier = (
+                max(min_score_multiplier, min(1.0, float(raw_score)))
+                if raw_score is not None and float(raw_score) > 0.0
+                else min_score_multiplier
+            )
+        else:
+            multiplier = 1.0
+        rrf_score = (text_weight * multiplier) / (k + hit.rank)
         page = None
         if isinstance(hit.locator, dict):
             page_val = hit.locator.get("page")
@@ -177,11 +198,22 @@ def multimodal_reciprocal_rank_fusion(
             locator=dict(hit.locator or {}),
             text=text_content,
             page=page,
-            raw_score=getattr(hit, "score", None),
+            raw_score=raw_score,
         )
 
     for hit in image_hits:
-        rrf_score = image_weight / (k + hit.rank)
+        raw_score = getattr(hit, "score", None)
+        if score_threshold is not None and raw_score is not None and float(raw_score) < score_threshold:
+            continue
+        if score_weighted:
+            multiplier = (
+                max(min_score_multiplier, min(1.0, float(raw_score)))
+                if raw_score is not None and float(raw_score) > 0.0
+                else min_score_multiplier
+            )
+        else:
+            multiplier = 1.0
+        rrf_score = (image_weight * multiplier) / (k + hit.rank)
         fused_items[hit.asset_id] = MultimodalFusionHit(
             hit_id=hit.asset_id,
             score=rrf_score,
@@ -199,7 +231,9 @@ def multimodal_reciprocal_rank_fusion(
             parent_chunk_ids=hit.parent_chunk_ids,
             embedding_model=hit.embedding_model,
             index_version=hit.index_version,
-            raw_score=getattr(hit, "score", None),
+            raw_score=raw_score,
+            referencing_text=getattr(hit, "referencing_text", None),
+            ocr_text=getattr(hit, "ocr_text", None),
         )
 
     sorted_items = sorted(
@@ -226,6 +260,8 @@ def multimodal_reciprocal_rank_fusion(
             embedding_model=item.embedding_model,
             index_version=item.index_version,
             raw_score=item.raw_score,
+            referencing_text=item.referencing_text,
+            ocr_text=item.ocr_text,
         )
         for rank, item in enumerate(sorted_items, 1)
     )

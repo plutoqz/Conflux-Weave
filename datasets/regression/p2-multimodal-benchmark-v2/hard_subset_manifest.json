@@ -1,0 +1,310 @@
+{
+  "schema_version": "conflux-weave.multimodal-hard-subset.v1",
+  "subset_id": "hard_subset_20",
+  "created_at": "2026-09-20",
+  "status": "frozen",
+  "case_count": 20,
+  "selection_criteria": "complex_table and heatmap assets with multi-column or dense visual topology",
+  "cases": [
+    {
+      "case_id": "mm-v2-086",
+      "query": "ASR judged by GPT-5.4 heatmap across 16 risk subcategories and targets",
+      "document_id": "document-sha256-b307dec14e031d383c791f87e8e1c5a129fca29a3b6ac4ecb4adee61c106a51f",
+      "expected_asset_id": "asset-sha256-da8bff731b1ba4dc3a07f84769de1b70",
+      "page": 6,
+      "bbox": {
+        "x": 70.87,
+        "y": 70.86,
+        "width": 453.54,
+        "height": 254.4
+      },
+      "figure_kind": "heatmap",
+      "selection_rationale": "Complex layout containing multi-column tabular data, dense heatmap grid, or fine-grained quantitative labels requiring spatial and structural reasoning beyond simple thumbnail matching."
+    },
+    {
+      "case_id": "mm-v2-087",
+      "query": "Target model vulnerability patterns across 16 safety risk subcategories",
+      "document_id": "document-sha256-b307dec14e031d383c791f87e8e1c5a129fca29a3b6ac4ecb4adee61c106a51f",
+      "expected_asset_id": "asset-sha256-da8bff731b1ba4dc3a07f84769de1b70",
+      "page": 6,
+      "bbox": {
+        "x": 70.87,
+        "y": 70.86,
+        "width": 453.54,
+        "height": 254.4
+      },
+      "figure_kind": "heatmap",
+      "selection_rationale": "Complex layout containing multi-column tabular data, dense heatmap grid, or fine-grained quantitative labels requiring spatial and structural reasoning beyond simple thumbnail matching."
+    },
+    {
+      "case_id": "mm-v2-088",
+      "query": "Mean ASR heatmap across 16 risk subcategories and 12 target models",
+      "document_id": "document-sha256-b307dec14e031d383c791f87e8e1c5a129fca29a3b6ac4ecb4adee61c106a51f",
+      "expected_asset_id": "asset-sha256-c511c59938bd272f63fdb89a4b525b9a",
+      "page": 12,
+      "bbox": {
+        "x": 70.87,
+        "y": 456.4,
+        "width": 453.54,
+        "height": 254.4
+      },
+      "figure_kind": "heatmap",
+      "selection_rationale": "Complex layout containing multi-column tabular data, dense heatmap grid, or fine-grained quantitative labels requiring spatial and structural reasoning beyond simple thumbnail matching."
+    },
+    {
+      "case_id": "mm-v2-089",
+      "query": "Ensemble judger attack success rate matrix across target LLMs",
+      "document_id": "document-sha256-b307dec14e031d383c791f87e8e1c5a129fca29a3b6ac4ecb4adee61c106a51f",
+      "expected_asset_id": "asset-sha256-c511c59938bd272f63fdb89a4b525b9a",
+      "page": 12,
+      "bbox": {
+        "x": 70.87,
+        "y": 456.4,
+        "width": 453.54,
+        "height": 254.4
+      },
+      "figure_kind": "heatmap",
+      "selection_rationale": "Complex layout containing multi-column tabular data, dense heatmap grid, or fine-grained quantitative labels requiring spatial and structural reasoning beyond simple thumbnail matching."
+    },
+    {
+      "case_id": "mm-v2-090",
+      "query": "ASR judged by DeepSeek-V3.2 across 16 risk subcategories and 12 targets",
+      "document_id": "document-sha256-b307dec14e031d383c791f87e8e1c5a129fca29a3b6ac4ecb4adee61c106a51f",
+      "expected_asset_id": "asset-sha256-d89513ff23a90883d58d6bd7d9ce903a",
+      "page": 15,
+      "bbox": {
+        "x": 70.87,
+        "y": 100.23,
+        "width": 453.54,
+        "height": 254.4
+      },
+      "figure_kind": "heatmap",
+      "selection_rationale": "Complex layout containing multi-column tabular data, dense heatmap grid, or fine-grained quantitative labels requiring spatial and structural reasoning beyond simple thumbnail matching."
+    },
+    {
+      "case_id": "mm-v2-091",
+      "query": "DeepSeek-V3.2 safety judgment severity and attack detection rates",
+      "document_id": "document-sha256-b307dec14e031d383c791f87e8e1c5a129fca29a3b6ac4ecb4adee61c106a51f",
+      "expected_asset_id": "asset-sha256-d89513ff23a90883d58d6bd7d9ce903a",
+      "page": 15,
+      "bbox": {
+        "x": 70.87,
+        "y": 100.23,
+        "width": 453.54,
+        "height": 254.4
+      },
+      "figure_kind": "heatmap",
+      "selection_rationale": "Complex layout containing multi-column tabular data, dense heatmap grid, or fine-grained quantitative labels requiring spatial and structural reasoning beyond simple thumbnail matching."
+    },
+    {
+      "case_id": "mm-v2-092",
+      "query": "ASR judged by GPT-4o across 16 risk subcategories and 12 target models",
+      "document_id": "document-sha256-b307dec14e031d383c791f87e8e1c5a129fca29a3b6ac4ecb4adee61c106a51f",
+      "expected_asset_id": "asset-sha256-a2b518781f36d286ac497ba003199298",
+      "page": 15,
+      "bbox": {
+        "x": 70.87,
+        "y": 455.2,
+        "width": 453.54,
+        "height": 254.4
+      },
+      "figure_kind": "heatmap",
+      "selection_rationale": "Complex layout containing multi-column tabular data, dense heatmap grid, or fine-grained quantitative labels requiring spatial and structural reasoning beyond simple thumbnail matching."
+    },
+    {
+      "case_id": "mm-v2-093",
+      "query": "GPT-4o safety judger evaluation matrix across behavioral risk categories",
+      "document_id": "document-sha256-b307dec14e031d383c791f87e8e1c5a129fca29a3b6ac4ecb4adee61c106a51f",
+      "expected_asset_id": "asset-sha256-a2b518781f36d286ac497ba003199298",
+      "page": 15,
+      "bbox": {
+        "x": 70.87,
+        "y": 455.2,
+        "width": 453.54,
+        "height": 254.4
+      },
+      "figure_kind": "heatmap",
+      "selection_rationale": "Complex layout containing multi-column tabular data, dense heatmap grid, or fine-grained quantitative labels requiring spatial and structural reasoning beyond simple thumbnail matching."
+    },
+    {
+      "case_id": "mm-v2-094",
+      "query": "ASR judged by Llama-4-Maverick across 16 risk subcategories and 12 targets",
+      "document_id": "document-sha256-b307dec14e031d383c791f87e8e1c5a129fca29a3b6ac4ecb4adee61c106a51f",
+      "expected_asset_id": "asset-sha256-e18319cc9ddae196dd041994beb2b5c4",
+      "page": 16,
+      "bbox": {
+        "x": 70.87,
+        "y": 91.93,
+        "width": 453.54,
+        "height": 254.4
+      },
+      "figure_kind": "heatmap",
+      "selection_rationale": "Complex layout containing multi-column tabular data, dense heatmap grid, or fine-grained quantitative labels requiring spatial and structural reasoning beyond simple thumbnail matching."
+    },
+    {
+      "case_id": "mm-v2-095",
+      "query": "Open-weight judge Llama-4 evaluation fidelity across safety categories",
+      "document_id": "document-sha256-b307dec14e031d383c791f87e8e1c5a129fca29a3b6ac4ecb4adee61c106a51f",
+      "expected_asset_id": "asset-sha256-e18319cc9ddae196dd041994beb2b5c4",
+      "page": 16,
+      "bbox": {
+        "x": 70.87,
+        "y": 91.93,
+        "width": 453.54,
+        "height": 254.4
+      },
+      "figure_kind": "heatmap",
+      "selection_rationale": "Complex layout containing multi-column tabular data, dense heatmap grid, or fine-grained quantitative labels requiring spatial and structural reasoning beyond simple thumbnail matching."
+    },
+    {
+      "case_id": "mm-v2-096",
+      "query": "ASR heatmap for all attack techniques across 4 open-source systems",
+      "document_id": "document-sha256-07dc1a1dc9b54235604708398a6d43e08feccf70025a67c666d86d086fcb77c3",
+      "expected_asset_id": "asset-sha256-2779cf3d3de669a793fb3eb6a3a6410e",
+      "page": 9,
+      "bbox": {
+        "x": 148.54,
+        "y": 87.98,
+        "width": 325.73,
+        "height": 95.98
+      },
+      "figure_kind": "heatmap",
+      "selection_rationale": "Complex layout containing multi-column tabular data, dense heatmap grid, or fine-grained quantitative labels requiring spatial and structural reasoning beyond simple thumbnail matching."
+    },
+    {
+      "case_id": "mm-v2-097",
+      "query": "Technique-level ASR comparison on DB-GPT and open-source data agents",
+      "document_id": "document-sha256-07dc1a1dc9b54235604708398a6d43e08feccf70025a67c666d86d086fcb77c3",
+      "expected_asset_id": "asset-sha256-2779cf3d3de669a793fb3eb6a3a6410e",
+      "page": 9,
+      "bbox": {
+        "x": 148.54,
+        "y": 87.98,
+        "width": 325.73,
+        "height": 95.98
+      },
+      "figure_kind": "heatmap",
+      "selection_rationale": "Complex layout containing multi-column tabular data, dense heatmap grid, or fine-grained quantitative labels requiring spatial and structural reasoning beyond simple thumbnail matching."
+    },
+    {
+      "case_id": "mm-v2-098",
+      "query": "Adversary goal effectiveness matrix for Mislead Drain and Hijack attacks",
+      "document_id": "document-sha256-07dc1a1dc9b54235604708398a6d43e08feccf70025a67c666d86d086fcb77c3",
+      "expected_asset_id": "asset-sha256-2779cf3d3de669a793fb3eb6a3a6410e",
+      "page": 9,
+      "bbox": {
+        "x": 148.54,
+        "y": 87.98,
+        "width": 325.73,
+        "height": 95.98
+      },
+      "figure_kind": "heatmap",
+      "selection_rationale": "Complex layout containing multi-column tabular data, dense heatmap grid, or fine-grained quantitative labels requiring spatial and structural reasoning beyond simple thumbnail matching."
+    },
+    {
+      "case_id": "mm-v2-099",
+      "query": "Data agent vulnerability heatmap under adversarial data injection",
+      "document_id": "document-sha256-07dc1a1dc9b54235604708398a6d43e08feccf70025a67c666d86d086fcb77c3",
+      "expected_asset_id": "asset-sha256-2779cf3d3de669a793fb3eb6a3a6410e",
+      "page": 9,
+      "bbox": {
+        "x": 148.54,
+        "y": 87.98,
+        "width": 325.73,
+        "height": 95.98
+      },
+      "figure_kind": "heatmap",
+      "selection_rationale": "Complex layout containing multi-column tabular data, dense heatmap grid, or fine-grained quantitative labels requiring spatial and structural reasoning beyond simple thumbnail matching."
+    },
+    {
+      "case_id": "mm-v2-100",
+      "query": "Comparative attack vulnerability heatmap across evaluated agent frameworks",
+      "document_id": "document-sha256-07dc1a1dc9b54235604708398a6d43e08feccf70025a67c666d86d086fcb77c3",
+      "expected_asset_id": "asset-sha256-2779cf3d3de669a793fb3eb6a3a6410e",
+      "page": 9,
+      "bbox": {
+        "x": 148.54,
+        "y": 87.98,
+        "width": 325.73,
+        "height": 95.98
+      },
+      "figure_kind": "heatmap",
+      "selection_rationale": "Complex layout containing multi-column tabular data, dense heatmap grid, or fine-grained quantitative labels requiring spatial and structural reasoning beyond simple thumbnail matching."
+    },
+    {
+      "case_id": "mm-v2-101",
+      "query": "Overcooked-AI grid layouts used in cooperative evaluation",
+      "document_id": "document-sha256-8aa7199e1adda0c5994ceb5384a4622252e2bbeb65697d1eb86ca30a4e02ba87",
+      "expected_asset_id": "asset-sha256-16778384633797c4f329dfd6f7c49583",
+      "page": 12,
+      "bbox": {
+        "x": 116.22,
+        "y": 70.87,
+        "width": 362.83,
+        "height": 52.62
+      },
+      "figure_kind": "complex_table",
+      "selection_rationale": "Complex layout containing multi-column tabular data, dense heatmap grid, or fine-grained quantitative labels requiring spatial and structural reasoning beyond simple thumbnail matching."
+    },
+    {
+      "case_id": "mm-v2-102",
+      "query": "Cramped Room and Asymmetric coordination grid layout geometries",
+      "document_id": "document-sha256-8aa7199e1adda0c5994ceb5384a4622252e2bbeb65697d1eb86ca30a4e02ba87",
+      "expected_asset_id": "asset-sha256-16778384633797c4f329dfd6f7c49583",
+      "page": 12,
+      "bbox": {
+        "x": 116.22,
+        "y": 70.87,
+        "width": 362.83,
+        "height": 52.62
+      },
+      "figure_kind": "complex_table",
+      "selection_rationale": "Complex layout containing multi-column tabular data, dense heatmap grid, or fine-grained quantitative labels requiring spatial and structural reasoning beyond simple thumbnail matching."
+    },
+    {
+      "case_id": "mm-v2-103",
+      "query": "Cell-attached screenshot evidence for dynamic form handling in notebook",
+      "document_id": "document-sha256-c67e6fe9c33c665bd6f877b07b5d206fc5c0ebeed1cd8f8482980ed273ca8393",
+      "expected_asset_id": "asset-sha256-f86e2a5ec566ed5e118cc87c12f3fe4a",
+      "page": 18,
+      "bbox": {
+        "x": 110.71,
+        "y": 163.3,
+        "width": 388.08,
+        "height": 201.8
+      },
+      "figure_kind": "complex_table",
+      "selection_rationale": "Complex layout containing multi-column tabular data, dense heatmap grid, or fine-grained quantitative labels requiring spatial and structural reasoning beyond simple thumbnail matching."
+    },
+    {
+      "case_id": "mm-v2-104",
+      "query": "Visual DOM state inspection attached to notebook execution cell",
+      "document_id": "document-sha256-c67e6fe9c33c665bd6f877b07b5d206fc5c0ebeed1cd8f8482980ed273ca8393",
+      "expected_asset_id": "asset-sha256-f86e2a5ec566ed5e118cc87c12f3fe4a",
+      "page": 18,
+      "bbox": {
+        "x": 110.71,
+        "y": 163.3,
+        "width": 388.08,
+        "height": 201.8
+      },
+      "figure_kind": "complex_table",
+      "selection_rationale": "Complex layout containing multi-column tabular data, dense heatmap grid, or fine-grained quantitative labels requiring spatial and structural reasoning beyond simple thumbnail matching."
+    },
+    {
+      "case_id": "mm-v2-105",
+      "query": "Cell-local failure evidence in provisional notebook when gate fails",
+      "document_id": "document-sha256-c67e6fe9c33c665bd6f877b07b5d206fc5c0ebeed1cd8f8482980ed273ca8393",
+      "expected_asset_id": "asset-sha256-549f2f00a14d3dd1c62de90d794f6d69",
+      "page": 19,
+      "bbox": {
+        "x": 110.72,
+        "y": 72.0,
+        "width": 388.07,
+        "height": 262.27
+      },
+      "figure_kind": "complex_table",
+      "selection_rationale": "Complex layout containing multi-column tabular data, dense heatmap grid, or fine-grained quantitative labels requiring spatial and structural reasoning beyond simple thumbnail matching."
+    }
+  ]
+}

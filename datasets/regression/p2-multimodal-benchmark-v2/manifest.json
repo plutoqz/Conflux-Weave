@@ -1,0 +1,51 @@
+{
+  "dataset_id": "p2-multimodal-benchmark-v2",
+  "version": "2.0.0",
+  "status": "frozen",
+  "schema_version": "conflux-weave.multimodal-benchmark.v2",
+  "created_at": "2026-09-19",
+  "case_count": 150,
+  "positive_case_count": 120,
+  "negative_case_count": 30,
+  "paper_count": 10,
+  "categories": {
+    "architecture": 30,
+    "benchmark_plot": 35,
+    "taxonomy": 20,
+    "heatmap": 15,
+    "complex_table": 20,
+    "unanswerable_negative": 30
+  },
+  "target_papers": [
+    "2606.08049.pdf",
+    "2606.08146.pdf",
+    "2606.08367.pdf",
+    "2606.08529.pdf",
+    "2606.08531.pdf",
+    "2606.08596.pdf",
+    "2606.08661.pdf",
+    "2606.08702.pdf",
+    "2606.09198.pdf",
+    "2606.09399.pdf"
+  ],
+  "file_hashes": {
+    "cases.jsonl": "297da17016879e8d5afca868cb87651bd824f518cdd55cbf73e977e8d97bb962",
+    "schema.json": "f5ceb6b8ea4a949a3cd819e65b18b597e9ac09f9c23224d35c2aae9118bf8768",
+    "README.md": "23f1ef89cf61184d806ba9e21b579ffde1a859579ebfd68b45e6af439d3d3fb2"
+  },
+  "thresholds": {
+    "image_recall_at_5": 0.85,
+    "mrr": 0.65,
+    "localization_accuracy": 1.0,
+    "evidence_closure": 1.0,
+    "unanswerable_fpr": 0.05,
+    "factuality_score": 0.75,
+    "citation_precision": 0.85
+  },
+  "conditions": [
+    "text_only",
+    "caption_baseline",
+    "joint_embedding",
+    "score_weighted_rerank"
+  ]
+}

@@ -626,6 +626,8 @@ class ChatService:
                     "score": score,
                     "raw_score": raw_score if raw_score is not None else score,
                     "artifact_ref": art_ref,
+                    "referencing_text": getattr(hit, "referencing_text", None),
+                    "ocr_text": getattr(hit, "ocr_text", None),
                 })
         if not image_assets and hasattr(run, "image_hits"):
             for hit in getattr(run, "image_hits", ()) or ():
@@ -643,6 +645,8 @@ class ChatService:
                         "score": score,
                         "raw_score": score,
                         "artifact_ref": art_ref,
+                        "referencing_text": getattr(hit, "referencing_text", None),
+                        "ocr_text": getattr(hit, "ocr_text", None),
                     })
 
         multimodal_keywords = (
@@ -690,18 +694,35 @@ class ChatService:
         visual_prompt_block = ""
         vision_payload_images: list[str] = []
         if filtered_image_assets:
-            visual_lines = [
-                f"- 图表资产 `{img['asset_id']}`"
-                + (f"（第 {img['page']} 页）" if img['page'] else "")
-                + f"：{img['caption'][:120]}\n"
-                f"  图片地址: `{img['url']}`\n"
-                f"  Markdown 语法: `![{img['caption'][:50].strip()}]({img['url']})`"
-                for img in filtered_image_assets[:3]
-            ]
+            visual_lines = []
+            for img in filtered_image_assets[:3]:
+                line = (
+                    f"- 图表资产 `{img['asset_id']}`"
+                    + (f"（第 {img['page']} 页）" if img.get('page') else "")
+                    + f"：{img['caption'][:200]}\n"
+                )
+                if img.get("bbox"):
+                    line += f"  图表局部视窗定位 (BBox Focus): {img['bbox']}\n"
+                if img.get("ocr_text"):
+                    line += f"  图内关键文字与坐标标签: {img['ocr_text'][:240]}\n"
+                if img.get("referencing_text"):
+                    line += f"  论文正文论述引用: {img['referencing_text'][:300]}\n"
+                line += (
+                    f"  图片地址: `{img['url']}`\n"
+                    f"  Markdown 语法: `![{img['caption'][:50].strip()}]({img['url']})`"
+                )
+                visual_lines.append(line)
+
             visual_prompt_block = (
                 "\n\n【检索到的学术论文多模态图表/插图资源】\n"
                 + "\n".join(visual_lines)
-                + "\n\n【多模态实证规范】：相关图表已注入视觉感知通道。请结合真实图片细节核验证据；若图表与核心论据高度相关，请在正文相应论述句末使用 Markdown 语法插入该图片（语法：`![简要说明](图片地址)`），并根据图中数值或走势解读其实证结论；若图表与论述主题不吻合，严禁强行插入或编造解读！"
+                + "\n\n【视觉证据研读与两阶段推导演绎协议（Visual Chain-of-Thought Protocol）】：\n"
+                + "1. 阶段一：图表自检与图元定位（Visual Self-Check & Grounding）\n"
+                + "   - 首先核验当前图表是否包含回答用户问题所需的图元、坐标轴、变量或数值。\n"
+                + "   - 若图表与问题无关或关键实证缺失，必须明确说明'未能检索到足以支撑此项结论的相关学术图表'，严禁凭空捏造数值。\n"
+                + "2. 阶段二：事实推导与精确引用（Evidence Deduction & Precise Citation）\n"
+                + "   - 从图中严谨提取具体数值、对比优劣关系或结构走向。\n"
+                + "   - 在正文核心论据句末紧密插入图表 Markdown 语法（`![简要说明](图片地址)`）或引用标记，确保图文证据完整闭环。"
             )
             if self._store is not None:
                 for img in filtered_image_assets[:3]:

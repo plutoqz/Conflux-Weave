@@ -1,0 +1,128 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MultimodalRetrievalTestCaseV2",
+  "type": "object",
+  "required": [
+    "case_id",
+    "query",
+    "expected_answerable",
+    "figure_kind",
+    "split",
+    "label_source"
+  ],
+  "properties": {
+    "case_id": {
+      "type": "string"
+    },
+    "query": {
+      "type": "string"
+    },
+    "expected_answerable": {
+      "type": "boolean"
+    },
+    "expected_document_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "expected_source_snapshot_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "expected_asset_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "expected_page": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "expected_bbox": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "width": {
+          "type": "number"
+        },
+        "height": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ]
+    },
+    "expected_caption": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "figure_kind": {
+      "type": "string",
+      "enum": [
+        "architecture",
+        "benchmark_plot",
+        "taxonomy",
+        "heatmap",
+        "complex_table",
+        "unanswerable_negative"
+      ]
+    },
+    "split": {
+      "type": "string",
+      "enum": [
+        "train",
+        "val",
+        "test"
+      ]
+    },
+    "label_source": {
+      "type": "string"
+    },
+    "generation_ground_truth": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "key_facts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "required_metrics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "must_cite_asset": {
+          "type": "boolean"
+        },
+        "negative_refusal_required": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol, Sequence
+from typing import Any, Protocol, Sequence, runtime_checkable
 
 from conflux_weave.document_assets import DocumentAsset
 from conflux_weave.provider import (
@@ -91,6 +91,7 @@ class ImageEmbeddingResult:
     response_artifact: ArtifactRef
 
 
+@runtime_checkable
 class ImageEmbeddingPort(Protocol):
     """Protocol for multimodal image and cross-modal embedding providers."""
 
@@ -112,6 +113,19 @@ class ImageEmbeddingPort(Protocol):
         *,
         producer_step_id: str = "step-image-query-embedding",
     ) -> ImageEmbeddingResult:
+        ...
+
+
+@runtime_checkable
+class JointMultimodalEmbeddingPort(ImageEmbeddingPort, Protocol):
+    """Protocol for unified joint cross-modal embedding models (e.g., SigLIP, CLIP, BGE-Visual)."""
+
+    @property
+    def is_joint_multimodal(self) -> bool:
+        ...
+
+    @property
+    def multimodal_family(self) -> str:
         ...
 
 
@@ -138,6 +152,14 @@ class DeterministicImageEmbeddingAdapter:
     @property
     def model(self) -> str:
         return self._model
+
+    @property
+    def is_joint_multimodal(self) -> bool:
+        return True
+
+    @property
+    def multimodal_family(self) -> str:
+        return "deterministic"
 
     def _generate_vector(self, seed_data: bytes, text_hint: str | None = None) -> tuple[float, ...]:
         """Generate a deterministic unit-length float vector of specified dimensions."""
@@ -258,20 +280,40 @@ class OpenAICompatibleImageEmbeddingAdapter:
         dimensions: int = 512,
         transport: ProviderHttpTransport | None = None,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+        is_joint_multimodal: bool = True,
+        multimodal_family: str | None = None,
     ) -> None:
         self.artifact_store = artifact_store
         self.config = config
-        self._model = model or config.embedding_model or "multimodal-embedding-v1"
+        self._model = model or getattr(config, "image_embedding_model", None) or config.embedding_model or "multimodal-embedding-v1"
         if dimensions == 512 and ("jina-clip" in self._model.lower() or "clip" in self._model.lower()):
             self.dimensions = 1024
+        elif dimensions == 512 and "siglip" in self._model.lower():
+            self.dimensions = 1152
         else:
             self.dimensions = dimensions
         self.transport = transport or UrllibProviderTransport()
         self.timeout_seconds = timeout_seconds
+        self._is_joint_multimodal = is_joint_multimodal
+        self._multimodal_family = (
+            multimodal_family
+            or ("siglip" if "siglip" in self._model.lower()
+                else "clip" if "clip" in self._model.lower()
+                else "bge-visual" if "bge" in self._model.lower()
+                else "openai-compatible")
+        )
 
     @property
     def model(self) -> str:
         return self._model
+
+    @property
+    def is_joint_multimodal(self) -> bool:
+        return self._is_joint_multimodal
+
+    @property
+    def multimodal_family(self) -> str:
+        return self._multimodal_family
 
     def embed_images(
         self,
@@ -401,6 +443,162 @@ class OpenAICompatibleImageEmbeddingAdapter:
         return self.embed_images([req], producer_step_id=producer_step_id)
 
 
+class SigLIPImageEmbeddingAdapter(OpenAICompatibleImageEmbeddingAdapter):
+    """Specialized adapter for SigLIP joint vision-language embeddings (e.g. google/siglip-so400m-patch14-384)."""
+
+    def __init__(
+        self,
+        artifact_store: LocalArtifactStore,
+        config: ProviderConfig,
+        *,
+        model: str = "google/siglip-so400m-patch14-384",
+        dimensions: int = 1152,
+        transport: ProviderHttpTransport | None = None,
+        timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    ) -> None:
+        super().__init__(
+            artifact_store=artifact_store,
+            config=config,
+            model=model,
+            dimensions=dimensions,
+            transport=transport,
+            timeout_seconds=timeout_seconds,
+            is_joint_multimodal=True,
+            multimodal_family="siglip",
+        )
+
+
+class BGEVisualEmbeddingAdapter(OpenAICompatibleImageEmbeddingAdapter):
+    """Specialized adapter for BGE-Visualized-M3 joint embeddings (e.g. BAAI/bge-visualized-m3)."""
+
+    def __init__(
+        self,
+        artifact_store: LocalArtifactStore,
+        config: ProviderConfig,
+        *,
+        model: str = "BAAI/bge-visualized-m3",
+        dimensions: int = 1024,
+        transport: ProviderHttpTransport | None = None,
+        timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    ) -> None:
+        super().__init__(
+            artifact_store=artifact_store,
+            config=config,
+            model=model,
+            dimensions=dimensions,
+            transport=transport,
+            timeout_seconds=timeout_seconds,
+            is_joint_multimodal=True,
+            multimodal_family="bge-visual",
+        )
+
+
+def crop_asset_bbox(
+    image_bytes: bytes,
+    bbox: dict[str, float],
+    page_width: float | None = None,
+    page_height: float | None = None,
+    *,
+    asset_origin: tuple[float, float] = (0.0, 0.0),
+    padding: float = 0.0,
+    safe_margin_ratio: float = 0.05,
+    min_crop_dimension: float = 10.0,
+    min_crop_area_ratio: float = 0.05,
+    max_crop_area_ratio: float = 0.98,
+) -> bytes:
+    """Crop a high-resolution sub-region of an image specified by bounding box coordinates.
+
+    Supports PDF points to bitmap pixel coordinate transformations, sub-panel figure
+    extraction with relative asset offsets, 5% safe margins to protect axis labels,
+    and automatic kill-switch fallbacks for degraded/extreme crops.
+
+    Coordinate Transformation Chain:
+        PDF page points [x_pt, y_pt, w_pt, h_pt]
+            -> subtract [asset_origin_x, asset_origin_y]
+            -> multiply by scale factors (img_w / page_width, img_h / page_height)
+            -> add safe margin (+5% of bbox width/height) and padding
+            -> clamp to image bitmap bounds [0..img_w, 0..img_h]
+
+    Kill-Switch Exit Criteria (returns uncropped image_bytes):
+        1. Invalid/inverted bbox dimensions (crop_w <= 0 or crop_h <= 0).
+        2. Extracted region smaller than min_crop_dimension (default 10px).
+        3. Cropped area < 5% of total image area (prevents degenerate tiny crops/lines).
+        4. Cropped area > 98% of total image area (prevents redundant re-compression).
+        5. Any decoding or processing exception.
+    """
+    if not image_bytes or not bbox:
+        return image_bytes
+
+    try:
+        import io
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(image_bytes))
+        img_w, img_h = img.size
+        if img_w <= 0 or img_h <= 0:
+            return image_bytes
+
+        # Calculate scale factors between coordinate space and bitmap pixels
+        scale_x = (img_w / page_width) if (page_width is not None and page_width > 0) else 1.0
+        scale_y = (img_h / page_height) if (page_height is not None and page_height > 0) else 1.0
+
+        origin_x, origin_y = asset_origin
+        x_pt = float(bbox.get("x", 0.0)) - origin_x
+        y_pt = float(bbox.get("y", 0.0)) - origin_y
+        w_pt = float(bbox.get("width", 0.0))
+        h_pt = float(bbox.get("height", 0.0))
+
+        if w_pt <= 0.0 or h_pt <= 0.0:
+            return image_bytes
+
+        # Map to pixel coordinates
+        x_px = x_pt * scale_x
+        y_px = y_pt * scale_y
+        w_px = w_pt * scale_x
+        h_px = h_pt * scale_y
+
+        # Apply safe margin (5% default) and optional explicit padding
+        margin_x = w_px * safe_margin_ratio + (padding * scale_x)
+        margin_y = h_px * safe_margin_ratio + (padding * scale_y)
+
+        crop_x0 = max(0.0, x_px - margin_x)
+        crop_y0 = max(0.0, y_px - margin_y)
+        crop_x1 = min(float(img_w), x_px + w_px + margin_x)
+        crop_y1 = min(float(img_h), y_px + h_px + margin_y)
+
+        crop_w = crop_x1 - crop_x0
+        crop_h = crop_y1 - crop_y0
+
+        # Kill Switch 1 & 2: degraded dimension
+        if crop_w < min_crop_dimension or crop_h < min_crop_dimension:
+            return image_bytes
+
+        # Kill Switch 3: area < min_crop_area_ratio (5%)
+        total_area = float(img_w * img_h)
+        crop_area = float(crop_w * crop_h)
+        if crop_area < min_crop_area_ratio * total_area:
+            return image_bytes
+
+        # Kill Switch 4: area > max_crop_area_ratio (98%)
+        if crop_area > max_crop_area_ratio * total_area:
+            return image_bytes
+
+        # Perform crop and export in original format (defaulting to PNG)
+        cropped_img = img.crop((
+            int(round(crop_x0)),
+            int(round(crop_y0)),
+            int(round(crop_x1)),
+            int(round(crop_y1)),
+        ))
+        buf = io.BytesIO()
+        out_format = img.format or "PNG"
+        cropped_img.save(buf, format=out_format)
+        return buf.getvalue()
+
+    except Exception:
+        return image_bytes
+
+
 @dataclass(frozen=True, slots=True)
 class MultimodalIndexRecord:
     """Row record schema stored in the image vector index (image_assets_v1)."""
@@ -421,6 +619,8 @@ class MultimodalIndexRecord:
     modality: str = "image"
     thumbnail_artifact_ref: str | None = None
     caption: str | None = None
+    referencing_text: str | None = None
+    ocr_text: str | None = None
 
     def __post_init__(self) -> None:
         if not self.asset_id or not self.asset_id.strip():
@@ -451,6 +651,8 @@ class MultimodalRetrievalHit:
     embedding_model: str
     index_version: str
     locator: dict[str, Any]
+    referencing_text: str | None = None
+    ocr_text: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -583,6 +785,8 @@ class LanceDBImageIndex:
                 "parent_chunk_ids_json": json.dumps(list(r.parent_chunk_ids), ensure_ascii=False),
                 "locator_json": r.locator_json,
                 "caption": r.caption or "",
+                "referencing_text": r.referencing_text or "",
+                "ocr_text": r.ocr_text or "",
                 "artifact_ref": r.artifact_ref,
                 "thumbnail_artifact_ref": r.thumbnail_artifact_ref or "",
                 "embedding_model": r.embedding_model,
@@ -720,6 +924,8 @@ class LanceDBImageIndex:
                 "parent_chunk_ids_json": json.dumps(list(r.parent_chunk_ids), ensure_ascii=False),
                 "locator_json": r.locator_json,
                 "caption": r.caption or "",
+                "referencing_text": r.referencing_text or "",
+                "ocr_text": r.ocr_text or "",
                 "artifact_ref": r.artifact_ref,
                 "thumbnail_artifact_ref": r.thumbnail_artifact_ref or "",
                 "embedding_model": r.embedding_model,
@@ -797,6 +1003,8 @@ class LanceDBImageIndex:
             coordinate_space=coordinate_space,
             parent_chunk_ids=parent_ids,
             caption=row.get("caption") or None,
+            referencing_text=row.get("referencing_text") or None,
+            ocr_text=row.get("ocr_text") or None,
             artifact_ref=str(row.get("artifact_ref", "")),
             thumbnail_artifact_ref=row.get("thumbnail_artifact_ref") or None,
             embedding_model=str(row.get("embedding_model", "")),
@@ -860,7 +1068,7 @@ class LanceDBImageIndex:
 
         # Extract substantive tokens
         substantive_tokens: list[str] = []
-        raw_words = [w.lower() for w in re.findall(r"[a-zA-Z0-9_\-]+", query) if len(w) >= 3]
+        raw_words = [w.lower() for w in re.findall(r"[a-zA-Z0-9\u4e00-\u9fff]+", query) if len(w) >= 3]
         for w in raw_words:
             if w not in MODALITY_STOP_WORDS and w not in {"the", "and", "for", "with", "this", "that"}:
                 substantive_tokens.append(w)
@@ -888,22 +1096,26 @@ class LanceDBImageIndex:
         scored = []
         for i in range(total_rows):
             cap = str(pydict.get("caption", [""])[i] or "").lower()
+            ref_txt = str(pydict.get("referencing_text", [""])[i] or "").lower() if "referencing_text" in pydict else ""
+            ocr_txt = str(pydict.get("ocr_text", [""])[i] or "").lower() if "ocr_text" in pydict else ""
             doc_id = str(pydict.get("document_id", [""])[i] or "").lower()
             source_snapshot_id = str(
                 pydict.get("source_snapshot_id", [""])[i] or ""
             ).lower()
             if allowed_ids and not ({doc_id, source_snapshot_id} & allowed_ids):
                 continue
-            combined = f"{cap} {doc_id}"
+            combined = f"{cap} {ref_txt} {ocr_txt} {doc_id}"
+            combined_tokens = set(re.findall(r"[\w\u4e00-\u9fff]+", combined))
             substantive_matches = 0
             match_score = 0.0
             for t in substantive_tokens:
-                if t in combined:
+                if t in combined_tokens:
                     substantive_matches += 1
                     match_score += 2.0 + len(t) * 0.15
 
-            # Must have at least one substantive concept match!
-            if substantive_matches > 0:
+            # Require topical grounding: for multi-token queries, prevent single incidental keyword noise
+            match_ratio = substantive_matches / max(1, len(substantive_tokens))
+            if substantive_matches > 0 and (len(substantive_tokens) <= 2 or match_ratio >= 0.20 or substantive_matches >= 2):
                 row_dict = {col: pydict[col][i] for col in pydict}
                 scored.append((match_score, row_dict))
 
@@ -1023,6 +1235,8 @@ def build_image_index(
                 "page_height": a.page_height,
                 "page_rotation": a.page_rotation,
             }
+            ref_text = " ".join(getattr(a, "referencing_contexts", ())) or None
+            ocr_txt = getattr(a, "ocr_text", None)
             rec = MultimodalIndexRecord(
                 asset_id=a.asset_id,
                 document_id=a.document_id,
@@ -1033,6 +1247,8 @@ def build_image_index(
                 artifact_ref=a.artifact_ref or "",
                 thumbnail_artifact_ref=a.thumbnail_artifact_ref,
                 caption=a.caption,
+                referencing_text=ref_text,
+                ocr_text=ocr_txt,
                 embedding_model=result.model,
                 dimensions=result.dimensions,
                 vector=vec,

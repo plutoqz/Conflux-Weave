@@ -67,6 +67,8 @@ class DocumentAsset:
     caption: str | None = None
     caption_locator: dict[str, Any] | None = None
     parent_segment_ids: tuple[str, ...] = ()
+    referencing_contexts: tuple[str, ...] = ()
+    ocr_text: str | None = None
     extraction_method: str = EXTRACTOR_VERSION
     extraction_status: str = "extracted"  # "extracted" | "degraded" | "failed" | "duplicate"
     duplicate_of_asset_id: str | None = None
@@ -95,6 +97,8 @@ class DocumentAsset:
             "caption": self.caption,
             "caption_locator": self.caption_locator,
             "parent_segment_ids": list(self.parent_segment_ids),
+            "referencing_contexts": list(self.referencing_contexts),
+            "ocr_text": self.ocr_text,
             "extraction_method": self.extraction_method,
             "extraction_status": self.extraction_status,
             "duplicate_of_asset_id": self.duplicate_of_asset_id,
@@ -243,6 +247,69 @@ def _find_caption_for_bbox(page: fitz.Page, bbox: BoundingBox | None) -> tuple[s
     candidates.sort(key=lambda item: item[0])
     _, best_caption, best_locator = candidates[0]
     return best_caption, best_locator
+
+
+FIGURE_REF_PATTERN = re.compile(
+    r"\b(?:Fig(?:ure)?\.?|Table)\s*(\d+[a-zA-Z]?)\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_in_figure_text(page: fitz.Page, bbox: BoundingBox | None) -> str | None:
+    """Extract vector text elements located within or overlapping the image bbox."""
+    if bbox is None or bbox.width <= 0 or bbox.height <= 0:
+        return None
+    try:
+        clip_rect = fitz.Rect(bbox.x, bbox.y, bbox.x + bbox.width, bbox.y + bbox.height)
+        text = page.get_text("text", clip=clip_rect)
+        cleaned = " ".join(text.split()).strip()
+        return cleaned if len(cleaned) > 0 else None
+    except Exception:
+        return None
+
+
+def _find_referencing_contexts_for_caption(
+    doc: fitz.Document,
+    caption: str | None,
+    caption_block_no: int | None = None,
+    caption_page_no: int | None = None,
+    max_contexts: int = 3,
+) -> tuple[str, ...]:
+    """Scan document text blocks to find paragraphs explicitly referencing this Figure or Table."""
+    if not caption:
+        return ()
+    match = FIGURE_REF_PATTERN.search(caption)
+    if not match:
+        return ()
+    target_num = match.group(1).lower()
+    target_kind = "table" if caption.strip().lower().startswith("table") else "fig"
+
+    contexts: list[str] = []
+    for page_idx in range(len(doc)):
+        p = doc[page_idx]
+        p_no = page_idx + 1
+        blocks = p.get_text("blocks")
+        for b in blocks:
+            if len(b) < 7 or b[6] != 0:
+                continue
+            text = " ".join(b[4].split()).strip()
+            if not text or len(text) < 20:
+                continue
+            # Skip the caption block itself
+            if p_no == caption_page_no and b[5] == caption_block_no:
+                continue
+            # Check if block mentions the target figure/table
+            for ref_m in FIGURE_REF_PATTERN.finditer(text):
+                ref_kind = "table" if ref_m.group(0).lower().startswith("table") else "fig"
+                ref_num = ref_m.group(1).lower()
+                if ref_kind == target_kind and ref_num == target_num:
+                    contexts.append(text)
+                    break
+            if len(contexts) >= max_contexts:
+                break
+        if len(contexts) >= max_contexts:
+            break
+    return tuple(contexts)
 
 
 def _generate_thumbnail(
@@ -513,10 +580,17 @@ class PDFAssetExtractor:
                     # Caption extraction (icons never match figure/table captions)
                     if asset_kind == "icon":
                         caption, caption_locator = None, None
+                        referencing_contexts = ()
+                        ocr_text = None
                     else:
                         caption, caption_locator = _find_caption_for_bbox(page, bbox)
                         if caption is None and asset_kind == "embedded_image":
                             warnings.append("caption_not_found")
+                        ocr_text = _extract_in_figure_text(page, bbox)
+                        cap_bno = caption_locator.get("block_no") if caption_locator else None
+                        referencing_contexts = _find_referencing_contexts_for_caption(
+                            doc, caption, caption_block_no=cap_bno, caption_page_no=page_no
+                        )
 
                     asset = DocumentAsset(
                         asset_id=asset_id,
@@ -538,6 +612,8 @@ class PDFAssetExtractor:
                         caption=caption,
                         caption_locator=caption_locator,
                         parent_segment_ids=parent_ids,
+                        referencing_contexts=referencing_contexts,
+                        ocr_text=ocr_text,
                         extraction_method=extraction_method,
                         extraction_status=extraction_status,
                         duplicate_of_asset_id=duplicate_of,
@@ -584,6 +660,8 @@ class PDFAssetExtractor:
                             caption=None,
                             caption_locator=None,
                             parent_segment_ids=orig.parent_segment_ids,
+                            referencing_contexts=orig.referencing_contexts,
+                            ocr_text=orig.ocr_text,
                             extraction_method=orig.extraction_method,
                             extraction_status=orig.extraction_status,
                             duplicate_of_asset_id=orig.duplicate_of_asset_id,
