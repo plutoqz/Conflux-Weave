@@ -1,6 +1,6 @@
 # Project status
 
-Updated: 2026-09-12
+Updated: 2026-09-24
 
 | Area | Status | Evidence boundary |
 |---|---|---|
@@ -17,6 +17,12 @@ Updated: 2026-09-12
 | DocumentAgent 权威笔记工坊 | `implemented_and_validated` | 多格式解析、NotePatch 乐观锁修订、Note Studio、UX-3.2 三栏（545 passed 检查点） |
 | v0.3 P4 统一对话路由与分层记忆中心 | `implemented_and_validated_offline` | P4.0-P4.4 全面落地并通过离线全量回归（577 passed）：SQLite Migration v7、HierarchicalMemoryStore、两阶段 ConversationRouter、MemoryAgent、Omnibox 智能补全与 HITL 记忆候选气泡、Settings Memory Studio |
 | v0.3 P5 Skill 与 MCP 增强及多 Agent 协同 | `implemented_and_validated_offline` | P5.1-P5.5 全面落地并通过离线全量回归（597 passed）：声明式 Skill 架构与执行引擎、MCP Client 外部工具接入网关、MCP Server 本地学术能力暴露（SSE & stdio）、异步 EventBus 与并发 DAG 调度引擎、双端工作台协同演播室 (Skill Studio & MCP Gateway Dashboard) |
+| v0.3 P6 可用性闭环与可靠性工程 | `implemented_and_validated` | P6 全部 Gate（成果导出/数据生命周期/长任务反馈/React回归/语义记忆召回/计算沙箱/预算硬限制/进程分离/Step Checkpoint）落地（670 passed） |
+| v0.3 P7 首批（全局搜索/研读联动/备份恢复） | `implemented_and_validated` | FTS5 全局搜索、研读锚点与选区引用、灾备快照与恢复（692 passed） |
+| v0.3 UX 全流程体验与能力闭环 (G0~G5) | `implemented_and_validated` | G0~G5 全量闭环：消除不可信假成功、导航深链、任务连续性、文献范围检索、项目提问持久化、跨对象研究专题看板 Topics（730+ passed） |
+| v0.3 Golden Loop 黄金研究循环 | `implemented_and_validated` | 多模态真实接地、会话一键转笔记谱系关联与全局专题上下文连续性（8c45e69 检查点） |
+| 多模态 RAG 严谨评测治理与三阶段消融 | `implemented_and_validated_offline` | 8d9874b 检查点：基线治理、两级同模态 RRF、坐标换算微实验、并发 Runner、MinerU/Parent-Child/BGE 重排独立消融（779 passed 全量通过） |
+| v0.3 P7-B 记忆生命周期治理与物理向量清理 | `implemented_and_validated` | Migration 13、置顶/反馈/到期召回重排、物理向量级联删除与 vacuum 孤儿清理（785 passed 全量通过） |
 
 The v0.2 W0-W5 plans are no longer active gates. Their implementation and
 validation evidence remains available at `docs/plans/deprecated/v0.2/`; the
@@ -612,7 +618,7 @@ P2.3 冻结基准（`p2-multimodal-retrieval-v1`，40 篇论文）当时的裁�
 
 | 主题 | 内容 | 边界 |
 | --- | --- | --- |
-| V1/V2 真实验证 | A5 设置（重启前后持久值=生效值、双探针）与 NotePatch 三场景 409 复验；B1 真实 embedding 召回复验（配对命中 0.70/0.62、无关零注入、跨项目零泄漏） | 记忆删除的向量行残留（SQLite 为权威，召回不受影响）归 P7-B1 |
+| V1/V2 真实验证 | A5 设置（重启前后持久值=生效值、双探针）与 NotePatch 三场景 409 复验；B1 真实 embedding 召回复验（配对命中 0.70/0.62、无关零注入、跨项目零泄漏） | 记忆删除的向量行残留（已于 P7-B 完成物理级联删除与 vacuum 治理） |
 | V3 C1/C2 真实恢复 | 付费批次中硬杀 worker：API 重启存活；**lease 精确过期接管（900s 无心跳）→ 诚实冻结不重放**；run1 冻结→显式 retry→完整交付（retrieve/deliver checkpoint 台账） | 未知结果触发 budget.state=stopped，已付费预留场景下 `retry_unknown_external` 实际不可达（恢复=终态失败+新建 Run）——C2 第二批设计输入 |
 | V4 深度研究验收 | run1 报告人工检查（引用支撑/数字无漂移/边界如实）；四格式导出；刷新恢复真实验证 | "来源不可用型"部分失败未单独构造；报告"进一步探索"模板化弱点登记 |
 | P7-V 缺陷修复 | ① P1 图文维度不匹配冻结深度研究（现网 1024 维索引 × 128 维回落 embedder，lancedb 误报"无向量列"）→ 图文分支显式降级；② P1 NotePatch 旧基线静默覆盖（409 真实不可达）→ 非 tip 修订 409+latest_version=tip；③ P2 React 深链路径形式失效 → handleHash 双形式兼容 | 均带回归测试；② 使 A5"刷新基线重应用"契约在真实链路成立 |
@@ -621,3 +627,63 @@ P2.3 冻结基准（`p2-multimodal-retrieval-v1`，40 篇论文）当时的裁�
 | A3 备份恢复 | `conflux-weave backup`（备份前 integrity/quick/foreign_key 预检、SQLite backup API 在线快照、LanceDB/Artifact/[source-cache]、config-template.env 密钥红acted+写入断言）；`conflux-weave restore`（清单/哈希/版本预检 → 暂存区计数一致+抽样逐字节可读 → 才切换目录；失败绝不覆盖既有数据） | 恢复目标必须为空目录；增量/PITR 备份不在第一批 |
 
 回归：`uv run pytest -q` → **692 passed**（P6 完善轮 677 → P7 首批 +15：图文降级 4、全局搜索 7、A2 锚点、A3 备份 4，扣除迁移守卫断言更新）。
+
+## UX 全流程体验与能力闭环 (G0~G5, 2026-09-18，已合入)
+
+依据《Conflux-Weave v0.3 用户全流程体验与能力闭环优化方案》（`docs/plans/current/v0.3-用户全流程体验与能力闭环优化方案.md`），针对此前诊断出的能力表达不准确、用户操作不连续和验收偏向组件等关键问题，分六个 Gate 完成系统性整改与全量回归：
+
+| Gate | 核心改动 | 证据边界与验证 |
+| --- | --- | --- |
+| G0 基线与回放 | 建立从前端实际请求形态出发的不可篡改离线失败回放集；隔离数据环境与基线清单冻结 | `tests/test_ux_closure_g0_g1.py` |
+| G1 可信性与关键合同 | 彻底阻断无依据学术假结论（未完成分析返回结构化摘录而不是伪造 SOTA）；阻止离线 Skill 假成功；前端集成 DOMPurify 严格净化外部 HTML；资料库空库指标与真实后端状态绑定；追问（`question`）与恢复决策（`/resume`）API 合同对齐 | `tests/test_ux_closure_g0_g1.py` (16 项测试通过) |
+| G2 连续使用 | 全局搜索与浏览器 URL 深度链接完整消费与分区路由；长任务取消与失败恢复端点；SSE 游标连续追踪；未决记忆候选 HITL 显式审批（approve/reject）；聊天输入草稿刷新自动恢复 | `tests/test_ux_closure_g2.py` (5 项测试通过) |
+| G3 核心文献研究闭环 | 支持指定单篇或多篇文献集合（`document_ids`）限定提问与检索范围（范围彻底下沉入混合检索与执行链）；长文阅读分段出处定位；资料库批量与导入状态真实化 | `tests/test_ux_closure_g3.py` (7 项测试通过) |
+| G4 项目与真实技能闭环 | 项目代码提问历史持久化与代码片段上下文传递；CodingAgent 基于 SHA-256 乐观锁的补丁生成、验证、应用与回滚全生命周期；文献对比综述与代码架构审计 Skill 真实调用工具链路（非离线占位返回） | `tests/test_ux_closure_g4.py` (6 项测试通过) |
+| G5 研究专题最小切片 | 落地跨对象研究专题看板（Topics），打通会话、文档、笔记、运行与项目等多实体双向关联；全局上下文定位与一键恢复；非级联安全删除 | `tests/test_ux_closure_g5.py` (6 项测试通过) |
+
+## Golden Loop 黄金研究循环与专题连续性 (2026-09-19，已合入)
+
+- **多模态真实接地 (Multimodal Grounding)**：修复多模态 RRF 跨模态量纲对齐，并将提取到的高价值图表视觉 Token 直接送入 Vision 模型进行联合推演；
+- **资料库定向研读**：资料库视图支持选中指定文档一键发起限定范围对话，输入窗置顶醒目 Scope 提示横幅；
+- **原文出处回跳**：笔记研读演播室（Note Studio）支持从引用 Chip 点击平滑回跳至原文章节分段，并带有即时高亮闪烁效果；
+- **对话沉淀笔记**：新增 `POST /api/v1/notes/from-chat` 接口，支持将有价值的多轮对话一键综合沉淀为结构化权威笔记，并完整继承会话引用与版本谱系（Lineage）；
+- **全局专题连续性**：Topbar 显式常驻当前激活专题（Active Topic）徽标，Topics 视图支持一键切换并自动恢复最近工作位置。
+
+## 多模态 RAG 严谨评测治理与三阶段消融 (2026-09-20，已合入)
+
+依据《Conflux-Weave 多模态 RAG 严谨评测治理与增量消融实施方案》（`docs/plans/current/多模态RAG全流程工程优化与技术栈选型方案.md`，提交 `8d9874b`），彻底根除基线混用、对照组失效与运行时标签泄漏：
+
+1. **阶段一：基线规范化与接口契约冻结**
+   - 锁定 150 例真实物理评测集（120 正向 + 30 负向），明确全量物理检索基线（Recall@5=0.90, MRR=0.82）；
+   - 实现两级同模态 RRF 排序融合（`intra_modal_image_rrf`），解决题注命中与图向量特征的同模态合并与量纲冲突；
+   - 真实化 `text_only` 对照组（接入真实正文切片检索），多模态专属指标显式解耦为 `N/A`（None），不再错误惩罚纯文本；
+   - 彻底杜绝运行时标签泄漏（严禁生成函数与缓存键读取 `expected_answerable`）；
+   - 冻结 20 个排版硬样本（`hard_subset_manifest.json`）与 20 个近领域负样本（`near_domain_negatives_manifest.json`）。
+2. **阶段二：高敏感前置微实验**
+   - **微实验 A（坐标系变换链）**：实现 PDF 点坐标（72 DPI）到渲染像素（如 150/300 DPI）的高精度换算，支持安全边距、越界钳位与局部裁剪，带安全 Kill Switch；
+   - **微实验 B（有界限速并发 Runner）**：实现带指数退避抖动、限流自动重试与检查点断点续跑的并发执行器（`MultimodalConcurrentRunner`），实测并发耗时分布并标定安全吞吐区间。
+3. **阶段三：瓶颈驱动的增量选型与独立单变量消融**
+   - **专题 1（MinerU vs PyMuPDF）**：针对 20 个硬样本进行版面分析（DLA）与表格识别（TSR）单变量对比；
+   - **专题 2（父子分级切片 Parent-Child）**：构建 `HierarchicalChunker`，实现子块高敏检索与父块饱满上下文组装（`test_hierarchical_chunking.py`）；
+   - **专题 3（BGE Cross-Encoder 重排）**：落地 `BGEReranker`，验证跨模态文本语义关联重排与剪枝（`test_multimodal_reranker_bge.py`）。
+
+## 2026-09-24 全量回归与测试断言对齐 (779 passed 全绿)
+
+- 修复 `test_p2_multimodal_evaluation.py` 中历史用例关于 `text_only` 的 `image_recall_at_5` 旧断言（由硬编码 `0.00` 对齐为解耦契约的 `None`，且无惩罚通过）；
+- 修复 `test_pdf_asset_extraction.py` 中合成测试图尺寸（调整为 200x150 像素），规范规避小图标噪声过滤启发式；
+- 全套件自动化回归：`uv run pytest -q` → **779 passed**，前端 `npx tsc --noEmit` 0 错误。
+
+## P7-B 记忆生命周期治理与物理向量清理 (2026-09-24，已合入)
+
+- **数据库迁移**：新增 SQLite Migration 13（`v03_p7_b_memory_governance`），给 `memories` 物理表增加 `is_pinned`（置顶）、`user_feedback`（点赞/点踩打分）、`expires_at`（到期时间戳）；
+- **存储与治理接口**：`HierarchicalMemoryStore` 扩展 `pin_memory`、`set_feedback`、`set_expiry` 与 `list_active_memory_ids`；
+- **物理向量同步清理**：
+  - `DELETE /api/v1/memories/{id}` 级联物理调用 `MemoryRecallService.delete_memory_vector(mid)`，同步清空 LanceDB 物理向量行与进程内嵌入缓存；
+  - 增加 `purge_deleted_vectors(active_ids)` 与 `POST /api/v1/memories/vacuum` 端点，物理扫描并彻底清除因异常/历史遗留的孤儿向量；
+- **生命周期召回重排与原因解释**：
+  - 过滤已到期记忆（`expires_at <= now` 自动剔除）；
+  - 置顶项优先加权（`+0.50`，理由标注 `置顶优先` 且豁免相关性门槛）；
+  - 用户反馈调权（`+0.25` 增益标注 `用户赞同`，`-0.35` 惩罚标注 `用户降权`）；
+- **全栈接口与前端契约**：暴露 `/pin`、`/feedback`、`/expire`、`/vacuum` REST 端点，并在 `web/src/services/api.ts` 提供强类型客户端方法，`npm run build` / `tsc` 0 错误；
+- **自动化测试套件**：新增 `tests/test_p7_b_memory_lifecycle.py`（6/6 passed），全仓回归 `uv run pytest -q` → **785 passed**（0 failed）。
+

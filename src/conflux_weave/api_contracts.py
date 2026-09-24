@@ -642,6 +642,9 @@ class MemoryItemResponse(_ApiModel):
     source_id: str
     created_at: str
     updated_at: str
+    is_pinned: bool = False
+    user_feedback: int = 0
+    expires_at: str | None = None
 
 
 class MemoryListResponse(_ApiModel):
@@ -711,6 +714,26 @@ class CreateMemoryRequest(_ApiModel):
     category: Literal["preference", "fact", "constraint", "decision"] = "preference"
     statement: str = Field(min_length=1, max_length=1000)
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    is_pinned: bool = False
+    user_feedback: int = Field(default=0, ge=-1, le=1)
+    expires_at: str | None = None
+
+
+class PinMemoryRequest(_ApiModel):
+    is_pinned: bool = True
+
+
+class MemoryFeedbackRequest(_ApiModel):
+    user_feedback: int = Field(ge=-1, le=1)
+
+
+class ExpireMemoryRequest(_ApiModel):
+    expires_at: str | None = None
+
+
+class MemoryVacuumResponse(_ApiModel):
+    purged_vectors_count: int = 0
+    active_memories_count: int = 0
 
 
 class MemoryCandidateActionRequest(_ApiModel):
@@ -1748,6 +1771,10 @@ __all__ = [
     "MemoryCandidateResponse",
     "MemoryCandidateListResponse",
     "CreateMemoryRequest",
+    "PinMemoryRequest",
+    "MemoryFeedbackRequest",
+    "ExpireMemoryRequest",
+    "MemoryVacuumResponse",
     "MemoryCandidateActionRequest",
     "RouterRequest",
     "RouterResultResponse",

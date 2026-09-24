@@ -328,9 +328,9 @@ def test_p2_benchmark_reaches_frozen_thresholds_offline():
             assert summary.all_thresholds_passed is True
 
         elif condition == "text_only":
-            # Text only must fail image recall completely, demonstrating necessity of multimodal
-            assert summary.image_recall_at_5 == 0.00
-            assert summary.all_thresholds_passed is False
+            # Decoupled contract: text-only has N/A (None) for image recall and does not penalize
+            assert summary.image_recall_at_5 is None
+            assert summary.all_thresholds_passed is True
 
 
 def test_default_path_adjudication_rules(monkeypatch):

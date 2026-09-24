@@ -64,6 +64,9 @@ class MemoryItem:
     source_id: str
     created_at: str
     updated_at: str
+    is_pinned: bool = False
+    user_feedback: int = 0
+    expires_at: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -78,6 +81,9 @@ class MemoryItem:
             "source_id": self.source_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "is_pinned": bool(self.is_pinned),
+            "user_feedback": int(self.user_feedback),
+            "expires_at": self.expires_at,
         }
 
 
@@ -156,10 +162,20 @@ class HierarchicalMemoryStore:
                     source_type TEXT NOT NULL,
                     source_id TEXT NOT NULL,
                     created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL,
+                    is_pinned INTEGER NOT NULL DEFAULT 0,
+                    user_feedback INTEGER NOT NULL DEFAULT 0,
+                    expires_at TEXT
                 )
                 """
             )
+            existing_cols = {row["name"] for row in conn.execute("PRAGMA table_info(memories)").fetchall()}
+            if "is_pinned" not in existing_cols:
+                conn.execute("ALTER TABLE memories ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0")
+            if "user_feedback" not in existing_cols:
+                conn.execute("ALTER TABLE memories ADD COLUMN user_feedback INTEGER NOT NULL DEFAULT 0")
+            if "expires_at" not in existing_cols:
+                conn.execute("ALTER TABLE memories ADD COLUMN expires_at TEXT")
             conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_memories_lookup
@@ -206,6 +222,9 @@ class HierarchicalMemoryStore:
         source_type: str = "manual",
         source_id: str = "user",
         memory_id: str | None = None,
+        is_pinned: bool = False,
+        user_feedback: int = 0,
+        expires_at: str | None = None,
     ) -> MemoryItem:
         scope_str = scope.value if isinstance(scope, Enum) else str(scope)
         cat_str = category.value if isinstance(category, Enum) else str(category)
@@ -221,10 +240,15 @@ class HierarchicalMemoryStore:
                 """
                 INSERT INTO memories(
                     memory_id, scope, target_id, category, statement,
-                    confidence, status, source_type, source_id, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
+                    confidence, status, source_type, source_id, created_at, updated_at,
+                    is_pinned, user_feedback, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (mid, scope_str, target_id, cat_str, stmt, float(confidence), source_type, source_id, now, now),
+                (
+                    mid, scope_str, target_id, cat_str, stmt, float(confidence),
+                    source_type, source_id, now, now,
+                    1 if is_pinned else 0, int(user_feedback), expires_at,
+                ),
             )
             conn.commit()
         finally:
@@ -242,13 +266,16 @@ class HierarchicalMemoryStore:
             source_id=source_id,
             created_at=now,
             updated_at=now,
+            is_pinned=bool(is_pinned),
+            user_feedback=int(user_feedback),
+            expires_at=expires_at,
         )
 
     def get_memory(self, memory_id: str) -> MemoryItem | None:
         conn = self._connect()
         try:
             row = conn.execute(
-                "SELECT memory_id, scope, target_id, category, statement, confidence, status, source_type, source_id, created_at, updated_at FROM memories WHERE memory_id = ?",
+                "SELECT * FROM memories WHERE memory_id = ?",
                 (memory_id,),
             ).fetchone()
         finally:
@@ -256,20 +283,7 @@ class HierarchicalMemoryStore:
 
         if row is None:
             return None
-
-        return MemoryItem(
-            memory_id=row["memory_id"],
-            scope=MemoryScope(row["scope"]),
-            target_id=row["target_id"],
-            category=MemoryCategory(row["category"]),
-            statement=row["statement"],
-            confidence=row["confidence"],
-            status=MemoryStatus(row["status"]),
-            source_type=row["source_type"],
-            source_id=row["source_id"],
-            created_at=row["created_at"],
-            updated_at=row["updated_at"],
-        )
+        return self._row_to_memory(row)
 
     def list_memories(
         self,
@@ -279,7 +293,7 @@ class HierarchicalMemoryStore:
         status: str | MemoryStatus = "active",
         limit: int = 50,
     ) -> list[MemoryItem]:
-        query = "SELECT memory_id, scope, target_id, category, statement, confidence, status, source_type, source_id, created_at, updated_at FROM memories WHERE 1=1"
+        query = "SELECT * FROM memories WHERE 1=1"
         params: list[Any] = []
 
         if scope is not None:
@@ -301,7 +315,7 @@ class HierarchicalMemoryStore:
             query += " AND status = ?"
             params.append(stat_str)
 
-        query += " ORDER BY updated_at DESC, created_at DESC LIMIT ?"
+        query += " ORDER BY is_pinned DESC, updated_at DESC, created_at DESC LIMIT ?"
         params.append(max(1, min(int(limit), 200)))
 
         conn = self._connect()
@@ -310,22 +324,7 @@ class HierarchicalMemoryStore:
         finally:
             conn.close()
 
-        return [
-            MemoryItem(
-                memory_id=row["memory_id"],
-                scope=MemoryScope(row["scope"]),
-                target_id=row["target_id"],
-                category=MemoryCategory(row["category"]),
-                statement=row["statement"],
-                confidence=row["confidence"],
-                status=MemoryStatus(row["status"]),
-                source_type=row["source_type"],
-                source_id=row["source_id"],
-                created_at=row["created_at"],
-                updated_at=row["updated_at"],
-            )
-            for row in rows
-        ]
+        return [self._row_to_memory(row) for row in rows]
 
     def update_memory(
         self,
@@ -333,6 +332,9 @@ class HierarchicalMemoryStore:
         statement: str | None = None,
         confidence: float | None = None,
         status: str | MemoryStatus | None = None,
+        is_pinned: bool | None = None,
+        user_feedback: int | None = None,
+        expires_at: str | None = None,
     ) -> MemoryItem | None:
         item = self.get_memory(memory_id)
         if item is None:
@@ -342,18 +344,79 @@ class HierarchicalMemoryStore:
         new_stmt = statement.strip() if statement is not None else item.statement
         new_conf = float(confidence) if confidence is not None else item.confidence
         new_stat = (status.value if isinstance(status, Enum) else str(status)) if status is not None else item.status.value
+        new_pin = (1 if is_pinned else 0) if is_pinned is not None else (1 if item.is_pinned else 0)
+        new_fb = int(user_feedback) if user_feedback is not None else int(item.user_feedback)
+        new_exp = expires_at if expires_at is not None else item.expires_at
 
         conn = self._connect()
         try:
             conn.execute(
-                "UPDATE memories SET statement = ?, confidence = ?, status = ?, updated_at = ? WHERE memory_id = ?",
-                (new_stmt, new_conf, new_stat, now, memory_id),
+                "UPDATE memories SET statement = ?, confidence = ?, status = ?, is_pinned = ?, user_feedback = ?, expires_at = ?, updated_at = ? WHERE memory_id = ?",
+                (new_stmt, new_conf, new_stat, new_pin, new_fb, new_exp, now, memory_id),
             )
             conn.commit()
         finally:
             conn.close()
 
         return self.get_memory(memory_id)
+
+    def pin_memory(self, memory_id: str, is_pinned: bool = True) -> MemoryItem | None:
+        """标记或取消固定（置顶）记忆。"""
+        now = _utc_now()
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                "UPDATE memories SET is_pinned = ?, updated_at = ? WHERE memory_id = ?",
+                (1 if is_pinned else 0, now, memory_id),
+            )
+            conn.commit()
+            if cursor.rowcount == 0:
+                return None
+        finally:
+            conn.close()
+        return self.get_memory(memory_id)
+
+    def set_feedback(self, memory_id: str, feedback: int) -> MemoryItem | None:
+        """记录用户对记忆的反馈打分（+1: 赞同, -1: 降权, 0: 中立）。"""
+        val = 1 if feedback > 0 else (-1 if feedback < 0 else 0)
+        now = _utc_now()
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                "UPDATE memories SET user_feedback = ?, updated_at = ? WHERE memory_id = ?",
+                (val, now, memory_id),
+            )
+            conn.commit()
+            if cursor.rowcount == 0:
+                return None
+        finally:
+            conn.close()
+        return self.get_memory(memory_id)
+
+    def set_expiry(self, memory_id: str, expires_at: str | None) -> MemoryItem | None:
+        """设置记忆过期时间戳（ISO8601 或 None）。"""
+        now = _utc_now()
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                "UPDATE memories SET expires_at = ?, updated_at = ? WHERE memory_id = ?",
+                (expires_at, now, memory_id),
+            )
+            conn.commit()
+            if cursor.rowcount == 0:
+                return None
+        finally:
+            conn.close()
+        return self.get_memory(memory_id)
+
+    def list_active_memory_ids(self) -> set[str]:
+        """获取所有处于 active 状态的记忆 ID 集合。"""
+        conn = self._connect()
+        try:
+            rows = conn.execute("SELECT memory_id FROM memories WHERE status = 'active'").fetchall()
+            return {row["memory_id"] for row in rows}
+        finally:
+            conn.close()
 
     def archive_memory(self, memory_id: str) -> bool:
         return self.update_memory(memory_id, status=MemoryStatus.ARCHIVED) is not None
@@ -366,6 +429,26 @@ class HierarchicalMemoryStore:
             return cursor.rowcount > 0
         finally:
             conn.close()
+
+    @staticmethod
+    def _row_to_memory(row: Any) -> MemoryItem:
+        keys = set(row.keys()) if hasattr(row, "keys") else set()
+        return MemoryItem(
+            memory_id=row["memory_id"],
+            scope=MemoryScope(row["scope"]),
+            target_id=row["target_id"],
+            category=MemoryCategory(row["category"]),
+            statement=row["statement"],
+            confidence=float(row["confidence"]),
+            status=MemoryStatus(row["status"]),
+            source_type=row["source_type"],
+            source_id=row["source_id"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            is_pinned=bool(row["is_pinned"]) if "is_pinned" in keys else False,
+            user_feedback=int(row["user_feedback"]) if "user_feedback" in keys else 0,
+            expires_at=row["expires_at"] if "expires_at" in keys else None,
+        )
 
     # --- Candidate Operations (HITL) ---
 

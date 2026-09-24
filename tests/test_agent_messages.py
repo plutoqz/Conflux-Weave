@@ -181,4 +181,4 @@ def test_existing_version_five_database_upgrades_without_checksum_changes(tmp_pa
     assert upgraded.migration_records()[:5] == original
     assert upgraded.migration_records()[5].name == "v03_agent_messages"
     assert upgraded.migration_records()[6].name == "v03_hierarchical_memories"
-    assert upgraded.migration_records()[-1].name == "v03_p7_a1_global_search_fts"
+    assert upgraded.migration_records()[-1].name == "v03_p7_b_memory_governance"

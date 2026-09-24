@@ -30,17 +30,17 @@ def _build_synthetic_multimodal_pdf() -> bytes:
     # Page 1: normal image with caption
     p1 = doc.new_page(width=595, height=842)
     p1.insert_text((50, 50), "Introduction\nHere is a description of the methodology.")
-    img1_bytes = _create_sample_image_png(150, 100, (10, 120, 200))
-    img1_rect = fitz.Rect(50, 80, 200, 180)
+    img1_bytes = _create_sample_image_png(200, 150, (10, 120, 200))
+    img1_rect = fitz.Rect(50, 80, 250, 230)
     p1.insert_image(img1_rect, stream=img1_bytes)
-    p1.insert_text((50, 200), "Figure 1: Architectural diagram of the pipeline.")
+    p1.insert_text((50, 250), "Figure 1: Architectural diagram of the pipeline.")
 
     # Page 2: duplicate image (same bytes as img1) placed at different location
     p2 = doc.new_page(width=595, height=842)
     p2.insert_text((50, 50), "Evaluation Details\n")
-    img2_rect = fitz.Rect(100, 100, 250, 200)
+    img2_rect = fitz.Rect(100, 100, 300, 250)
     p2.insert_image(img2_rect, stream=img1_bytes)
-    p2.insert_text((50, 220), "Figure 2: Repeated architecture for comparison.")
+    p2.insert_text((50, 270), "Figure 2: Repeated architecture for comparison.")
 
     # Page 3: text only
     p3 = doc.new_page(width=595, height=842)

@@ -592,5 +592,18 @@ _MIGRATIONS = (
             """,
         ),
     ),
+    _Migration(
+        version=13,
+        name="v03_p7_b_memory_governance",
+        statements=(
+            "ALTER TABLE memories ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE memories ADD COLUMN user_feedback INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE memories ADD COLUMN expires_at TEXT",
+            """
+            CREATE INDEX idx_memories_governance
+            ON memories(is_pinned, user_feedback, expires_at)
+            """,
+        ),
+    ),
 )
 

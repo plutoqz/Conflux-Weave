@@ -95,7 +95,7 @@ def test_migration_is_versioned_idempotent_and_checksum_guarded(tmp_path) -> Non
     repository, store = build_repository(tmp_path)
 
     records = repository.migration_records()
-    assert len(records) == 12
+    assert len(records) == 13
     assert records[0].version == 1
     assert records[0].name == "w3_runtime_authority"
     assert records[0].checksum.startswith("sha256:")
@@ -121,11 +121,13 @@ def test_migration_is_versioned_idempotent_and_checksum_guarded(tmp_path) -> Non
     assert records[10].name == "v03_p6_step_checkpoints"
     assert records[11].version == 12
     assert records[11].name == "v03_p7_a1_global_search_fts"
+    assert records[12].version == 13
+    assert records[12].name == "v03_p7_b_memory_governance"
 
     reopened = SQLiteRuntimeRepository(repository.database_path, store)
     assert reopened.migration_records() == records
     with sqlite3.connect(repository.database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 12
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 13
         connection.execute(
             "UPDATE schema_migrations SET checksum = 'sha256:tampered' WHERE version = 1"
         )

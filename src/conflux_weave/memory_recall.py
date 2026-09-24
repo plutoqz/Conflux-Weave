@@ -79,6 +79,8 @@ class RecallRecord:
     semantic_score: float | None
     lexical_score: float
     recency_score: float
+    is_pinned: bool = False
+    user_feedback: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -93,6 +95,8 @@ class RecallRecord:
             "semantic_score": None if self.semantic_score is None else round(self.semantic_score, 4),
             "lexical_score": round(self.lexical_score, 4),
             "recency_score": round(self.recency_score, 4),
+            "is_pinned": bool(self.is_pinned),
+            "user_feedback": int(self.user_feedback),
         }
 
 
@@ -181,6 +185,62 @@ class MemoryRecallService:
             self.last_index_error = f"index write failed: {type(exc).__name__}: {exc}"
             return False
 
+    def _open_table_if_exists(self):
+        if self._table is not None:
+            return self._table
+        if self._lancedb_root is None:
+            return None
+        try:
+            import lancedb
+
+            db = lancedb.connect(str(self._lancedb_root))
+            self._table = db.open_table(self._table_name)
+            return self._table
+        except Exception:
+            return None
+
+    def delete_memory_vector(self, memory_id: str) -> bool:
+        """从 LanceDB 物理索引和内存向量缓存中彻底删除指定 memory_id。"""
+        self._embedding_cache.pop(memory_id, None)
+        table = self._open_table_if_exists()
+        if table is None:
+            return False
+        try:
+            safe_id = str(memory_id).replace("'", "''")
+            table.delete(f"memory_id = '{safe_id}'")
+            return True
+        except Exception as exc:  # noqa: BLE001
+            self.last_index_error = f"delete vector failed: {type(exc).__name__}: {exc}"
+            return False
+
+    def purge_deleted_vectors(self, active_memory_ids: set[str]) -> int:
+        """物理清理 LanceDB 孤儿向量：任何不在 active_memory_ids 中的向量行均被物理删除。
+
+        返回删除的孤儿向量数量。
+        """
+        self._embedding_cache = {
+            k: v for k, v in self._embedding_cache.items() if k in active_memory_ids
+        }
+        table = self._open_table_if_exists()
+        if table is None:
+            return 0
+        try:
+            arrow_table = table.to_arrow()
+            if "memory_id" in arrow_table.column_names:
+                existing_ids = arrow_table["memory_id"].to_pylist()
+            else:
+                existing_ids = []
+            orphaned = [mid for mid in existing_ids if mid and mid not in active_memory_ids]
+            if not orphaned:
+                return 0
+            for mid in orphaned:
+                safe_id = str(mid).replace("'", "''")
+                table.delete(f"memory_id = '{safe_id}'")
+            return len(orphaned)
+        except Exception as exc:  # noqa: BLE001
+            self.last_index_error = f"purge vectors failed: {type(exc).__name__}: {exc}"
+            return 0
+
     # ------------------------------------------------------------------ 召回
     def recall(
         self,
@@ -213,17 +273,21 @@ class MemoryRecallService:
         except Exception:  # noqa: BLE001 - 权威库异常时返回空，不阻塞主链路
             return []
 
+        now = time.time()
+        # 过滤已过期记忆
+        candidates = [item for item in candidates if not _is_expired(item.expires_at, now)]
+
         if not candidates:
             return []
 
         scored = self._score_all(normalized, candidates)
 
         if normalized:
-            # 相关性门槛：查询存在时只注入真正相关的记忆（词法命中或语义达阈值）。
+            # 相关性门槛：置顶项豁免门槛；其他记忆需词法命中或语义达阈值。
             relevant = [
                 entry
                 for entry in scored
-                if entry.lexical > 0.0 or (entry.semantic is not None and entry.semantic >= 0.35)
+                if entry.item.is_pinned or entry.lexical > 0.0 or (entry.semantic is not None and entry.semantic >= 0.35)
             ]
         else:
             relevant = list(scored)
@@ -235,13 +299,15 @@ class MemoryRecallService:
             ranked = sorted(
                 scored,
                 key=lambda entry: (
+                    -entry.final_score,
                     -entry.recency,
                     -entry.usefulness,
                     entry.item.memory_id,
                 ),
             )
             for entry in ranked:
-                entry.reason = "确定性兜底(recency)"
+                if not entry.item.is_pinned and entry.item.user_feedback == 0:
+                    entry.reason = "确定性兜底(recency)"
         else:
             # 召回系统正常但无相关记忆：不强行注入
             return []
@@ -270,6 +336,8 @@ class MemoryRecallService:
                 semantic_score=entry.semantic,
                 lexical_score=entry.lexical,
                 recency_score=entry.recency,
+                is_pinned=bool(entry.item.is_pinned),
+                user_feedback=int(entry.item.user_feedback),
             )
             for entry in results
         ]
@@ -301,7 +369,7 @@ class MemoryRecallService:
             entry.reason = _reason_of(entry, semantic_ready)
             semantic_component = entry.semantic if entry.semantic is not None else 0.0
             if semantic_ready:
-                entry.final_score = (
+                base_score = (
                     _WEIGHT_SEMANTIC * semantic_component
                     + _WEIGHT_LEXICAL * entry.lexical
                     + _WEIGHT_RECENCY * entry.recency
@@ -309,13 +377,33 @@ class MemoryRecallService:
                 )
             else:
                 # 语义不可用：语义权重并入词法，避免分数整体塌缩
-                entry.final_score = (
+                base_score = (
                     (_WEIGHT_LEXICAL + _WEIGHT_SEMANTIC) * entry.lexical
                     + _WEIGHT_RECENCY * entry.recency
                     + _WEIGHT_USEFULNESS * entry.usefulness
                 )
+            # P7-B 记忆生命周期治理加权:
+            # 1. 置顶优先加权 (+0.50)
+            pinned_bonus = 0.50 if item.is_pinned else 0.0
+            # 2. 用户反馈加权 (+0.25 赞同 / -0.35 踩)
+            feedback_adjustment = 0.0
+            if item.user_feedback > 0:
+                feedback_adjustment = 0.25
+            elif item.user_feedback < 0:
+                feedback_adjustment = -0.35
+            entry.final_score = base_score + pinned_bonus + feedback_adjustment
             scored.append(entry)
         return scored
+
+
+def _is_expired(expires_at: str | None, now: float) -> bool:
+    if not expires_at:
+        return False
+    try:
+        dt = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+        return dt.timestamp() <= now
+    except (ValueError, OSError, OverflowError):
+        return False
 
 
 def _lexical_score(query_tokens: set[str], text: str) -> float:
@@ -350,6 +438,12 @@ def _cosine(a: list[float], b: list[float]) -> float | None:
 
 def _reason_of(entry: _Scored, semantic_ready: bool) -> str:
     parts: list[str] = []
+    if entry.item.is_pinned:
+        parts.append("置顶优先")
+    if entry.item.user_feedback > 0:
+        parts.append("用户赞同")
+    elif entry.item.user_feedback < 0:
+        parts.append("用户降权")
     if semantic_ready and entry.semantic is not None and entry.semantic > 0.05:
         parts.append("语义匹配")
     if entry.lexical > 0.05:

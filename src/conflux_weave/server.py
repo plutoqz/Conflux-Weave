@@ -108,6 +108,10 @@ from conflux_weave.api_contracts import (
     MemoryCandidateResponse,
     MemoryCandidateListResponse,
     CreateMemoryRequest,
+    PinMemoryRequest,
+    MemoryFeedbackRequest,
+    ExpireMemoryRequest,
+    MemoryVacuumResponse,
     MemoryCandidateActionRequest,
     SearchHitResponse,
     SearchResponse,
@@ -1107,6 +1111,27 @@ def create_app(
         except Exception as exc:
             return error_response(exc)
 
+    def _to_memory_item_response(item) -> MemoryItemResponse:
+        scope_val = item.scope.value if hasattr(item.scope, "value") else str(item.scope)
+        cat_val = item.category.value if hasattr(item.category, "value") else str(item.category)
+        status_val = item.status.value if hasattr(item.status, "value") else str(item.status)
+        return MemoryItemResponse(
+            memory_id=item.memory_id,
+            scope=scope_val,
+            target_id=item.target_id,
+            category=cat_val,
+            statement=item.statement,
+            confidence=item.confidence,
+            status=status_val,
+            source_type=item.source_type,
+            source_id=item.source_id,
+            created_at=item.created_at,
+            updated_at=item.updated_at,
+            is_pinned=bool(getattr(item, "is_pinned", False)),
+            user_feedback=int(getattr(item, "user_feedback", 0)),
+            expires_at=getattr(item, "expires_at", None),
+        )
+
     @app.get("/api/v1/memories", response_model=MemoryListResponse)
     async def list_memories(
         scope: str | None = None,
@@ -1123,22 +1148,7 @@ def create_app(
                 status=status,
                 limit=limit,
             )
-            response_items = tuple(
-                MemoryItemResponse(
-                    memory_id=item.memory_id,
-                    scope=item.scope.value,
-                    target_id=item.target_id,
-                    category=item.category.value,
-                    statement=item.statement,
-                    confidence=item.confidence,
-                    status=item.status.value,
-                    source_type=item.source_type,
-                    source_id=item.source_id,
-                    created_at=item.created_at,
-                    updated_at=item.updated_at,
-                )
-                for item in items
-            )
+            response_items = tuple(_to_memory_item_response(item) for item in items)
             return MemoryListResponse(items=response_items, total=len(response_items))
         except Exception as exc:
             return error_response(exc)
@@ -1154,20 +1164,11 @@ def create_app(
                 confidence=request.confidence,
                 source_type="manual",
                 source_id="user",
+                is_pinned=request.is_pinned,
+                user_feedback=request.user_feedback,
+                expires_at=request.expires_at,
             )
-            return MemoryItemResponse(
-                memory_id=item.memory_id,
-                scope=item.scope.value,
-                target_id=item.target_id,
-                category=item.category.value,
-                statement=item.statement,
-                confidence=item.confidence,
-                status=item.status.value,
-                source_type=item.source_type,
-                source_id=item.source_id,
-                created_at=item.created_at,
-                updated_at=item.updated_at,
-            )
+            return _to_memory_item_response(item)
         except Exception as exc:
             return error_response(exc)
 
@@ -1177,7 +1178,54 @@ def create_app(
             success = memory_store.delete_memory(memory_id)
             if not success:
                 return JSONResponse(status_code=404, content={"code": "memory_not_found", "message": "指定记忆不存在。"})
+            if memory_recall_service is not None:
+                memory_recall_service.delete_memory_vector(memory_id)
             return {"ok": True, "memory_id": memory_id}
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/memories/{memory_id}/pin", response_model=MemoryItemResponse)
+    async def pin_memory(memory_id: str, request: PinMemoryRequest | None = None):
+        try:
+            pinned = request.is_pinned if request is not None else True
+            item = memory_store.pin_memory(memory_id, is_pinned=pinned)
+            if item is None:
+                return JSONResponse(status_code=404, content={"code": "memory_not_found", "message": "指定记忆不存在。"})
+            return _to_memory_item_response(item)
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/memories/{memory_id}/feedback", response_model=MemoryItemResponse)
+    async def feedback_memory(memory_id: str, request: MemoryFeedbackRequest):
+        try:
+            item = memory_store.set_feedback(memory_id, feedback=request.user_feedback)
+            if item is None:
+                return JSONResponse(status_code=404, content={"code": "memory_not_found", "message": "指定记忆不存在。"})
+            return _to_memory_item_response(item)
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/memories/{memory_id}/expire", response_model=MemoryItemResponse)
+    async def expire_memory(memory_id: str, request: ExpireMemoryRequest):
+        try:
+            item = memory_store.set_expiry(memory_id, expires_at=request.expires_at)
+            if item is None:
+                return JSONResponse(status_code=404, content={"code": "memory_not_found", "message": "指定记忆不存在。"})
+            return _to_memory_item_response(item)
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/memories/vacuum", response_model=MemoryVacuumResponse)
+    async def vacuum_memories():
+        try:
+            active_ids = memory_store.list_active_memory_ids()
+            purged_count = 0
+            if memory_recall_service is not None:
+                purged_count = memory_recall_service.purge_deleted_vectors(active_ids)
+            return MemoryVacuumResponse(
+                purged_vectors_count=purged_count,
+                active_memories_count=len(active_ids),
+            )
         except Exception as exc:
             return error_response(exc)
 
@@ -1224,19 +1272,7 @@ def create_app(
                     "ok": True,
                     "action": "approved",
                     "memory_id": item.memory_id,
-                    "memory": MemoryItemResponse(
-                        memory_id=item.memory_id,
-                        scope=item.scope.value,
-                        target_id=item.target_id,
-                        category=item.category.value,
-                        statement=item.statement,
-                        confidence=item.confidence,
-                        status=item.status.value,
-                        source_type=item.source_type,
-                        source_id=item.source_id,
-                        created_at=item.created_at,
-                        updated_at=item.updated_at,
-                    ).model_dump(mode="json"),
+                    "memory": _to_memory_item_response(item).model_dump(mode="json"),
                 }
             elif request.action == "reject":
                 memory_store.reject_candidate(candidate_id)

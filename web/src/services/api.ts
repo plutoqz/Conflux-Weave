@@ -351,17 +351,46 @@ export const api = {
     request<any>("/api/v1/chat", { method: "POST", body: JSON.stringify(data) }),
 
   // Memory
-  getMemories: () => request<{ items: any[] }>("/api/v1/memories"),
-  recallMemories: (query: string, projectId?: string) =>
-    request<{ query: string; items: any[]; semantic_available: boolean }>(
-      `/api/v1/memories/recall?query=${encodeURIComponent(query)}${projectId ? `&project_id=${encodeURIComponent(projectId)}` : ""}`
+  getMemories: (params?: { scope?: string; target_id?: string; category?: string; status?: string; limit?: number }) => {
+    const search = new URLSearchParams();
+    if (params?.scope) search.set("scope", params.scope);
+    if (params?.target_id) search.set("target_id", params.target_id);
+    if (params?.category) search.set("category", params.category);
+    if (params?.status) search.set("status", params.status);
+    if (params?.limit) search.set("limit", String(params.limit));
+    const query = search.toString();
+    return request<{ items: any[]; total: number }>(`/api/v1/memories${query ? `?${query}` : ""}`);
+  },
+  recallMemories: (query: string, projectId?: string, limit?: number) =>
+    request<{ query: string; items: any[]; semantic_available: boolean; index_error?: string | null }>(
+      `/api/v1/memories/recall?query=${encodeURIComponent(query)}${projectId ? `&project_id=${encodeURIComponent(projectId)}` : ""}${limit ? `&limit=${limit}` : ""}`
     ),
   actOnMemoryCandidate: (candidateId: string, action: "approve" | "reject") =>
     request<{ ok: boolean; action: string; memory_id?: string; memory?: any; candidate_id?: string }>(
       `/api/v1/memories/candidates/${encodeURIComponent(candidateId)}/action`,
       { method: "POST", body: JSON.stringify({ action }) }
     ),
-  deleteMemory: (memoryId: string) => request(`/api/v1/memories/${memoryId}`, { method: "DELETE" }),
+  deleteMemory: (memoryId: string) =>
+    request<{ ok: boolean; memory_id: string }>(`/api/v1/memories/${encodeURIComponent(memoryId)}`, { method: "DELETE" }),
+  pinMemory: (memoryId: string, isPinned = true) =>
+    request<any>(`/api/v1/memories/${encodeURIComponent(memoryId)}/pin`, {
+      method: "POST",
+      body: JSON.stringify({ is_pinned: isPinned }),
+    }),
+  feedbackMemory: (memoryId: string, feedback: -1 | 0 | 1) =>
+    request<any>(`/api/v1/memories/${encodeURIComponent(memoryId)}/feedback`, {
+      method: "POST",
+      body: JSON.stringify({ user_feedback: feedback }),
+    }),
+  expireMemory: (memoryId: string, expiresAt: string | null) =>
+    request<any>(`/api/v1/memories/${encodeURIComponent(memoryId)}/expire`, {
+      method: "POST",
+      body: JSON.stringify({ expires_at: expiresAt }),
+    }),
+  vacuumMemories: () =>
+    request<{ purged_vectors_count: number; active_memories_count: number }>("/api/v1/memories/vacuum", {
+      method: "POST",
+    }),
 
   // Library
   getDocuments: (status = "active") =>
