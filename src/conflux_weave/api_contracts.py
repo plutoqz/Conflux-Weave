@@ -740,6 +740,52 @@ class MemoryCandidateActionRequest(_ApiModel):
     action: Literal["approve", "reject"]
 
 
+class ProceduralMemoryExtractRequest(_ApiModel):
+    run_id: str = Field(min_length=1, max_length=128)
+    user_id: str = Field(default="user_default", min_length=1, max_length=120)
+    project_id: str | None = Field(default=None, max_length=120)
+    user_marked_useful: bool = Field(default=True)
+    category: Literal["preference", "fact", "constraint", "decision"] = "decision"
+
+
+class ProceduralMemoryExtractResponse(_ApiModel):
+    eligible: bool
+    run_id: str
+    candidates: tuple[MemoryCandidateResponse, ...] = ()
+    reason: str
+    missing_criteria: tuple[str, ...] = ()
+
+
+class MemoryEvaluationCaseResult(_ApiModel):
+    case_id: str
+    dimension: str
+    query: str
+    passed: bool
+    recalled_ids: tuple[str, ...] = ()
+    score: float = 0.0
+    reason: str = ""
+
+
+class MemoryEvaluationResponse(_ApiModel):
+    passed: bool
+    total_cases: int
+    passed_cases: int
+    recall_at_1: float
+    recall_at_3: float
+    recall_at_5: float
+    mrr: float
+    unrelated_injection_rate: float
+    cross_project_leak_rate: float
+    expired_recall_rate: float
+    conflict_detection_rate: float
+    mean_injected_chars: float
+    estimated_injected_tokens: float
+    mean_latency_ms: float
+    p95_latency_ms: float
+    provider_calls_count: int
+    case_results: tuple[MemoryEvaluationCaseResult, ...] = ()
+
+
 class SkillBudgetResponse(_ApiModel):
     max_tokens: int = 8000
     max_steps: int = 12
@@ -1776,6 +1822,10 @@ __all__ = [
     "ExpireMemoryRequest",
     "MemoryVacuumResponse",
     "MemoryCandidateActionRequest",
+    "ProceduralMemoryExtractRequest",
+    "ProceduralMemoryExtractResponse",
+    "MemoryEvaluationCaseResult",
+    "MemoryEvaluationResponse",
     "RouterRequest",
     "RouterResultResponse",
     "SkillBudgetResponse",

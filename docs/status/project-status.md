@@ -24,6 +24,7 @@ Updated: 2026-10-06
 | 多模态 RAG 严谨评测治理与三阶段消融 | `implemented_and_validated_offline` | 8d9874b 检查点：基线治理、两级同模态 RRF、坐标换算微实验、并发 Runner、MinerU/Parent-Child/BGE 重排独立消融（779 passed 全量通过） |
 | v0.3 P7-B 记忆生命周期治理与物理向量清理 | `implemented_and_validated` | Migration 13、置顶/反馈/到期召回重排、物理向量级联删除与 vacuum 孤儿清理（785 passed 全量通过） |
 | v0.3 P7-C1/C2 内部阶段 Checkpoint 与统一恢复决策 | `implemented_and_validated` | plan/claim/verify/synthesize/write 内部 6 阶段 + deliver 逐阶段入账与恢复，5 种结果划分与 4 种推荐动作决策，788 passed 全量通过 |
+| v0.3 P7-B3/B4 程序性记忆与记忆评估基准体系 | `implemented_and_validated` | 5 大硬性门禁程序性经验提取、HITL 审核转正、7 维度真实评估黄金集（Recall@3=100%, MRR=0.9, 0% 无关注入与跨项目泄漏），794 passed 全量通过 |
 
 The v0.2 W0-W5 plans are no longer active gates. Their implementation and
 validation evidence remains available at `docs/plans/deprecated/v0.2/`; the
@@ -709,4 +710,45 @@ P2.3 冻结基准（`p2-multimodal-retrieval-v1`，40 篇论文）当时的裁�
 - **自动化测试回归**：
   - `tests/test_step_checkpoints.py` 新增 4 组用例，9 项单测 100% 通过；
   - 全套件自动化回归：`uv run pytest -q` → **788 passed, 1 skipped**（1 处为远程 BGE 端点临时 503 优雅跳过），0 failed。
+
+## P7-B3/B4 程序性记忆与记忆评估基准体系 (2026-10-06，已合入)
+
+- **B3 程序性记忆提取与严谨门禁 (Procedural Memory)**：
+  - 核心原则：**严禁自动把所有历史 Run 转成长期记忆**，设立 5 大必要前置门禁：
+    1. Run 必须终态成功（`status == RunStatus.SUCCEEDED`）；
+    2. 用户必须明确标记有用（`user_marked_useful=True`）；
+    3. 交付记录必须为完整回答（`disposition == DeliveryDisposition.COMPLETE`）；
+    4. 交付报告 Artifact 完整且物理可读；
+    5. 具备至少 1 张支撑证据卡（`evidence_refs`）。
+  - 若任一条件不满足，提取引擎与 REST API 立即 422 拒绝并详细返回缺失项（`missing_criteria`）；
+  - 提取产物自动生成为 `memory_candidates` 暂存项（`status=pending`，`source_type="procedural_run"`，`source_id=run_id`，`category="decision"`），严格经用户显式 HITL 审核转正（`approve_candidate`）方可收录至 Active 记忆库；
+  - 排重机制保证对相同陈述不产生多余候选。
+- **B4 记忆评估基准体系与黄金测试集 (Memory Evaluation Benchmark)**：
+  - 建立覆盖 7 大核心评测维度的冻结黄金数据集：
+    1. 偏好（PREFERENCE）：学术文风与输出格式偏好检索；
+    2. 项目背景（PROJECT_CONTEXT）：技术约定与架构规约隔离检索；
+    3. 同义表达（SYNONYMS）：口语化与释义泛化表达语义召回；
+    4. 冲突检测（CONFLICT）：候选与已有活跃记忆的对立冲突判定（100% 识别）；
+    5. 过期淘汰（EXPIRED）：已到期记忆 100% 剔除过滤；
+    6. 无答案零注入（UNRELATED_ZERO_INJECTION）：生活与天气等无关查询零强行注入（0.0% 注入率）；
+    7. 跨项目隔离（CROSS_PROJECT_ISOLATION）：跨项目查询 0 泄漏（0.0% 泄漏率）。
+  - 核心量化指标全面达标：
+    - `Recall@1` = 80.0%，`Recall@3` = 100.0%，`Recall@5` = 100.0%；
+    - `MRR` = 0.9000（远超 >= 0.70 目标）；
+    - `无关注入率` = 0.00%（目标 == 0.0%）；
+    - `跨项目泄漏率` = 0.00%（目标 == 0.0%）；
+    - `过期召回率` = 0.00%（目标 == 0.0%）；
+    - `冲突识别率` = 100.0%（目标 == 100.0%）；
+    - `估算注入 Token` = 41 tokens（严格遵守 <= 400 tokens 预算上限）；
+    - 离线评估平均延迟 = 0.8ms。
+  - 内置 `DeterministicBenchmarkEmbedder` 支持离线零网络概念语义空间映射；提供 `MemoryBenchmarkReport.format_markdown_table()` 渲染 GitHub 格式表格。
+- **全栈接口与前端契约**：
+  - 新增 REST 端点：`POST /api/v1/memories/procedural/extract`（程序性记忆门禁提取）；
+  - 新增 REST 端点：`POST /api/v1/memories/evaluate`（记忆评估基准测试）；
+  - Web 客户端 `web/src/services/api.ts` 暴露强类型契约 `extractProceduralMemory` 与 `evaluateMemories`，`npx tsc --noEmit` 0 错误。
+- **自动化测试套件与全量回归**：
+  - 新增 `tests/test_p7_b_procedural_memory.py`（3/3 passed）；
+  - 新增 `tests/test_p7_b_memory_evaluation.py`（3/3 passed）；
+  - 记忆全套件回归（`lifecycle + recall + center + procedural + eval`）：32 passed；
+  - 全仓自动化回归：`uv run pytest -q` → **794 passed, 1 skipped**（1 处为远程 BGE 端点临时 503 优雅跳过），0 failed。
 

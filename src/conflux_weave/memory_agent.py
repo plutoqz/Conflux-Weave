@@ -226,6 +226,35 @@ class MemoryAgent:
             source_id=source_id,
         )
 
+    def extract_procedural_candidates(
+        self,
+        run_id: str,
+        repository,
+        artifact_store,
+        *,
+        user_id: str = "user_default",
+        project_id: str | None = None,
+        user_marked_useful: bool = False,
+        category: str | MemoryCategory = MemoryCategory.DECISION,
+    ) -> list[MemoryCandidate]:
+        """Extract procedural memory candidates from an eligible completed research run (P7-B3)."""
+        from conflux_weave.procedural_memory import ProceduralMemoryExtractor
+
+        extractor = ProceduralMemoryExtractor(
+            repository=repository,
+            artifact_store=artifact_store,
+            memory_store=self.store,
+            chat_adapter=self.chat,
+        )
+        _, candidates = extractor.extract_candidates_from_run(
+            run_id=run_id,
+            user_id=user_id,
+            project_id=project_id,
+            user_marked_useful=user_marked_useful,
+            category=category,
+        )
+        return candidates
+
     def format_prompt_context(
         self,
         user_id: str = "user_default",

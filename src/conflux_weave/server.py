@@ -31,6 +31,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from conflux_weave.chat import ChatMessage, ChatService
 from conflux_weave.memory_recall import MemoryRecallService
+from conflux_weave.procedural_memory import ProceduralMemoryExtractor
+from conflux_weave.memory_evaluation import MemoryBenchmarkRunner
 from conflux_weave.compute_tools import (
     COMPUTE_TOOL_RESULT_SCHEMA,
     ComputeToolRequest,
@@ -113,6 +115,10 @@ from conflux_weave.api_contracts import (
     ExpireMemoryRequest,
     MemoryVacuumResponse,
     MemoryCandidateActionRequest,
+    ProceduralMemoryExtractRequest,
+    ProceduralMemoryExtractResponse,
+    MemoryEvaluationCaseResult,
+    MemoryEvaluationResponse,
     SearchHitResponse,
     SearchResponse,
     SearchLocateResponse,
@@ -1281,6 +1287,104 @@ def create_app(
                 return JSONResponse(status_code=400, content={"code": "invalid_action", "message": f"不支持的操作: {request.action}"})
         except KeyError:
             return JSONResponse(status_code=404, content={"code": "candidate_not_found", "message": "未找到指定记忆候选。"})
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/memories/procedural/extract", response_model=ProceduralMemoryExtractResponse)
+    async def extract_procedural_memory_endpoint(request: ProceduralMemoryExtractRequest):
+        try:
+            art_store = getattr(repository, "artifact_store", getattr(repository, "store", None))
+            extractor = ProceduralMemoryExtractor(
+                repository=repository,
+                artifact_store=art_store,
+                memory_store=memory_store,
+                chat_adapter=chat_adapter,
+            )
+            check, candidates = extractor.extract_candidates_from_run(
+                run_id=request.run_id,
+                user_id=request.user_id,
+                project_id=request.project_id,
+                user_marked_useful=request.user_marked_useful,
+                category=request.category,
+            )
+            if not check.eligible:
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "eligible": False,
+                        "run_id": request.run_id,
+                        "candidates": [],
+                        "reason": check.reason,
+                        "missing_criteria": list(check.missing_criteria),
+                    },
+                )
+            response_cands = tuple(
+                MemoryCandidateResponse(
+                    candidate_id=cand.candidate_id,
+                    scope=cand.scope.value,
+                    target_id=cand.target_id,
+                    category=cand.category.value,
+                    statement=cand.statement,
+                    confidence=cand.confidence,
+                    conflict_with_memory_id=cand.conflict_with_memory_id,
+                    status=cand.status.value,
+                    source_type=cand.source_type,
+                    source_id=cand.source_id,
+                    created_at=cand.created_at,
+                )
+                for cand in candidates
+            )
+            return ProceduralMemoryExtractResponse(
+                eligible=True,
+                run_id=request.run_id,
+                candidates=response_cands,
+                reason=check.reason,
+                missing_criteria=(),
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/memories/evaluate", response_model=MemoryEvaluationResponse)
+    async def evaluate_memories_endpoint():
+        try:
+            runner = MemoryBenchmarkRunner(
+                store=memory_store,
+                recall_service=memory_recall_service,
+                agent=memory_agent,
+            )
+            report = runner.run_benchmark()
+            m = report.metrics
+            case_results = tuple(
+                MemoryEvaluationCaseResult(
+                    case_id=r.case_id,
+                    dimension=r.dimension,
+                    query=r.query,
+                    passed=r.passed,
+                    recalled_ids=r.recalled_ids,
+                    score=r.reciprocal_rank,
+                    reason=r.reason,
+                )
+                for r in report.case_results
+            )
+            return MemoryEvaluationResponse(
+                passed=report.passed,
+                total_cases=m.total_cases,
+                passed_cases=m.passed_cases,
+                recall_at_1=m.recall_at_1,
+                recall_at_3=m.recall_at_3,
+                recall_at_5=m.recall_at_5,
+                mrr=m.mrr,
+                unrelated_injection_rate=m.unrelated_injection_rate,
+                cross_project_leak_rate=m.cross_project_leak_rate,
+                expired_recall_rate=m.expired_recall_rate,
+                conflict_detection_rate=m.conflict_detection_rate,
+                mean_injected_chars=m.mean_injected_chars,
+                estimated_injected_tokens=m.estimated_injected_tokens,
+                mean_latency_ms=m.mean_latency_ms,
+                p95_latency_ms=m.p95_latency_ms,
+                provider_calls_count=m.provider_calls_count,
+                case_results=case_results,
+            )
         except Exception as exc:
             return error_response(exc)
 

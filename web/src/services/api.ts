@@ -391,6 +391,42 @@ export const api = {
     request<{ purged_vectors_count: number; active_memories_count: number }>("/api/v1/memories/vacuum", {
       method: "POST",
     }),
+  extractProceduralMemory: (data: { run_id: string; project_id?: string; user_id?: string; user_marked_useful?: boolean; category?: string }) =>
+    request<{ eligible: boolean; run_id: string; candidates: any[]; reason: string; missing_criteria?: string[] }>(
+      "/api/v1/memories/procedural/extract",
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      }
+    ),
+  evaluateMemories: () =>
+    request<{
+      passed: boolean;
+      total_cases: number;
+      passed_cases: number;
+      recall_at_1: number;
+      recall_at_3: number;
+      recall_at_5: number;
+      mrr: number;
+      unrelated_injection_rate: number;
+      cross_project_leak_rate: number;
+      expired_recall_rate: number;
+      conflict_detection_rate: number;
+      mean_injected_chars: number;
+      estimated_injected_tokens: number;
+      mean_latency_ms: number;
+      p95_latency_ms: number;
+      provider_calls_count: number;
+      case_results: Array<{
+        case_id: string;
+        dimension: string;
+        query: string;
+        passed: boolean;
+        recalled_ids: string[];
+        score: number;
+        reason: string;
+      }>;
+    }>("/api/v1/memories/evaluate", { method: "POST" }),
 
   // Library
   getDocuments: (status = "active") =>
