@@ -33,6 +33,8 @@ from conflux_weave.chat import ChatMessage, ChatService
 from conflux_weave.memory_recall import MemoryRecallService
 from conflux_weave.procedural_memory import ProceduralMemoryExtractor
 from conflux_weave.memory_evaluation import MemoryBenchmarkRunner
+from conflux_weave.provider_pool import ProviderPoolRouter, ProviderEndpoint
+from conflux_weave.structured_output import safe_json_loads, validate_and_repair_schema
 from conflux_weave.compute_tools import (
     COMPUTE_TOOL_RESULT_SCHEMA,
     ComputeToolRequest,
@@ -178,6 +180,11 @@ from conflux_weave.api_contracts import (
     ContinuationProposalResponse,
     ContinueResearchRequest,
     ContinueResearchResponse,
+    ProviderHealthItem,
+    ProviderHealthResponse,
+    ResetCircuitResponse,
+    StructuredRepairRequest,
+    StructuredRepairResponse,
     VerifiedResearchTaskRequest,
     WorkbenchConfigResponse,
     WorkbenchQueryService,
@@ -446,7 +453,15 @@ def create_app(
     query_service = WorkbenchQueryService(repository, org_store=run_org_store)
     memory_store = HierarchicalMemoryStore(db_path if db_path else ":memory:")
     chat_adapter = getattr(chat_service, "_chat", None) if chat_service else None
-    # P6-B1：语义记忆召回（embedder/索引不可用时内部退回确定性路径）
+    _art_store = getattr(repository, "artifact_store", getattr(repository, "store", None))
+    if chat_adapter is not None and getattr(chat_adapter, "config", None) is not None:
+        provider_pool_router = ProviderPoolRouter.from_primary_config(
+            _art_store,
+            chat_adapter.config,
+            transport=getattr(chat_adapter, "transport", None),
+        )
+    else:
+        provider_pool_router = ProviderPoolRouter(_art_store)
     # 注意 retrieval_pipeline 现为 MultimodalRetrievalPipeline 包装层（P2.3），
     # embedding 适配器在其 text_pipeline 上；直接 getattr 会得到 None 并使
     # 记忆语义召回静默断裂——两种管线形态都要解析。
@@ -4188,6 +4203,82 @@ def create_app(
             )
         except Exception as exc:
             return ProviderConfigTestResponse(ok=False, message=str(exc) or "连接失败。", embedding=embedding_probe)
+
+    @app.get(
+        "/api/v1/provider/health",
+        response_model=ProviderHealthResponse,
+    )
+    async def get_provider_health_endpoint():
+        """P7-C2: 获取所有注册 Provider 端点的熔断健康状态、失败统计与能力缓存。"""
+        try:
+            status_list = provider_pool_router.get_health_status()
+            items = tuple(
+                ProviderHealthItem(
+                    endpoint_id=s["endpoint_id"],
+                    name=s["name"],
+                    model=s["model"],
+                    priority=s["priority"],
+                    base_url=s["base_url"],
+                    circuit_state=s["circuit_state"],
+                    can_attempt=s["can_attempt"],
+                    failure_count=s["failure_count"],
+                    last_error=s["last_error"],
+                    last_failure_time=s["last_failure_time"],
+                    supports_json_object=s["supports_json_object"],
+                    supports_thinking_toggle=s["supports_thinking_toggle"],
+                )
+                for s in status_list
+            )
+            return ProviderHealthResponse(endpoints=items, timestamp=time.time())
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post(
+        "/api/v1/provider/{endpoint_id}/reset-circuit",
+        response_model=ResetCircuitResponse,
+    )
+    async def reset_provider_circuit_endpoint(endpoint_id: str):
+        """P7-C2: 手动重置特定 Provider 端点的熔断器为 CLOSED 状态。"""
+        try:
+            ok = provider_pool_router.reset_circuit(endpoint_id)
+            ep = provider_pool_router.get_endpoint(endpoint_id)
+            state = ep.circuit_breaker.state.value if ep else "UNKNOWN"
+            return ResetCircuitResponse(
+                endpoint_id=endpoint_id,
+                reset=ok,
+                circuit_state=state,
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post(
+        "/api/v1/provider/structured/repair",
+        response_model=StructuredRepairResponse,
+    )
+    async def repair_structured_output_endpoint(request: StructuredRepairRequest):
+        """P7-C2: 容错结构化解码与 Schema 自动修复工具端点。"""
+        try:
+            parsed = safe_json_loads(request.raw_text)
+            warnings = []
+            if request.schema_spec:
+                parsed, warnings = validate_and_repair_schema(
+                    parsed,
+                    request.schema_spec,
+                    fill_defaults=request.fill_defaults,
+                )
+            return StructuredRepairResponse(
+                success=True,
+                parsed_data=parsed,
+                warnings=tuple(warnings),
+                error=None,
+            )
+        except Exception as exc:
+            return StructuredRepairResponse(
+                success=False,
+                parsed_data=None,
+                warnings=(),
+                error=str(exc),
+            )
 
     def _get_notes_registry_path() -> Path | None:
         db_path = getattr(repository, "database_path", None)

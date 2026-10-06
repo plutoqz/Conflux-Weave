@@ -25,6 +25,7 @@ from conflux_weave.report_writer import (
     EvidenceCard, WriterOutcome, build_deterministic_document, compose_report_document, distill_evidence_cards,
 )
 from conflux_weave.runtime import LocalArtifactStore
+from conflux_weave.structured_output import safe_json_loads
 
 RESEARCH_TOOL_ID = "hybrid_paper_retrieval"
 
@@ -87,7 +88,7 @@ def _parse_verifier_assessments(
     store: LocalArtifactStore,
     producer_step_id: str,
 ):
-    payload = json.loads(content)
+    payload = safe_json_loads(content)
     if not isinstance(payload, dict) or set(payload) != {"assessments"}:
         raise ValueError("Verifier output must contain only assessments")
     raw_assessments = payload["assessments"]
@@ -783,7 +784,7 @@ class VerifiedResearchWorkflow:
                 enable_thinking=False,
                 producer_step_id="s1-research-plan-queries",
             )
-            payload = json.loads(completion.content)
+            payload = safe_json_loads(completion.content)
             if not isinstance(payload, dict) or set(payload) != {"queries"} or not isinstance(payload["queries"], list):
                 raise ValueError("query planner must return {queries: [...] }")
             planned = []
@@ -885,7 +886,7 @@ class VerifiedResearchWorkflow:
                 "keep at most 10 claims."
             )
         completion = self.chat.complete(system_prompt=system_prompt, user_prompt=json.dumps(context, ensure_ascii=False), max_output_tokens=4096, temperature=0, json_object=True, enable_thinking=False, producer_step_id="s1-research-repair" if repair else "s1-research-draft")
-        payload = json.loads(completion.content); allowed = {item.evidence_id for item in evidence}; claims=[]
+        payload = safe_json_loads(completion.content); allowed = {item.evidence_id for item in evidence}; claims=[]
         raw_claims = payload.get("claims", [])
         if not isinstance(raw_claims, list) or len(raw_claims) > MAX_CANDIDATE_CLAIMS:
             raise ValueError(f"ResearchAgent must return at most {MAX_CANDIDATE_CLAIMS} claims")

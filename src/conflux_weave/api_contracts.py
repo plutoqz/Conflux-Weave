@@ -899,6 +899,46 @@ class ContinueResearchResponse(_ApiModel):
     created: bool
 
 
+# --- P7-C2 Provider Resilience & Structured Output Models ---
+class ProviderHealthItem(_ApiModel):
+    endpoint_id: str
+    name: str
+    model: str
+    priority: int
+    base_url: str
+    circuit_state: str
+    can_attempt: bool
+    failure_count: int
+    last_error: str
+    last_failure_time: float
+    supports_json_object: bool
+    supports_thinking_toggle: bool
+
+
+class ProviderHealthResponse(_ApiModel):
+    endpoints: tuple[ProviderHealthItem, ...] = ()
+    timestamp: float
+
+
+class ResetCircuitResponse(_ApiModel):
+    endpoint_id: str
+    reset: bool
+    circuit_state: str
+
+
+class StructuredRepairRequest(_ApiModel):
+    raw_text: str = Field(min_length=1)
+    schema_spec: dict[str, Any] | None = Field(default=None, alias="schema")
+    fill_defaults: bool = True
+
+
+class StructuredRepairResponse(_ApiModel):
+    success: bool
+    parsed_data: Any = None
+    warnings: tuple[str, ...] = ()
+    error: str | None = None
+
+
 class SkillBudgetResponse(_ApiModel):
     max_tokens: int = 8000
     max_steps: int = 12

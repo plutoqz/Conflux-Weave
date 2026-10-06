@@ -28,6 +28,7 @@ from conflux_weave.engine_narrative import EngineNarrative, _sanitize_paragraph
 from conflux_weave.merge import MergePlan
 from conflux_weave.provider import OpenAICompatibleChatAdapter, ProviderPortError
 from conflux_weave.runtime import LocalArtifactStore
+from conflux_weave.structured_output import safe_json_loads
 from conflux_weave.writer_policy import (
     AUDIT_MAX_OUTPUT_TOKENS,
     DISTILL_MAX_ATTEMPTS,
@@ -284,7 +285,7 @@ def distill_evidence_cards(
 
 
 def _parse_cards(content: str, evidence: tuple[EvidenceRef, ...]) -> tuple[EvidenceCard, ...]:
-    payload = json.loads(content)
+    payload = safe_json_loads(content)
     if not isinstance(payload, dict) or set(payload) != {"cards"} or not isinstance(payload["cards"], list):
         raise ValueError("distiller output must contain only cards")
     known = {item.evidence_id for item in evidence}
@@ -854,7 +855,7 @@ def _fallback_outcome(
 def _parse_writer_payload(
     content: str, claims: tuple[Claim, ...], objective: str
 ) -> ReportDocument:
-    payload = json.loads(content)
+    payload = safe_json_loads(content)
     if not isinstance(payload, dict) or set(payload) != {
         "summary",
         "sections",
@@ -974,7 +975,7 @@ def _flatten_paragraphs(
 def _parse_audit_payload(
     content: str, paragraphs: list[tuple[int, int, ReportParagraph]]
 ) -> None:
-    payload = json.loads(content)
+    payload = safe_json_loads(content)
     if not isinstance(payload, dict) or set(payload) != {"audits"}:
         raise ValueError("audit output must contain only audits")
     raw_audits = payload["audits"]
@@ -1156,7 +1157,7 @@ def _parse_fused_writer_payload(
     web_source_ids: tuple[str, ...],
 ) -> tuple[tuple[ReportSection, ...], tuple[str, ...]]:
     """解析融合输出；节标题必须与引擎骨架逐字 1:1。返回 (sections, questions)。"""
-    payload = json.loads(content)
+    payload = safe_json_loads(content)
     if not isinstance(payload, dict) or set(payload) != {"sections", "open_questions"}:
         raise ValueError("fused writer output must contain exactly sections and open_questions")
     raw_sections = payload["sections"]

@@ -28,6 +28,11 @@ import type {
   ResearchTaskTemplate,
   ContinuationProposal,
   ContinueResearchResponse,
+  ProviderHealthItem,
+  ProviderHealthResponse,
+  ResetCircuitResponse,
+  StructuredRepairRequest,
+  StructuredRepairResponse,
 } from "@/types/workbench";
 
 const API_BASE = "";
@@ -922,5 +927,17 @@ export const api = {
     request<ContinueResearchResponse>(`/api/v1/research/runs/${encodeURIComponent(runId)}/continue`, {
       method: "POST",
       body: JSON.stringify(payload || {}),
+    }),
+
+  // Provider Resilience & Structured Output (P7-C2)
+  getProviderHealth: () => request<ProviderHealthResponse>("/api/v1/provider/health"),
+  resetProviderCircuit: (endpointId: string) =>
+    request<ResetCircuitResponse>(`/api/v1/provider/${encodeURIComponent(endpointId)}/reset-circuit`, {
+      method: "POST",
+    }),
+  repairStructuredOutput: (payload: StructuredRepairRequest) =>
+    request<StructuredRepairResponse>("/api/v1/provider/structured/repair", {
+      method: "POST",
+      body: JSON.stringify(payload),
     }),
 };

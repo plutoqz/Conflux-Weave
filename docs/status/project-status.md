@@ -26,6 +26,7 @@ Updated: 2026-10-06
 | v0.3 P7-C1/C2 内部阶段 Checkpoint 与统一恢复决策 | `implemented_and_validated` | plan/claim/verify/synthesize/write 内部 6 阶段 + deliver 逐阶段入账与恢复，5 种结果划分与 4 种推荐动作决策，788 passed 全量通过 |
 | v0.3 P7-B3/B4 程序性记忆与记忆评估基准体系 | `implemented_and_validated` | 5 大硬性门禁程序性经验提取、HITL 审核转正、7 维度真实评估黄金集（Recall@3=100%, MRR=0.9, 0% 无关注入与跨项目泄漏），794 passed 全量通过 |
 | v0.3 P7-A4 研究任务组织与延续研究 | `implemented_and_validated` | 标签/收藏/最近访问/项目归属/双向关联笔记、4 套内置+自定义模板参数渲染与实例化、基于局限性与未满足标准的智能续接推导引擎（798 passed 全量通过） |
+| v0.3 P7-C2 Provider Failover 与结构化容错解码 | `implemented_and_validated` | 思考标签剥离/围栏清洗/语法修复/截断闭合/Schema补全、多端点级联故障转移、三态熔断器与限流、路由台账审计（814 passed 全量通过） |
 
 The v0.2 W0-W5 plans are no longer active gates. Their implementation and
 validation evidence remains available at `docs/plans/deprecated/v0.2/`; the
@@ -784,4 +785,31 @@ P2.3 冻结基准（`p2-multimodal-retrieval-v1`，40 篇论文）当时的裁�
   - 新增 `tests/test_p7_a4_task_organization.py`（4 组套件、15 项集成场景 100% 通过）；
   - 关联套件回归通过（30 passed）；
   - 全仓自动化回归：`uv run pytest -q` → **798 passed, 1 skipped**，0 failed。
+
+## P7-C2 Provider Failover 与结构化容错解码 (2026-10-06，已合入)
+
+- **结构化输出解码与容错修补 (`src/conflux_weave/structured_output.py`)**：
+  - `strip_thinking_tags`：自动过滤 DeepSeek-R1 / Qwen-Thinking / GLM-Thinking 等推理模型的 `<think>...</think>` 与 `<reasoning>...</reasoning>` 思考标签；
+  - `strip_code_fences`：自动剥离 Markdown 代码围栏（````json ... ````），提取核心载荷；
+  - `repair_json_syntax`：语法修复引擎，自动消除尾随逗号（trailing comma）、修复 Python 布尔/None 字面量（`True/False/None` 转 `true/false/null`）、单引号转双引号；
+  - `repair_truncated_json`：截断闭合自动推断修复引擎，对因输出预算截断的字符串和未闭合括号自动补全；
+  - `validate_and_repair_schema`：结构化验证与智能补全（缺失必填字段根据 schema 默认值填充，类型智能转换与冗余键过滤）；
+  - `safe_json_loads`：四阶自适应解析流水线（Direct -> Extract -> Syntax Repair -> Truncation Repair），无缝融入 `research_agents.py` 与 `report_writer.py`，消除大模型格式漂移引发的崩溃；
+  - `StructuredOutputDecodeError`：同时继承 `json.JSONDecodeError` 与 `ValueError`，100% 保持向后兼容性。
+- **多 Provider 故障转移与熔断治理池 (`src/conflux_weave/provider_pool.py`)**：
+  - `ProviderEndpoint`：封装主备端点配置、独立优先级、权重与能力特性缓存；
+  - `CircuitBreaker`：三态熔断器（`CLOSED` 闭合、`OPEN` 熔断降级、`HALF_OPEN` 半开试探），连续硬失败（5xx/429/网络异常）自动触发熔断，冷却窗口后探测自愈；
+  - `ProviderRateLimiter`：滑动窗口请求频控（RPM）与并发限制；
+  - `ProviderPoolRouter`：级联故障转移（Cascading Failover）执行器，自动尝试各级备用端点；支持 400 思考参数不兼容自愈重试与能力缓存；
+  - `ProviderRouteDecision`：记录全链路路由台账（`selected_endpoint_id`、`selected_model`、`attempts_total`、`fallback_chain`、每跳延迟与状态码、Token 消耗及韧性决策原因）。
+- **REST API 端点与 Web 前端支持 (`src/conflux_weave/server.py` & `web/`)**：
+  - `GET /api/v1/provider/health`：获取所有注册端点的实时熔断状态、失败计数与能力缓存；
+  - `POST /api/v1/provider/{endpoint_id}/reset-circuit`：手动重置熔断状态；
+  - `POST /api/v1/provider/structured/repair`：结构化输出修复与 Schema 验证测试接口；
+  - Web 端在 `workbench.ts` 与 `api.ts` 声明对应强类型接口，`npx tsc --noEmit` 0 错误。
+- **自动化测试回归**：
+  - 新增 `tests/test_p7_c2_structured_output.py`（8 项通过）；
+  - 新增 `tests/test_p7_c2_provider_failover.py`（8 项通过，含熔断变迁、故障转移、限流、能力自愈与 REST 接口端到端）；
+  - 关联套件回归通过（76 passed）；
+  - 全仓自动化回归：`uv run pytest -q` → **814 passed, 1 skipped** (0 failed)。
 

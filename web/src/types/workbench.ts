@@ -535,5 +535,45 @@ export interface ContinueResearchResponse {
   created: boolean;
 }
 
+// --- P7-C2 Provider Resilience & Structured Output Types ---
+export interface ProviderHealthItem {
+  endpoint_id: string;
+  name: string;
+  model: string;
+  priority: number;
+  base_url: string;
+  circuit_state: 'CLOSED' | 'OPEN' | 'HALF_OPEN';
+  can_attempt: boolean;
+  failure_count: number;
+  last_error: string;
+  last_failure_time: number;
+  supports_json_object: boolean;
+  supports_thinking_toggle: boolean;
+}
+
+export interface ProviderHealthResponse {
+  endpoints: ProviderHealthItem[];
+  timestamp: number;
+}
+
+export interface ResetCircuitResponse {
+  endpoint_id: string;
+  reset: boolean;
+  circuit_state: string;
+}
+
+export interface StructuredRepairRequest {
+  raw_text: string;
+  schema?: Record<string, any>;
+  fill_defaults?: boolean;
+}
+
+export interface StructuredRepairResponse {
+  success: boolean;
+  parsed_data?: any;
+  warnings: string[];
+  error?: string | null;
+}
+
 
 
