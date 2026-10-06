@@ -88,7 +88,9 @@ class LocalArtifactStore:
             schema_version=schema_version,
         )
 
-    def read_bytes(self, artifact: ArtifactRef) -> bytes:
+    def read_bytes(self, artifact: ArtifactRef | str) -> bytes:
+        if isinstance(artifact, str):
+            return self.read_bytes_by_id(artifact)
         digest = self._parse_content_hash(artifact.content_hash)
         path = self.path_for_digest(digest)
         self._verify(path, digest)

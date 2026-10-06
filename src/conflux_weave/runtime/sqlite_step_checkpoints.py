@@ -8,14 +8,28 @@
 - 原始失败记录保留（errors 表不被清除）。
 """
 
-from __future__ import annotations
-
+from enum import StrEnum
 import sqlite3
 import uuid
 
 from conflux_weave.runtime.sqlite_contracts import RecordNotFound
 
 CHAIN_PHASES = ("plan", "retrieve", "claim", "verify", "synthesize", "write", "deliver")
+
+
+class StepRecoveryOutcome(StrEnum):
+    REQUEST_NOT_SENT = "request_not_sent"
+    REQUEST_SENT_NO_RESPONSE = "request_sent_no_response"
+    RESPONSE_RECEIVED_NOT_PERSISTED = "response_received_not_persisted"
+    RESPONSE_PERSISTED_DELIVERY_FAILED = "response_persisted_delivery_failed"
+    DELIVERY_PUBLISHED = "delivery_published"
+
+
+class RecoveryAction(StrEnum):
+    AUTOMATIC_RETRY = "automatic_retry"
+    REUSE_ARTIFACT = "reuse_artifact"
+    AWAIT_USER_DECISION = "await_user_decision"
+    TERMINATE_RUN = "terminate_run"
 
 
 class StepCheckpointMixin:
@@ -102,3 +116,115 @@ class StepCheckpointMixin:
                 (run_id, step_id, run_id),
             )
             return cursor.rowcount
+
+    def evaluate_recovery_action(
+        self,
+        run_id: str,
+        step_id: str,
+    ) -> tuple[StepRecoveryOutcome, RecoveryAction, str]:
+        """评估步骤恢复决策 (P7-C2)：
+        将当前执行/中断状态划分为 5 种结果，并依据副作用类型推荐恢复动作。
+
+        返回: (outcome, action, rationale)
+        """
+        with self._connect() as connection:
+            # 0. 检查 Run 或 Step 是否已处于终态
+            run = connection.execute(
+                "SELECT status FROM runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if run is not None and run["status"] in {"failed", "cancelled"}:
+                return (
+                    StepRecoveryOutcome.REQUEST_NOT_SENT,
+                    RecoveryAction.TERMINATE_RUN,
+                    f"Run 已处于终态 ({run['status']})，终止重试与恢复执行。",
+                )
+
+            step = connection.execute(
+                "SELECT status, attempt FROM steps WHERE step_id = ?",
+                (step_id,),
+            ).fetchone()
+            if step is not None and step["status"] == "failed":
+                return (
+                    StepRecoveryOutcome.REQUEST_NOT_SENT,
+                    RecoveryAction.TERMINATE_RUN,
+                    "步骤已处于失败终态，终止恢复流程。",
+                )
+
+            # 1. 检查是否已完成交付发布
+            delivery = connection.execute(
+                "SELECT 1 FROM deliveries WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if delivery is not None:
+                return (
+                    StepRecoveryOutcome.DELIVERY_PUBLISHED,
+                    RecoveryAction.REUSE_ARTIFACT,
+                    "交付已发布，无需重试，直接复用已发布成果。",
+                )
+
+            # 2. 检查 step_checkpoints 是否存在已完成阶段产物
+            checkpoints = connection.execute(
+                "SELECT * FROM step_checkpoints WHERE run_id = ? AND step_id = ? "
+                "ORDER BY created_at DESC",
+                (run_id, step_id),
+            ).fetchall()
+
+            has_succeeded_chk = any(
+                row["status"] == "succeeded" and row["resumable"] == 1 for row in checkpoints
+            )
+            has_terminal_chk = any(
+                row["chain_phase"] in {"write", "deliver"} and row["status"] == "succeeded"
+                for row in checkpoints
+            )
+            if has_terminal_chk or (has_succeeded_chk and any(row["chain_phase"] == "deliver" for row in checkpoints)):
+                return (
+                    StepRecoveryOutcome.RESPONSE_PERSISTED_DELIVERY_FAILED,
+                    RecoveryAction.REUSE_ARTIFACT,
+                    "计算/写作响应已持久化为 Checkpoint，优先复用产物进行交付重放，避免重复计费。",
+                )
+
+            # 3. 检查 attempts 与 attempt_effects
+            effect = connection.execute(
+                """
+                SELECT COALESCE(sp.side_effect, 'none') AS side_effect,
+                       COALESCE(ae.effect_state, 'not_started') AS effect_state,
+                       ae.response_artifact_ref
+                FROM attempts a
+                LEFT JOIN step_policies sp ON sp.step_id = a.step_id
+                LEFT JOIN attempt_effects ae ON ae.attempt_id = a.attempt_id
+                WHERE a.step_id = ? ORDER BY a.attempt_number DESC LIMIT 1
+                """,
+                (step_id,),
+            ).fetchone()
+
+            if effect is None or effect["effect_state"] == "not_started":
+                return (
+                    StepRecoveryOutcome.REQUEST_NOT_SENT,
+                    RecoveryAction.AUTOMATIC_RETRY,
+                    "请求尚未向外部 Provider 发出，无外部副作用或额外计费，可安全自动重试。",
+                )
+
+            if effect["effect_state"] == "request_started":
+                if effect["side_effect"] == "paid_external_unknown":
+                    return (
+                        StepRecoveryOutcome.REQUEST_SENT_NO_RESPONSE,
+                        RecoveryAction.AWAIT_USER_DECISION,
+                        "外部付费请求已发出但未收到确认响应，存在未知外部副作用，需等待人工决策以防止超额计费。",
+                    )
+                return (
+                    StepRecoveryOutcome.REQUEST_NOT_SENT,
+                    RecoveryAction.AUTOMATIC_RETRY,
+                    "请求为只读或可重放，可自动重试。",
+                )
+
+            if effect["effect_state"] == "response_committed":
+                return (
+                    StepRecoveryOutcome.RESPONSE_RECEIVED_NOT_PERSISTED,
+                    RecoveryAction.REUSE_ARTIFACT,
+                    "响应已接收，可复用已接收响应产物继续推进。",
+                )
+
+            return (
+                StepRecoveryOutcome.REQUEST_NOT_SENT,
+                RecoveryAction.AUTOMATIC_RETRY,
+                "默认回退：安全自动重试。",
+            )

@@ -1,9 +1,11 @@
 """Manager-planned complex research over verified subquestion executions."""
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 
 from conflux_weave.core import BudgetLedger, DeliveryDisposition
 from conflux_weave.evidence import (
@@ -118,41 +120,93 @@ class ManagedVerifiedResearchWorkflow:
         *,
         max_subquestions: int = 4,
         document_ids: tuple[str, ...] | None = None,
+        run_id: str | None = None,
+        step_id: str | None = None,
+        attempt: int = 1,
+        repository: Any = None,
     ) -> ManagedResearchExecution:
         if not objective.strip():
             raise ValueError("objective must not be empty")
         if not 2 <= max_subquestions <= 6:
             raise ValueError("max_subquestions must be between 2 and 6")
-        plan_completion = self.manager_chat.complete(
-            system_prompt=MANAGER_PLAN_SYSTEM_PROMPT,
-            user_prompt=json.dumps({"objective": objective, "max_subquestions": max_subquestions}, ensure_ascii=False),
-            max_output_tokens=800,
-            temperature=0,
-            json_object=True,
-            enable_thinking=False,
-            producer_step_id="s1-manager-plan",
+
+        manager_plan_digest = hashlib.sha256(
+            f"manager_plan:{objective.strip()}:{max_subquestions}".encode()
+        ).hexdigest()
+        plan_chk = (
+            repository.reuse_step_checkpoint(run_id, "plan", manager_plan_digest)
+            if (repository and run_id)
+            else None
         )
-        requirements, subquestions = self._parse_plan(
-            objective, plan_completion.content, max_subquestions
-        )
-        normalized = tuple(item.question for item in subquestions)
-        self._require_scope_preserved(objective, normalized)
-        plan = ResearchPlan(
-            objective.strip(),
-            normalized,
-            1,
-            1,
-            "every subquestion has at least one Verifier-accepted evidence-supported claim",
-        )
-        plan_ref = self.store.put_json(
-            {
-                **asdict(plan),
-                "coverage_requirements": [asdict(item) for item in requirements],
-                "subquestion_assignments": [asdict(item) for item in subquestions],
-            },
-            producer_step_id="s1-manager-plan",
-            schema_version="conflux-weave.research-plan.v2",
-        )
+        if plan_chk is not None:
+            plan_chk_data = json.loads(self.store.read_bytes(plan_chk["output_artifact_id"]))
+            plan_ref_id = plan_chk_data["plan_artifact_id"]
+            requirements = tuple(CoverageRequirement(**r) for r in plan_chk_data["coverage_requirements"])
+            subquestions = tuple(PlannedSubquestion(**sq) for sq in plan_chk_data["subquestions"])
+            plan = ResearchPlan(**plan_chk_data["plan"])
+            normalized = tuple(item.question for item in subquestions)
+            plan_completion_request_id = plan_chk_data.get("request_artifact_id")
+            plan_completion_response_id = plan_chk_data.get("response_artifact_id")
+        else:
+            plan_completion = self.manager_chat.complete(
+                system_prompt=MANAGER_PLAN_SYSTEM_PROMPT,
+                user_prompt=json.dumps({"objective": objective, "max_subquestions": max_subquestions}, ensure_ascii=False),
+                max_output_tokens=800,
+                temperature=0,
+                json_object=True,
+                enable_thinking=False,
+                producer_step_id="s1-manager-plan",
+            )
+            requirements, subquestions = self._parse_plan(
+                objective, plan_completion.content, max_subquestions
+            )
+            normalized = tuple(item.question for item in subquestions)
+            self._require_scope_preserved(objective, normalized)
+            plan = ResearchPlan(
+                objective.strip(),
+                normalized,
+                1,
+                1,
+                "every subquestion has at least one Verifier-accepted evidence-supported claim",
+            )
+            plan_ref = self.store.put_json(
+                {
+                    **asdict(plan),
+                    "coverage_requirements": [asdict(item) for item in requirements],
+                    "subquestion_assignments": [asdict(item) for item in subquestions],
+                },
+                producer_step_id="s1-manager-plan",
+                schema_version="conflux-weave.research-plan.v2",
+            )
+            plan_ref_id = plan_ref.artifact_id
+            plan_completion_request_id = plan_completion.request_artifact.artifact_id
+            plan_completion_response_id = plan_completion.response_artifact.artifact_id
+            plan_chk_artifact = self.store.put_json(
+                {
+                    "schema_version": "conflux-weave.manager-plan-checkpoint.v1",
+                    "plan_artifact_id": plan_ref_id,
+                    "plan": asdict(plan),
+                    "coverage_requirements": [asdict(item) for item in requirements],
+                    "subquestions": [asdict(item) for item in subquestions],
+                    "request_artifact_id": plan_completion_request_id,
+                    "response_artifact_id": plan_completion_response_id,
+                },
+                producer_step_id="s1-manager-plan",
+                schema_version="conflux-weave.manager-plan-checkpoint.v1",
+            )
+            if repository and run_id and step_id:
+                repository.record_step_checkpoint(
+                    run_id,
+                    step_id,
+                    chain_phase="plan",
+                    input_digest=manager_plan_digest,
+                    output_artifact_id=plan_chk_artifact.artifact_id,
+                    attempt=attempt,
+                    started_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                    finished_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                    resumable=True,
+                )
+
         requirement_by_id = {item.coverage_id: item for item in requirements}
         subruns = tuple(
             self.worker.execute(
@@ -160,6 +214,10 @@ class ManagedVerifiedResearchWorkflow:
                 enable_writer=False,
                 max_queries=1,
                 document_ids=document_ids,
+                run_id=run_id,
+                step_id=step_id,
+                attempt=attempt,
+                repository=repository,
             )
             for item in subquestions
         )
@@ -222,7 +280,7 @@ class ManagedVerifiedResearchWorkflow:
 
         intro_lines = [
             f"> **课题目标**：{objective}",
-            f"> **规划工件**：`{plan_ref.artifact_id}`",
+            f"> **规划工件**：`{plan_ref_id}`",
             f"> **交付评级**：`{disposition.value.upper()}` ｜ 覆盖专题 `{answered_subquestions}/{len(subruns)}` ｜ 聚合核验声明 `{len(claims)}` 项 ｜ 关联原始证据 `{len(evidence)}` 条",
             "",
             "## 一、执行摘要 (Executive Summary)",
@@ -258,9 +316,9 @@ class ManagedVerifiedResearchWorkflow:
             "document_ids": list(document_ids or ()),
             "disposition": disposition.value,
             "manager_profile": asdict(self.manager_profile),
-            "manager_plan_artifact": plan_ref.artifact_id,
-            "manager_request_artifact": plan_completion.request_artifact.artifact_id,
-            "manager_response_artifact": plan_completion.response_artifact.artifact_id,
+            "manager_plan_artifact": plan_ref_id,
+            "manager_request_artifact": plan_completion_request_id,
+            "manager_response_artifact": plan_completion_response_id,
             "coverage_requirements": [asdict(item) for item in requirements],
             "coverage_assessments": [asdict(item) for item in coverage_assessments],
             "coverage_request_artifact": (

@@ -73,6 +73,11 @@ class ResearchExecutor(Protocol):
         objective: str,
         max_subquestions: int,
         document_ids: tuple[str, ...] = (),
+        *,
+        run_id: str | None = None,
+        step_id: str | None = None,
+        attempt: int = 1,
+        repository: Any = None,
     ) -> DurableResearchExecution: ...
 
 
@@ -97,31 +102,68 @@ class VerifiedWorkflowExecutorAdapter:
         objective: str,
         max_subquestions: int,
         document_ids: tuple[str, ...] = (),
+        *,
+        run_id: str | None = None,
+        step_id: str | None = None,
+        attempt: int = 1,
+        repository: Any = None,
     ) -> DurableResearchExecution:
         if task_kind == VERIFIED_RESEARCH_TASK:
-            result = self.verified_workflow.execute(
-                objective, max_queries=4, document_ids=document_ids or None
-            )
+            try:
+                result = self.verified_workflow.execute(
+                    objective,
+                    max_queries=4,
+                    document_ids=document_ids or None,
+                    run_id=run_id,
+                    step_id=step_id,
+                    attempt=attempt,
+                    repository=repository,
+                )
+            except TypeError:
+                result = self.verified_workflow.execute(
+                    objective, max_queries=4, document_ids=document_ids or None
+                )
             evidence_refs = tuple(item.evidence_id for item in result.evidence)
             evidence_records = tuple(asdict(item) for item in result.evidence)
             retrieval_rounds = 1
         elif task_kind == DEEP_RESEARCH_TASK:
             if self.deep_workflow is None:
                 raise ValueError("deep research engine is not configured")
-            result = self.deep_workflow.execute(
-                objective, document_ids=document_ids or None
-            )
+            try:
+                result = self.deep_workflow.execute(
+                    objective,
+                    document_ids=document_ids or None,
+                    run_id=run_id,
+                    step_id=step_id,
+                    attempt=attempt,
+                    repository=repository,
+                )
+            except TypeError:
+                result = self.deep_workflow.execute(
+                    objective, document_ids=document_ids or None
+                )
             evidence_refs = tuple(item.evidence_id for item in result.evidence)
             evidence_records = tuple(asdict(item) for item in result.evidence)
             retrieval_rounds = int(result.usage.get("retrieval_rounds", 1))
         elif task_kind == MANAGED_RESEARCH_TASK:
             if self.managed_workflow is None:
                 raise ValueError("managed research workflow is not configured")
-            result = self.managed_workflow.execute(
-                objective,
-                max_subquestions=max_subquestions,
-                document_ids=document_ids or None,
-            )
+            try:
+                result = self.managed_workflow.execute(
+                    objective,
+                    max_subquestions=max_subquestions,
+                    document_ids=document_ids or None,
+                    run_id=run_id,
+                    step_id=step_id,
+                    attempt=attempt,
+                    repository=repository,
+                )
+            except TypeError:
+                result = self.managed_workflow.execute(
+                    objective,
+                    max_subquestions=max_subquestions,
+                    document_ids=document_ids or None,
+                )
             evidence_refs = tuple(
                 f"sq{sub_index}-{item.evidence_id}"
                 for sub_index, subrun in enumerate(result.subruns, 1)
@@ -560,19 +602,42 @@ class DurableResearchRuntime:
         document_ids = tuple(
             str(item) for item in (task.input.get("document_ids") or ())
         )
-        if document_ids:
-            execution = self.executor(
-                task.kind,
-                str(task.input["objective"]),
-                int(task.input["max_subquestions"]),
-                document_ids,
-            )
-        else:
-            execution = self.executor(
-                task.kind,
-                str(task.input["objective"]),
-                int(task.input["max_subquestions"]),
-            )
+        try:
+            if document_ids:
+                execution = self.executor(
+                    task.kind,
+                    str(task.input["objective"]),
+                    int(task.input["max_subquestions"]),
+                    document_ids,
+                    run_id=claim.run_id,
+                    step_id=claim.step_id,
+                    attempt=claim.attempt_number,
+                    repository=self.repository,
+                )
+            else:
+                execution = self.executor(
+                    task.kind,
+                    str(task.input["objective"]),
+                    int(task.input["max_subquestions"]),
+                    run_id=claim.run_id,
+                    step_id=claim.step_id,
+                    attempt=claim.attempt_number,
+                    repository=self.repository,
+                )
+        except TypeError:
+            if document_ids:
+                execution = self.executor(
+                    task.kind,
+                    str(task.input["objective"]),
+                    int(task.input["max_subquestions"]),
+                    document_ids,
+                )
+            else:
+                execution = self.executor(
+                    task.kind,
+                    str(task.input["objective"]),
+                    int(task.input["max_subquestions"]),
+                )
         self._validate_execution(execution)
         response = self.artifact_store.put_json(
             {

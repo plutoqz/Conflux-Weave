@@ -1,6 +1,6 @@
 # Project status
 
-Updated: 2026-09-24
+Updated: 2026-10-06
 
 | Area | Status | Evidence boundary |
 |---|---|---|
@@ -23,6 +23,7 @@ Updated: 2026-09-24
 | v0.3 Golden Loop 黄金研究循环 | `implemented_and_validated` | 多模态真实接地、会话一键转笔记谱系关联与全局专题上下文连续性（8c45e69 检查点） |
 | 多模态 RAG 严谨评测治理与三阶段消融 | `implemented_and_validated_offline` | 8d9874b 检查点：基线治理、两级同模态 RRF、坐标换算微实验、并发 Runner、MinerU/Parent-Child/BGE 重排独立消融（779 passed 全量通过） |
 | v0.3 P7-B 记忆生命周期治理与物理向量清理 | `implemented_and_validated` | Migration 13、置顶/反馈/到期召回重排、物理向量级联删除与 vacuum 孤儿清理（785 passed 全量通过） |
+| v0.3 P7-C1/C2 内部阶段 Checkpoint 与统一恢复决策 | `implemented_and_validated` | plan/claim/verify/synthesize/write 内部 6 阶段 + deliver 逐阶段入账与恢复，5 种结果划分与 4 种推荐动作决策，788 passed 全量通过 |
 
 The v0.2 W0-W5 plans are no longer active gates. Their implementation and
 validation evidence remains available at `docs/plans/deprecated/v0.2/`; the
@@ -686,4 +687,26 @@ P2.3 冻结基准（`p2-multimodal-retrieval-v1`，40 篇论文）当时的裁�
   - 用户反馈调权（`+0.25` 增益标注 `用户赞同`，`-0.35` 惩罚标注 `用户降权`）；
 - **全栈接口与前端契约**：暴露 `/pin`、`/feedback`、`/expire`、`/vacuum` REST 端点，并在 `web/src/services/api.ts` 提供强类型客户端方法，`npm run build` / `tsc` 0 错误；
 - **自动化测试套件**：新增 `tests/test_p7_b_memory_lifecycle.py`（6/6 passed），全仓回归 `uv run pytest -q` → **785 passed**（0 failed）。
+
+## P7-C1/C2 内部阶段 Checkpoint 与统一恢复决策 (2026-10-06，已合入)
+
+- **核心数据模型与契约**：
+  - 定义 `StepRecoveryOutcome` 5 种执行结果（`request_not_sent`, `request_sent_no_response`, `response_received_not_persisted`, `response_persisted_delivery_failed`, `delivery_published`）；
+  - 定义 `RecoveryAction` 4 种统一恢复动作（`automatic_retry`, `reuse_artifact`, `await_user_decision`, `terminate_run`）；
+  - `evaluate_recovery_action(run_id, step_id)` 核心决策算法：综合分析步骤终态、检查点台账、交付记录、副作用安全性及尝试次数，精准给出推荐恢复动作与决策原因，杜绝未知状态盲目重试浪费模型/付费 API 预算。
+- **内部阶段细粒度 Checkpoint 记录与复用**：
+  - `VerifiedResearchWorkflow.execute` 内部 `plan / retrieve / claim / verify / synthesize / write` 6 大阶段全面接入 `sqlite_step_checkpoints`；
+  - 自动计算阶段输入摘要（Digest），在执行前查询已有 Checkpoint，若存在且包含有效产物则直接复用并重建证据卡与报告文档，跳过外部模型与检索调用；
+  - 阶段执行成功后，原子写入 `record_step_checkpoint`，工件与执行元数据完整入账。
+- **Manager 与 Durable Runtime 端到端透传**：
+  - `ManagedVerifiedResearchWorkflow` 向子问题 Worker 显式透传 `run_id`, `step_id`, `attempt`, `repository`；
+  - `VerifiedWorkflowExecutorAdapter` 与 Durable Research 执行器打通 Checkpoint 上下文注入与安全降级；
+  - `LocalArtifactStore.read_bytes` 增强支持通过纯 `artifact_id` 字符串直接反查，完善了 Checkpoint 跨阶段恢复能力。
+- **历史文档一致性全量回写**：
+  - 回写更新 `docs/plans/current/多模态RAG全流程工程优化与技术栈选型方案.md` 第 6 节；
+  - 回写更新 `docs/plans/current/v0.3-用户全流程体验与能力闭环优化方案.md` G0~G5 全部 31 个复选框为已完成；
+  - 回写更新 `docs/plans/current/v0.3-P7-后续迭代路线与验收方案.md` 第 6 节与 `docs/plans/current/v0.3-P7-V-真实验证记录.md`。
+- **自动化测试回归**：
+  - `tests/test_step_checkpoints.py` 新增 4 组用例，9 项单测 100% 通过；
+  - 全套件自动化回归：`uv run pytest -q` → **788 passed, 1 skipped**（1 处为远程 BGE 端点临时 503 优雅跳过），0 failed。
 

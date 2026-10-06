@@ -13,6 +13,7 @@ from conflux_weave.evidence import (
     EvidenceRef, EvidenceRelation, EvidenceSupportStatus, SourceTrustLevel,
     origin_lane, render_evidence_report, render_report_document,
     require_closed_citations,
+    ReportBackground, ReportDocument, ReportParagraph, ReportSection,
 )
 from conflux_weave.harness import (
     AgentProfile, AgentResult, AgentResultStatus, AgentTask, ContextBundle,
@@ -21,7 +22,7 @@ from conflux_weave.harness import (
 from conflux_weave.hybrid_retrieval import HybridRetrievalPipeline, HybridRetrievalRun
 from conflux_weave.provider import OpenAICompatibleChatAdapter
 from conflux_weave.report_writer import (
-    WriterOutcome, build_deterministic_document, compose_report_document, distill_evidence_cards,
+    EvidenceCard, WriterOutcome, build_deterministic_document, compose_report_document, distill_evidence_cards,
 )
 from conflux_weave.runtime import LocalArtifactStore
 
@@ -161,6 +162,68 @@ def _parse_verifier_assessments(
     return tuple(assessments), assessment_ref
 
 
+def _reconstruct_report_document(d: dict) -> ReportDocument:
+    summary = ReportParagraph(
+        text=d["summary"]["text"],
+        claim_ids=tuple(d["summary"]["claim_ids"]),
+        unverified=d["summary"].get("unverified", False),
+        web_source_ids=tuple(d["summary"].get("web_source_ids", ())),
+    )
+    sections = tuple(
+        ReportSection(
+            heading=sec["heading"],
+            paragraphs=tuple(
+                ReportParagraph(
+                    text=p["text"],
+                    claim_ids=tuple(p["claim_ids"]),
+                    unverified=p.get("unverified", False),
+                    web_source_ids=tuple(p.get("web_source_ids", ())),
+                )
+                for p in sec.get("paragraphs", ())
+            ),
+        )
+        for sec in d.get("sections", ())
+    )
+    background = tuple(
+        ReportBackground(
+            heading=bg.get("heading", ""),
+            text=bg.get("text", ""),
+        )
+        for bg in d.get("background", ())
+    )
+    return ReportDocument(
+        objective=d["objective"],
+        summary=summary,
+        sections=sections,
+        open_questions=tuple(d.get("open_questions", ())),
+        background=background,
+        unreferenced_claim_ids=tuple(d.get("unreferenced_claim_ids", ())),
+        warnings=tuple(d.get("warnings", ())),
+    )
+
+
+def _reconstruct_evidence_cards(d: dict) -> tuple[EvidenceCard, ...]:
+    cards = []
+    for item in d.get("cards", ()):
+        terms = []
+        for t in item.get("terms", ()):
+            if isinstance(t, dict):
+                terms.append((t.get("en", ""), t.get("zh", "")))
+            elif isinstance(t, (list, tuple)) and len(t) == 2:
+                terms.append((str(t[0]), str(t[1])))
+        cards.append(
+            EvidenceCard(
+                evidence_id=item["evidence_id"],
+                zh_summary=item["zh_summary"],
+                zh_key_points=tuple(item["zh_key_points"]),
+                terms=tuple(terms),
+                scope_limits=item["scope_limits"],
+                claim_ids=tuple(item.get("claim_ids", ())),
+            )
+        )
+    return tuple(cards)
+
+
 class VerifiedResearchWorkflow:
     def __init__(self, store: LocalArtifactStore, retrieval: Any, chat: OpenAICompatibleChatAdapter, *, corpus_scope: str = "configured paper corpus") -> None:
         if not corpus_scope.strip():
@@ -177,65 +240,461 @@ class VerifiedResearchWorkflow:
         enable_writer: bool = True,
         max_queries: int = 1,
         document_ids: tuple[str, ...] | None = None,
+        run_id: str | None = None,
+        step_id: str | None = None,
+        attempt: int = 1,
+        repository: Any = None,
     ) -> ResearchExecution:
-        if not objective.strip(): raise ValueError("objective must not be empty")
-        if not 1 <= max_queries <= MAX_SEARCH_QUERIES: raise ValueError(f"max_queries must be between 1 and {MAX_SEARCH_QUERIES}")
-        plan = ResearchPlan(objective.strip(), (objective.strip(),), max_queries, 1, "all delivered claims accepted by Verifier")
-        plan_ref = self.store.put_json(asdict(plan), producer_step_id="s1-research-plan", schema_version="conflux-weave.research-plan.v1")
-        queries, query_refs, query_warning = self._plan_queries(objective, max_queries=max_queries)
-        runs = tuple(
-            (
-                self.retrieval.search(query, document_ids=document_ids)
-                if document_ids
-                else self.retrieval.search(query)
-            )
-            for query in queries
+        if not objective.strip():
+            raise ValueError("objective must not be empty")
+        if not 1 <= max_queries <= MAX_SEARCH_QUERIES:
+            raise ValueError(f"max_queries must be between 1 and {MAX_SEARCH_QUERIES}")
+
+        doc_key = ",".join(sorted(document_ids or ()))
+
+        # ---------------- Phase 1: plan ----------------
+        plan_input_digest = hashlib.sha256(
+            f"plan:{objective.strip()}:{max_queries}:{doc_key}".encode()
+        ).hexdigest()
+        plan_chk = (
+            repository.reuse_step_checkpoint(run_id, "plan", plan_input_digest)
+            if (repository and run_id)
+            else None
         )
-        merged_hits = self._merge_hits(runs)
-        evidence = self._evidence(merged_hits)
-        retrieval_ref = self.store.put_json(self._retrieval_payload(queries, runs, merged_hits), producer_step_id="s1-research-retrieval", schema_version="conflux-weave.retrieval-tool-result.v2")
-        claims, research_refs = self._draft(objective, evidence, repair=False)
+        if plan_chk is not None:
+            plan_chk_data = json.loads(self.store.read_bytes(plan_chk["output_artifact_id"]))
+            plan_artifact_id = plan_chk_data["plan_artifact_id"]
+            queries = tuple(plan_chk_data["queries"])
+            query_refs = list(plan_chk_data.get("query_refs", []))
+            query_warning = plan_chk_data.get("query_warning")
+        else:
+            plan = ResearchPlan(
+                objective.strip(),
+                (objective.strip(),),
+                max_queries,
+                1,
+                "all delivered claims accepted by Verifier",
+            )
+            plan_ref = self.store.put_json(
+                asdict(plan),
+                producer_step_id="s1-research-plan",
+                schema_version="conflux-weave.research-plan.v1",
+            )
+            plan_artifact_id = plan_ref.artifact_id
+            queries, query_refs, query_warning = self._plan_queries(
+                objective, max_queries=max_queries
+            )
+            plan_chk_artifact = self.store.put_json(
+                {
+                    "schema_version": "conflux-weave.research-plan-checkpoint.v1",
+                    "plan_artifact_id": plan_artifact_id,
+                    "queries": list(queries),
+                    "query_refs": list(query_refs),
+                    "query_warning": query_warning,
+                },
+                producer_step_id="s1-research-plan",
+                schema_version="conflux-weave.research-plan-checkpoint.v1",
+            )
+            if repository and run_id and step_id:
+                repository.record_step_checkpoint(
+                    run_id,
+                    step_id,
+                    chain_phase="plan",
+                    input_digest=plan_input_digest,
+                    output_artifact_id=plan_chk_artifact.artifact_id,
+                    attempt=attempt,
+                    started_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                    finished_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                    resumable=True,
+                )
+
+        # ---------------- Phase 2: retrieve ----------------
+        retrieve_input_digest = hashlib.sha256(
+            f"retrieve:{','.join(queries)}:{doc_key}".encode()
+        ).hexdigest()
+        retrieve_chk = (
+            repository.reuse_step_checkpoint(run_id, "retrieve", retrieve_input_digest)
+            if (repository and run_id)
+            else None
+        )
+        if retrieve_chk is not None:
+            retrieve_chk_data = json.loads(
+                self.store.read_bytes(retrieve_chk["output_artifact_id"])
+            )
+            retrieval_artifact_id = retrieve_chk_data["retrieval_artifact_id"]
+            evidence = tuple(
+                EvidenceRef(**item) for item in retrieve_chk_data["evidence"]
+            )
+        else:
+            runs = tuple(
+                (
+                    self.retrieval.search(query, document_ids=document_ids)
+                    if document_ids
+                    else self.retrieval.search(query)
+                )
+                for query in queries
+            )
+            merged_hits = self._merge_hits(runs)
+            evidence = self._evidence(merged_hits)
+            retrieval_ref = self.store.put_json(
+                self._retrieval_payload(queries, runs, merged_hits),
+                producer_step_id="s1-research-retrieval",
+                schema_version="conflux-weave.retrieval-tool-result.v2",
+            )
+            retrieval_artifact_id = retrieval_ref.artifact_id
+            retrieve_chk_artifact = self.store.put_json(
+                {
+                    "schema_version": "conflux-weave.research-retrieve-checkpoint.v1",
+                    "retrieval_artifact_id": retrieval_artifact_id,
+                    "evidence": [asdict(item) for item in evidence],
+                },
+                producer_step_id="s1-research-retrieval",
+                schema_version="conflux-weave.research-retrieve-checkpoint.v1",
+            )
+            if repository and run_id and step_id:
+                repository.record_step_checkpoint(
+                    run_id,
+                    step_id,
+                    chain_phase="retrieve",
+                    input_digest=retrieve_input_digest,
+                    output_artifact_id=retrieve_chk_artifact.artifact_id,
+                    attempt=attempt,
+                    started_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                    finished_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                    resumable=True,
+                )
+
+        retrieval_ref_obj = type("_Ref", (), {"artifact_id": retrieval_artifact_id})()
+
+        # ---------------- Phase 3: claim ----------------
+        evidence_key = ",".join(item.evidence_id for item in evidence)
+        claim_input_digest = hashlib.sha256(
+            f"claim:{objective.strip()}:{evidence_key}".encode()
+        ).hexdigest()
+        claim_chk = (
+            repository.reuse_step_checkpoint(run_id, "claim", claim_input_digest)
+            if (repository and run_id)
+            else None
+        )
+        if claim_chk is not None:
+            claim_chk_data = json.loads(
+                self.store.read_bytes(claim_chk["output_artifact_id"])
+            )
+            claims = tuple(Claim(**item) for item in claim_chk_data["claims"])
+            research_refs = list(claim_chk_data.get("research_refs", []))
+        else:
+            claims, research_refs = self._draft(objective, evidence, repair=False)
+            claim_chk_artifact = self.store.put_json(
+                {
+                    "schema_version": "conflux-weave.research-claim-checkpoint.v1",
+                    "claims": [asdict(item) for item in claims],
+                    "research_refs": list(research_refs),
+                },
+                producer_step_id="s1-research-draft",
+                schema_version="conflux-weave.research-claim-checkpoint.v1",
+            )
+            if repository and run_id and step_id:
+                repository.record_step_checkpoint(
+                    run_id,
+                    step_id,
+                    chain_phase="claim",
+                    input_digest=claim_input_digest,
+                    output_artifact_id=claim_chk_artifact.artifact_id,
+                    attempt=attempt,
+                    started_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                    finished_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                    resumable=True,
+                )
+
         if not claims:
             return self._no_answer(
                 objective,
-                plan_ref.artifact_id,
-                retrieval_ref,
+                plan_artifact_id,
+                retrieval_ref_obj,
                 evidence,
                 research_refs,
                 candidate_claim_count=0,
                 repair_rounds=0,
             )
-        assessments, verify_refs = self._verify(claims, evidence, round_number=0)
-        repair_rounds = 0
-        if any(item.verdict is not AssessmentVerdict.ACCEPTED for item in assessments):
-            repair_rounds = 1
-            claims, repair_refs = self._draft(objective, evidence, repair=True, prior_claims=claims, assessments=assessments)
-            assessments, second_verify_refs = self._verify(claims, evidence, round_number=1)
-            research_refs += repair_refs; verify_refs += second_verify_refs
-        accepted_ids = {item.claim_id for item in assessments if item.verdict is AssessmentVerdict.ACCEPTED and item.relation is EvidenceRelation.SUPPORTS}
+
+        # ---------------- Phase 4: verify ----------------
+        claim_key = ",".join(item.claim_id for item in claims)
+        verify_input_digest = hashlib.sha256(
+            f"verify:{claim_key}:{evidence_key}".encode()
+        ).hexdigest()
+        verify_chk = (
+            repository.reuse_step_checkpoint(run_id, "verify", verify_input_digest)
+            if (repository and run_id)
+            else None
+        )
+        if verify_chk is not None:
+            verify_chk_data = json.loads(
+                self.store.read_bytes(verify_chk["output_artifact_id"])
+            )
+            claims = tuple(Claim(**item) for item in verify_chk_data["claims"])
+            assessments = tuple(
+                ClaimAssessment(
+                    item["claim_id"],
+                    tuple(item["evidence_ids"]),
+                    EvidenceRelation(item["relation"]),
+                    AssessmentVerdict(item["verdict"]),
+                    item["rationale"],
+                    item.get("evaluator_ref") or item.get("response_artifact_id", ""),
+                )
+                for item in verify_chk_data["assessments"]
+            )
+            research_refs = list(verify_chk_data.get("research_refs", research_refs))
+            verify_refs = list(verify_chk_data.get("verify_refs", []))
+            repair_rounds = int(verify_chk_data.get("repair_rounds", 0))
+        else:
+            assessments, verify_refs = self._verify(claims, evidence, round_number=0)
+            repair_rounds = 0
+            if any(item.verdict is not AssessmentVerdict.ACCEPTED for item in assessments):
+                repair_rounds = 1
+                claims, repair_refs = self._draft(
+                    objective, evidence, repair=True, prior_claims=claims, assessments=assessments
+                )
+                assessments, second_verify_refs = self._verify(
+                    claims, evidence, round_number=1
+                )
+                research_refs += repair_refs
+                verify_refs += second_verify_refs
+
+            verify_chk_artifact = self.store.put_json(
+                {
+                    "schema_version": "conflux-weave.research-verify-checkpoint.v1",
+                    "claims": [asdict(item) for item in claims],
+                    "assessments": [
+                        {
+                            "claim_id": item.claim_id,
+                            "evidence_ids": list(item.evidence_ids),
+                            "relation": item.relation.value,
+                            "verdict": item.verdict.value,
+                            "rationale": item.rationale,
+                            "evaluator_ref": item.evaluator_ref,
+                        }
+                        for item in assessments
+                    ],
+                    "research_refs": list(research_refs),
+                    "verify_refs": list(verify_refs),
+                    "repair_rounds": repair_rounds,
+                },
+                producer_step_id="s1-research-verify",
+                schema_version="conflux-weave.research-verify-checkpoint.v1",
+            )
+            if repository and run_id and step_id:
+                repository.record_step_checkpoint(
+                    run_id,
+                    step_id,
+                    chain_phase="verify",
+                    input_digest=verify_input_digest,
+                    output_artifact_id=verify_chk_artifact.artifact_id,
+                    attempt=attempt,
+                    started_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                    finished_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                    resumable=True,
+                )
+
+        accepted_ids = {
+            item.claim_id
+            for item in assessments
+            if item.verdict is AssessmentVerdict.ACCEPTED
+            and item.relation is EvidenceRelation.SUPPORTS
+        }
         accepted_claims = tuple(claim for claim in claims if claim.claim_id in accepted_ids)
         accepted_assessments = tuple(item for item in assessments if item.claim_id in accepted_ids)
         if not accepted_claims:
             return self._no_answer(
                 objective,
-                plan_ref.artifact_id,
-                retrieval_ref,
+                plan_artifact_id,
+                retrieval_ref_obj,
                 evidence,
                 research_refs + verify_refs,
                 candidate_claim_count=len(claims),
                 repair_rounds=repair_rounds,
             )
-        allowed_evidence = {evidence_id for item in accepted_assessments for evidence_id in item.evidence_ids}
-        accepted_evidence = tuple(item for item in evidence if item.evidence_id in allowed_evidence)
-        citations = tuple(Citation(f"citation-{index:04d}", claim.claim_id, evidence_id, index) for index, (claim, evidence_id) in enumerate(((claim, evidence_id) for claim in accepted_claims for evidence_id in next(item.evidence_ids for item in accepted_assessments if item.claim_id == claim.claim_id)), 1))
+
+        allowed_evidence = {
+            evidence_id for item in accepted_assessments for evidence_id in item.evidence_ids
+        }
+        accepted_evidence = tuple(
+            item for item in evidence if item.evidence_id in allowed_evidence
+        )
+        citations = tuple(
+            Citation(f"citation-{index:04d}", claim.claim_id, evidence_id, index)
+            for index, (claim, evidence_id) in enumerate(
+                (
+                    (claim, evidence_id)
+                    for claim in accepted_claims
+                    for evidence_id in next(
+                        item.evidence_ids
+                        for item in accepted_assessments
+                        if item.claim_id == claim.claim_id
+                    )
+                ),
+                1,
+            )
+        )
         require_closed_citations(accepted_claims, accepted_evidence, citations)
-        limitations = self._limitations()
-        distill = distill_evidence_cards(self.store, self.chat, accepted_claims, accepted_evidence, citations) if enable_writer else None
-        writer: WriterOutcome | None = (
-            compose_report_document(self.store, self.chat, objective, accepted_claims, accepted_evidence, citations, cards=distill.cards if distill is not None and distill.status == "ok" else ())
-            if enable_writer
+
+        # ---------------- Phase 5: synthesize ----------------
+        accepted_claim_key = ",".join(c.claim_id for c in accepted_claims)
+        citation_key = ",".join(cit.citation_id for cit in citations)
+        synth_input_digest = hashlib.sha256(
+            f"synthesize:{accepted_claim_key}:{citation_key}".encode()
+        ).hexdigest()
+        synth_chk = (
+            repository.reuse_step_checkpoint(run_id, "synthesize", synth_input_digest)
+            if (repository and run_id)
             else None
         )
+        if synth_chk is not None:
+            synth_chk_data = json.loads(
+                self.store.read_bytes(synth_chk["output_artifact_id"])
+            )
+            distill_status = synth_chk_data.get("distill_status", "skipped")
+            cards_artifact_id = synth_chk_data.get("cards_artifact_id")
+            from conflux_weave.report_writer import DistillOutcome
+            if distill_status == "ok" and cards_artifact_id:
+                cards_data = json.loads(self.store.read_bytes(cards_artifact_id))
+                cards = _reconstruct_evidence_cards(cards_data)
+                distill = DistillOutcome(
+                    cards=cards,
+                    status="ok",
+                    reason=None,
+                    cards_artifact_id=cards_artifact_id,
+                    request_artifact_id=synth_chk_data.get("request_artifact_id"),
+                    response_artifact_id=synth_chk_data.get("response_artifact_id"),
+                )
+            else:
+                distill = DistillOutcome(
+                    cards=(),
+                    status=distill_status,
+                    reason=synth_chk_data.get("distill_reason"),
+                    cards_artifact_id=None,
+                    request_artifact_id=synth_chk_data.get("request_artifact_id"),
+                    response_artifact_id=synth_chk_data.get("response_artifact_id"),
+                ) if enable_writer else None
+        else:
+            distill = (
+                distill_evidence_cards(
+                    self.store, self.chat, accepted_claims, accepted_evidence, citations
+                )
+                if enable_writer
+                else None
+            )
+            synth_chk_artifact = self.store.put_json(
+                {
+                    "schema_version": "conflux-weave.research-synthesize-checkpoint.v1",
+                    "distill_status": distill.status if distill is not None else "skipped",
+                    "cards_artifact_id": distill.cards_artifact_id if (distill is not None and distill.status == "ok") else None,
+                    "distill_reason": distill.reason if distill is not None else None,
+                    "request_artifact_id": distill.request_artifact_id if distill is not None else None,
+                    "response_artifact_id": distill.response_artifact_id if distill is not None else None,
+                },
+                producer_step_id="s1-research-synthesize",
+                schema_version="conflux-weave.research-synthesize-checkpoint.v1",
+            )
+            if repository and run_id and step_id:
+                repository.record_step_checkpoint(
+                    run_id,
+                    step_id,
+                    chain_phase="synthesize",
+                    input_digest=synth_input_digest,
+                    output_artifact_id=synth_chk_artifact.artifact_id,
+                    attempt=attempt,
+                    started_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                    finished_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                    resumable=True,
+                )
+
+        # ---------------- Phase 6: write ----------------
+        cards_key = (
+            distill.cards_artifact_id
+            if (distill is not None and distill.status == "ok" and distill.cards_artifact_id)
+            else ""
+        )
+        write_input_digest = hashlib.sha256(
+            f"write:{objective.strip()}:{accepted_claim_key}:{cards_key}".encode()
+        ).hexdigest()
+        write_chk = (
+            repository.reuse_step_checkpoint(run_id, "write", write_input_digest)
+            if (repository and run_id)
+            else None
+        )
+        if write_chk is not None:
+            write_chk_data = json.loads(
+                self.store.read_bytes(write_chk["output_artifact_id"])
+            )
+            writer_status = write_chk_data.get("writer_status", "deterministic")
+            writer_doc_id = write_chk_data.get("document_artifact_id")
+            from conflux_weave.report_writer import WriterOutcome
+            if writer_doc_id:
+                doc_data = json.loads(self.store.read_bytes(writer_doc_id))
+                doc = _reconstruct_report_document(doc_data)
+                writer = WriterOutcome(
+                    document=doc,
+                    status=writer_status,
+                    reason=write_chk_data.get("writer_reason"),
+                    warnings=tuple(write_chk_data.get("writer_warnings", ())),
+                    document_artifact_id=writer_doc_id,
+                    audit_artifact_id=write_chk_data.get("audit_artifact_id"),
+                    writer_request_artifact_id=write_chk_data.get("writer_request_artifact_id"),
+                    writer_response_artifact_id=write_chk_data.get("writer_response_artifact_id"),
+                    audit_request_artifact_id=write_chk_data.get("audit_request_artifact_id"),
+                    audit_response_artifact_id=write_chk_data.get("audit_response_artifact_id"),
+                )
+            else:
+                writer = WriterOutcome(
+                    document=None,
+                    status=writer_status,
+                    reason=write_chk_data.get("writer_reason"),
+                    document_artifact_id=None,
+                ) if enable_writer else None
+        else:
+            writer: WriterOutcome | None = (
+                compose_report_document(
+                    self.store,
+                    self.chat,
+                    objective,
+                    accepted_claims,
+                    accepted_evidence,
+                    citations,
+                    cards=distill.cards if distill is not None and distill.status == "ok" else (),
+                )
+                if enable_writer
+                else None
+            )
+            write_chk_artifact = self.store.put_json(
+                {
+                    "schema_version": "conflux-weave.research-write-checkpoint.v1",
+                    "writer_status": writer.status if writer is not None else "deterministic",
+                    "writer_reason": writer.reason if writer is not None else None,
+                    "document_artifact_id": writer.document_artifact_id if writer is not None else None,
+                    "audit_artifact_id": writer.audit_artifact_id if writer is not None else None,
+                    "writer_request_artifact_id": writer.writer_request_artifact_id if writer is not None else None,
+                    "writer_response_artifact_id": writer.writer_response_artifact_id if writer is not None else None,
+                    "audit_request_artifact_id": writer.audit_request_artifact_id if writer is not None else None,
+                    "audit_response_artifact_id": writer.audit_response_artifact_id if writer is not None else None,
+                    "writer_warnings": list(writer.warnings) if writer is not None else [],
+                },
+                producer_step_id="s1-research-write",
+                schema_version="conflux-weave.research-write-checkpoint.v1",
+            )
+            if repository and run_id and step_id:
+                repository.record_step_checkpoint(
+                    run_id,
+                    step_id,
+                    chain_phase="write",
+                    input_digest=write_input_digest,
+                    output_artifact_id=write_chk_artifact.artifact_id,
+                    attempt=attempt,
+                    started_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                    finished_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                    resumable=True,
+                )
+
+        limitations = self._limitations()
         # 禁止降级（W2a.2）：模型报告或确定性组装，交付永远是完整 v2 报告。
         if writer is not None and writer.status == "fallback":
             limitations += ("报告正文为确定性组装的已验证 Claim 原文（模型写作未通过校验轮次），已完整覆盖全部核验结论。",)
@@ -243,11 +702,12 @@ class VerifiedResearchWorkflow:
         report = render_report_document(title=objective, document=document, claims=accepted_claims, evidence=accepted_evidence, citations=citations, evidence_trust={item.evidence_id: SourceTrustLevel.GENERAL_SOURCE for item in accepted_evidence}, limitations=limitations)
         report_ref = self.store.put_bytes(report.encode("utf-8"), media_type="text/markdown; charset=utf-8", producer_step_id="s1-research-deliver", schema_version="conflux-weave.verified-research-report.v2")
         coverage = CoverageReport(len(accepted_evidence), len(claims), len(accepted_claims), len(claims) - len(accepted_claims), repair_rounds, "verified_delivery" if accepted_claims else "no_supported_claim")
-        harness_refs = self._harness_trace(objective, plan_ref.artifact_id, retrieval_ref, report_ref, accepted_evidence, coverage)
+        harness_refs = self._harness_trace(objective, plan_artifact_id, retrieval_ref_obj, report_ref, accepted_evidence, coverage)
         writer_status = writer.status if writer is not None else "deterministic"
-        manifest = {"schema_version": "conflux-weave.verified-research-manifest.v1", "objective": objective, "corpus_scope": self.corpus_scope, "document_ids": list(document_ids or ()), "disposition": DeliveryDisposition.COMPLETE.value, "profiles": {"research": asdict(self.research_profile), "verifier": asdict(self.verifier_profile)}, "plan_artifact": plan_ref.artifact_id, "retrieval_artifact": retrieval_ref.artifact_id, "model_artifacts": query_refs + research_refs + verify_refs, "harness_artifacts": harness_refs, "report_artifact": report_ref.artifact_id, "coverage": asdict(coverage), "citation_closure": 1.0, "repair_rounds": repair_rounds, "character_count": len(report), "word_count": len(re.findall(r"[\u4e00-\u9fff]|[a-zA-Z0-9_-]+", report)), "search_queries": list(queries), "query_planning_warning": query_warning, "limitations": list(limitations), "report_contract": "v2", "writer_status": writer_status, "writer_degrade_reason": writer.reason if writer is not None else None, "writer_document_artifact": writer.document_artifact_id if writer is not None else None, "writer_audit_artifact": writer.audit_artifact_id if writer_status == "ok" else None, "writer_request_artifact": writer.writer_request_artifact_id if writer is not None else None, "writer_response_artifact": writer.writer_response_artifact_id if writer is not None else None, "writer_audit_request_artifact": writer.audit_request_artifact_id if writer is not None else None, "writer_audit_response_artifact": writer.audit_response_artifact_id if writer is not None else None, "writer_warnings": list(writer.warnings) if writer is not None else [], "unreferenced_claim_ids": list(writer.document.unreferenced_claim_ids) if writer is not None else [], "distill_status": distill.status if distill is not None else "skipped", "distill_artifact": distill.cards_artifact_id if distill is not None and distill.status == "ok" else None, "distill_request_artifact": distill.request_artifact_id if distill is not None else None, "distill_response_artifact": distill.response_artifact_id if distill is not None else None, "distill_degrade_reason": distill.reason if distill is not None and distill.status == "failed" else None}
+        manifest = {"schema_version": "conflux-weave.verified-research-manifest.v1", "objective": objective, "corpus_scope": self.corpus_scope, "document_ids": list(document_ids or ()), "disposition": DeliveryDisposition.COMPLETE.value, "profiles": {"research": asdict(self.research_profile), "verifier": asdict(self.verifier_profile)}, "plan_artifact": plan_artifact_id, "retrieval_artifact": retrieval_artifact_id, "model_artifacts": query_refs + research_refs + verify_refs, "harness_artifacts": harness_refs, "report_artifact": report_ref.artifact_id, "coverage": asdict(coverage), "citation_closure": 1.0, "repair_rounds": repair_rounds, "character_count": len(report), "word_count": len(re.findall(r"[\u4e00-\u9fff]|[a-zA-Z0-9_-]+", report)), "search_queries": list(queries), "query_planning_warning": query_warning, "limitations": list(limitations), "report_contract": "v2", "writer_status": writer_status, "writer_degrade_reason": writer.reason if writer is not None else None, "writer_document_artifact": writer.document_artifact_id if writer is not None else None, "writer_audit_artifact": writer.audit_artifact_id if writer_status == "ok" else None, "writer_request_artifact": writer.writer_request_artifact_id if writer is not None else None, "writer_response_artifact": writer.writer_response_artifact_id if writer is not None else None, "writer_audit_request_artifact": writer.audit_request_artifact_id if writer is not None else None, "writer_audit_response_artifact": writer.audit_response_artifact_id if writer is not None else None, "writer_warnings": list(writer.warnings) if writer is not None else [], "unreferenced_claim_ids": list(writer.document.unreferenced_claim_ids) if (writer is not None and writer.document is not None) else [], "distill_status": distill.status if distill is not None else "skipped", "distill_artifact": distill.cards_artifact_id if (distill is not None and distill.status == "ok") else None, "distill_request_artifact": distill.request_artifact_id if distill is not None else None, "distill_response_artifact": distill.response_artifact_id if distill is not None else None, "distill_degrade_reason": distill.reason if distill is not None and distill.status == "failed" else None}
         manifest_ref = self.store.put_json(manifest, producer_step_id="s1-research-deliver", schema_version=manifest["schema_version"])
         return ResearchExecution(report_ref.artifact_id, manifest_ref.artifact_id, accepted_claims, accepted_evidence, citations, assessments, coverage, DeliveryDisposition.COMPLETE, limitations)
+
 
     def _no_answer(self, objective, plan_ref, retrieval_ref, retrieved_evidence, model_refs, *, candidate_claim_count, repair_rounds):
         limitations = self._limitations() + (
