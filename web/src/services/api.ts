@@ -23,6 +23,11 @@ import type {
   TopicDetail,
   TopicListResponse,
   TopicLinkPayload,
+  RunOrganizationRecord,
+  ProjectRunGroupingResponse,
+  ResearchTaskTemplate,
+  ContinuationProposal,
+  ContinueResearchResponse,
 } from "@/types/workbench";
 
 const API_BASE = "";
@@ -835,5 +840,87 @@ export const api = {
     request<TopicRecord>(`/api/v1/topics/${encodeURIComponent(topicId)}/location`, {
       method: "POST",
       body: JSON.stringify(location),
+    }),
+
+  // Research Task Organization (P7-A4)
+  getRunOrganization: (runId: string) =>
+    request<RunOrganizationRecord>(`/api/v1/research/runs/${encodeURIComponent(runId)}/organization`),
+  setRunFavorite: (runId: string, isFavorite?: boolean) =>
+    request<RunOrganizationRecord>(`/api/v1/research/runs/${encodeURIComponent(runId)}/favorite`, {
+      method: "POST",
+      body: JSON.stringify(isFavorite !== undefined ? { is_favorite: isFavorite } : {}),
+    }),
+  updateRunTags: (runId: string, payload: { tags?: string[]; action?: "set" | "add" | "remove"; tag?: string }) =>
+    request<RunOrganizationRecord>(`/api/v1/research/runs/${encodeURIComponent(runId)}/tags`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  touchRun: (runId: string) =>
+    request<RunOrganizationRecord>(`/api/v1/research/runs/${encodeURIComponent(runId)}/touch`, {
+      method: "POST",
+    }),
+  assignRunProject: (runId: string, projectId: string | null) =>
+    request<RunOrganizationRecord>(`/api/v1/research/runs/${encodeURIComponent(runId)}/project`, {
+      method: "POST",
+      body: JSON.stringify({ project_id: projectId }),
+    }),
+  linkRunNote: (runId: string, payload: { note_id: string; action: "link" | "unlink" }) =>
+    request<RunOrganizationRecord>(`/api/v1/research/runs/${encodeURIComponent(runId)}/link-note`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  getRunsByProject: () =>
+    request<ProjectRunGroupingResponse>("/api/v1/research/runs/by-project"),
+  getRecentRuns: (limit: number = 20) =>
+    request<{ items: RunDetail[]; count: number }>(`/api/v1/research/runs/recent?limit=${limit}`),
+  getFavoriteRuns: () =>
+    request<{ items: RunDetail[]; count: number }>("/api/v1/research/runs/favorites"),
+
+  // Research Task Templates (P7-A4)
+  getResearchTemplates: (category?: string) => {
+    const qs = category && category !== "all" ? `?category=${encodeURIComponent(category)}` : "";
+    return request<{ items: ResearchTaskTemplate[]; count: number }>(`/api/v1/research/templates${qs}`);
+  },
+  getResearchTemplate: (templateId: string) =>
+    request<ResearchTaskTemplate>(`/api/v1/research/templates/${encodeURIComponent(templateId)}`),
+  createResearchTemplate: (payload: {
+    name: string;
+    description?: string;
+    task_family?: string;
+    category?: string;
+    default_query: string;
+    tags?: string[];
+    suggested_budgets?: Record<string, any>;
+    variables_schema?: Array<{ name: string; label: string; placeholder?: string; required?: boolean }>;
+  }) =>
+    request<ResearchTaskTemplate>("/api/v1/research/templates", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  deleteResearchTemplate: (templateId: string) =>
+    request<{ deleted: boolean; template_id: string }>(`/api/v1/research/templates/${encodeURIComponent(templateId)}`, {
+      method: "DELETE",
+    }),
+  instantiateResearchTemplate: (
+    templateId: string,
+    payload: { variables?: Record<string, string>; project_id?: string; tags?: string[]; is_favorite?: boolean },
+  ) =>
+    request<{ task_id: string; run_id: string; created: string; state: string }>(
+      `/api/v1/research/templates/${encodeURIComponent(templateId)}/instantiate`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    ),
+
+  // Continue Previous Research (P7-A4)
+  getContinuationProposal: (runId: string, focus?: string) => {
+    const qs = focus ? `?focus=${encodeURIComponent(focus)}` : "";
+    return request<ContinuationProposal>(`/api/v1/research/runs/${encodeURIComponent(runId)}/continuation-proposal${qs}`);
+  },
+  continueResearch: (runId: string, payload?: { question?: string; additional_tags?: string[] }) =>
+    request<ContinueResearchResponse>(`/api/v1/research/runs/${encodeURIComponent(runId)}/continue`, {
+      method: "POST",
+      body: JSON.stringify(payload || {}),
     }),
 };

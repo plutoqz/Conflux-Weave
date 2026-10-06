@@ -163,6 +163,21 @@ from conflux_weave.api_contracts import (
     RunDetailResponse,
     RunEventPageResponse,
     RunPageResponse,
+    RunSummaryResponse,
+    RunOrganizationResponse,
+    RunFavoriteRequest,
+    RunTagsRequest,
+    RunProjectRequest,
+    RunLinkNoteRequest,
+    ProjectRunGroupItem,
+    ProjectRunGroupingResponse,
+    ResearchTemplateItemResponse,
+    ResearchTemplateListResponse,
+    ResearchTemplateCreateRequest,
+    ResearchTemplateInstantiateRequest,
+    ContinuationProposalResponse,
+    ContinueResearchRequest,
+    ContinueResearchResponse,
     VerifiedResearchTaskRequest,
     WorkbenchConfigResponse,
     WorkbenchQueryService,
@@ -198,6 +213,14 @@ from conflux_weave.orchestrator import (
 )
 from conflux_weave.projects import GitInspector, Project, ProjectScanner, ProjectStore
 from conflux_weave.topics import Topic, TopicStore
+from conflux_weave.task_organization import (
+    ContinuationProposal,
+    ResearchTaskTemplate,
+    ResearchTaskTemplateStore,
+    RunOrganizationRecord,
+    RunOrganizationStore,
+    derive_continuation_proposal,
+)
 from conflux_weave.project_agents import CodeProposal, CodingAgent, ProjectAgent, ProjectAnswer
 from conflux_weave.document_agent import DocumentAgent
 from conflux_weave.document_notes import (
@@ -393,9 +416,6 @@ def create_app(
     provider_effective: Any | None = None,
     search_service: Any | None = None,
 ) -> FastAPI:
-    """Build the one ASGI application around injected authoritative components."""
-
-    query_service = WorkbenchQueryService(repository)
     worker_loop = worker or WorkerLoop(
         orchestrator, interval_seconds=poll_interval_seconds
     )
@@ -413,6 +433,17 @@ def create_app(
 
     app = FastAPI(title="Conflux-Weave", version="0.0.1", lifespan=lifespan)
     db_path = getattr(repository, "database_path", ":memory:")
+    _base_dir = Path(db_path).parent if db_path and db_path != ":memory:" else Path("var") / "data"
+    _reg_path = _base_dir / "projects-registry.json"
+    _ws_root = Path(config_paths["workspace_root"]) if config_paths and config_paths.get("workspace_root") else None
+    project_store = ProjectStore(_reg_path, default_workspace=_ws_root)
+    _topics_reg_path = _base_dir / "topics-registry.json"
+    topic_store = TopicStore(_topics_reg_path)
+    _org_reg_path = _base_dir / "run-organization-registry.json" if db_path and db_path != ":memory:" else None
+    run_org_store = RunOrganizationStore(_org_reg_path)
+    _template_reg_path = _base_dir / "research-templates-registry.json" if db_path and db_path != ":memory:" else None
+    task_template_store = ResearchTaskTemplateStore(_template_reg_path)
+    query_service = WorkbenchQueryService(repository, org_store=run_org_store)
     memory_store = HierarchicalMemoryStore(db_path if db_path else ":memory:")
     chat_adapter = getattr(chat_service, "_chat", None) if chat_service else None
     # P6-B1：语义记忆召回（embedder/索引不可用时内部退回确定性路径）
@@ -443,12 +474,6 @@ def create_app(
     memory_agent = MemoryAgent(memory_store, chat_adapter=chat_adapter, recall_service=memory_recall_service)
     conversation_router = ConversationRouter(chat_adapter=chat_adapter)
     skill_registry = SkillRegistry(db_path if db_path and db_path != ":memory:" else None)
-    _base_dir = Path(db_path).parent if db_path and db_path != ":memory:" else Path("var") / "data"
-    _reg_path = _base_dir / "projects-registry.json"
-    _ws_root = Path(config_paths["workspace_root"]) if config_paths and config_paths.get("workspace_root") else None
-    project_store = ProjectStore(_reg_path, default_workspace=_ws_root)
-    _topics_reg_path = _base_dir / "topics-registry.json"
-    topic_store = TopicStore(_topics_reg_path)
     skill_runner = SkillRunner(
         skill_registry,
         provider=chat_adapter,
@@ -482,6 +507,10 @@ def create_app(
     app.state.mcp_sse_manager = mcp_sse_manager
     app.state.event_bus = event_bus
     app.state.dag_scheduler = dag_scheduler
+    app.state.project_store = project_store
+    app.state.topic_store = topic_store
+    app.state.run_org_store = run_org_store
+    app.state.task_template_store = task_template_store
 
     def third_party_setting(name: str) -> str:
         value = os.environ.get(name)
@@ -1891,9 +1920,19 @@ def create_app(
         cursor: str | None = None,
         limit: int = Query(default=20, ge=1, le=100),
         lifecycle: str = Query(default="active"),
+        project_id: str | None = Query(default=None),
+        is_favorite: bool | None = Query(default=None),
+        tag: str | None = Query(default=None),
     ):
         try:
-            return query_service.list_runs(cursor=cursor, limit=limit, lifecycle=lifecycle)
+            return query_service.list_runs(
+                cursor=cursor,
+                limit=limit,
+                lifecycle=lifecycle,
+                project_id=project_id,
+                is_favorite=is_favorite,
+                tag=tag,
+            )
         except Exception as exc:
             return error_response(exc)
 
@@ -2041,6 +2080,402 @@ def create_app(
                 run_id=result.run_id,
                 created=result.created,
                 state=state,
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    # ---------------------------------------------------------------------------
+    # P7-A4 研究任务组织 (Research Task Organization)
+    # ---------------------------------------------------------------------------
+
+    @app.get("/api/v1/research/runs/{run_id}/organization", response_model=RunOrganizationResponse)
+    async def get_run_organization(run_id: str):
+        try:
+            repository.get_run(run_id)
+            org = run_org_store.get(run_id)
+            return RunOrganizationResponse(
+                run_id=org.run_id,
+                is_favorite=org.is_favorite,
+                tags=tuple(org.tags),
+                last_accessed_at=org.last_accessed_at,
+                project_id=org.project_id,
+                note_ids=tuple(org.note_ids),
+                updated_at=org.updated_at,
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/research/runs/{run_id}/favorite", response_model=RunOrganizationResponse)
+    async def set_run_favorite(run_id: str, request: RunFavoriteRequest = Body(default_factory=RunFavoriteRequest)):
+        try:
+            repository.get_run(run_id)
+            if request.is_favorite is None:
+                org = run_org_store.toggle_favorite(run_id)
+            else:
+                org = run_org_store.set_favorite(run_id, request.is_favorite)
+            return RunOrganizationResponse(
+                run_id=org.run_id,
+                is_favorite=org.is_favorite,
+                tags=tuple(org.tags),
+                last_accessed_at=org.last_accessed_at,
+                project_id=org.project_id,
+                note_ids=tuple(org.note_ids),
+                updated_at=org.updated_at,
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/research/runs/{run_id}/tags", response_model=RunOrganizationResponse)
+    async def update_run_tags(run_id: str, request: RunTagsRequest):
+        try:
+            repository.get_run(run_id)
+            if request.action == "add":
+                if not request.tag:
+                    raise ValueError("action='add' 需要提供 tag 参数。")
+                org = run_org_store.add_tag(run_id, request.tag)
+            elif request.action == "remove":
+                if not request.tag:
+                    raise ValueError("action='remove' 需要提供 tag 参数。")
+                org = run_org_store.remove_tag(run_id, request.tag)
+            else:
+                org = run_org_store.set_tags(run_id, request.tags or [])
+            return RunOrganizationResponse(
+                run_id=org.run_id,
+                is_favorite=org.is_favorite,
+                tags=tuple(org.tags),
+                last_accessed_at=org.last_accessed_at,
+                project_id=org.project_id,
+                note_ids=tuple(org.note_ids),
+                updated_at=org.updated_at,
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/research/runs/{run_id}/touch", response_model=RunOrganizationResponse)
+    async def touch_run(run_id: str):
+        try:
+            repository.get_run(run_id)
+            org = run_org_store.touch(run_id)
+            return RunOrganizationResponse(
+                run_id=org.run_id,
+                is_favorite=org.is_favorite,
+                tags=tuple(org.tags),
+                last_accessed_at=org.last_accessed_at,
+                project_id=org.project_id,
+                note_ids=tuple(org.note_ids),
+                updated_at=org.updated_at,
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/research/runs/{run_id}/project", response_model=RunOrganizationResponse)
+    async def assign_run_project(run_id: str, request: RunProjectRequest):
+        try:
+            repository.get_run(run_id)
+            if request.project_id:
+                proj = project_store.get_project(request.project_id)
+                if not proj:
+                    raise ValueError(f"Project not found: {request.project_id}")
+            org = run_org_store.set_project(run_id, request.project_id)
+            return RunOrganizationResponse(
+                run_id=org.run_id,
+                is_favorite=org.is_favorite,
+                tags=tuple(org.tags),
+                last_accessed_at=org.last_accessed_at,
+                project_id=org.project_id,
+                note_ids=tuple(org.note_ids),
+                updated_at=org.updated_at,
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/research/runs/{run_id}/link-note", response_model=RunOrganizationResponse)
+    async def link_run_note(run_id: str, request: RunLinkNoteRequest):
+        try:
+            repository.get_run(run_id)
+            if request.action == "unlink":
+                org = run_org_store.unlink_note(run_id, request.note_id)
+            else:
+                org = run_org_store.link_note(run_id, request.note_id)
+            return RunOrganizationResponse(
+                run_id=org.run_id,
+                is_favorite=org.is_favorite,
+                tags=tuple(org.tags),
+                last_accessed_at=org.last_accessed_at,
+                project_id=org.project_id,
+                note_ids=tuple(org.note_ids),
+                updated_at=org.updated_at,
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.get("/api/v1/research/runs/by-project", response_model=ProjectRunGroupingResponse)
+    async def list_runs_by_project():
+        try:
+            projects = {p.project_id: p.name for p in project_store.list_projects()}
+            runs_page = query_service.list_runs(limit=100)
+            groups_dict: dict[str | None, list[RunSummaryResponse]] = {}
+            for item in runs_page.items:
+                pid = item.project_id
+                groups_dict.setdefault(pid, []).append(item)
+
+            group_items = []
+            for pid, items in groups_dict.items():
+                pname = projects.get(pid, "未分配工程" if pid is None else pid)
+                group_items.append(
+                    ProjectRunGroupItem(
+                        project_id=pid,
+                        project_name=pname,
+                        run_count=len(items),
+                        runs=tuple(items),
+                    )
+                )
+            group_items.sort(key=lambda g: (g.project_id is None, g.project_name))
+            return ProjectRunGroupingResponse(
+                groups=tuple(group_items),
+                total_runs=len(runs_page.items),
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.get("/api/v1/research/runs/recent")
+    async def list_recent_runs(limit: int = Query(default=20, ge=1, le=100)):
+        try:
+            recent_orgs = run_org_store.list_recent(limit=limit)
+            items = []
+            for r in recent_orgs:
+                try:
+                    items.append(query_service.get_run(r.run_id))
+                except RecordNotFound:
+                    continue
+            return {"items": items, "count": len(items)}
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.get("/api/v1/research/runs/favorites")
+    async def list_favorite_runs():
+        try:
+            fav_ids = run_org_store.list_favorites()
+            items = []
+            for rid in fav_ids:
+                try:
+                    items.append(query_service.get_run(rid))
+                except RecordNotFound:
+                    continue
+            return {"items": items, "count": len(items)}
+        except Exception as exc:
+            return error_response(exc)
+
+    # ---------------------------------------------------------------------------
+    # 研究任务模板 (Research Task Templates)
+    # ---------------------------------------------------------------------------
+
+    @app.get("/api/v1/research/templates", response_model=ResearchTemplateListResponse)
+    async def list_research_templates(category: str | None = Query(default=None)):
+        try:
+            templates = task_template_store.list_templates(category=category)
+            items = [
+                ResearchTemplateItemResponse(
+                    template_id=t.template_id,
+                    name=t.name,
+                    description=t.description,
+                    task_family=t.task_family,
+                    category=t.category,
+                    default_query=t.default_query,
+                    tags=tuple(t.tags),
+                    suggested_budgets=t.suggested_budgets,
+                    variables_schema=tuple(t.variables_schema),
+                    is_builtin=t.is_builtin,
+                    created_at=t.created_at,
+                )
+                for t in templates
+            ]
+            return ResearchTemplateListResponse(items=tuple(items), count=len(items))
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.get("/api/v1/research/templates/{template_id}", response_model=ResearchTemplateItemResponse)
+    async def get_research_template(template_id: str):
+        try:
+            t = task_template_store.get_template(template_id)
+            if not t:
+                raise ValueError(f"Template not found: {template_id}")
+            return ResearchTemplateItemResponse(
+                template_id=t.template_id,
+                name=t.name,
+                description=t.description,
+                task_family=t.task_family,
+                category=t.category,
+                default_query=t.default_query,
+                tags=tuple(t.tags),
+                suggested_budgets=t.suggested_budgets,
+                variables_schema=tuple(t.variables_schema),
+                is_builtin=t.is_builtin,
+                created_at=t.created_at,
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/research/templates", response_model=ResearchTemplateItemResponse)
+    async def create_research_template(request: ResearchTemplateCreateRequest):
+        try:
+            t = task_template_store.create_custom_template(
+                name=request.name,
+                description=request.description,
+                task_family=request.task_family,
+                category=request.category,
+                default_query=request.default_query,
+                tags=request.tags,
+                suggested_budgets=request.suggested_budgets,
+                variables_schema=request.variables_schema,
+            )
+            return ResearchTemplateItemResponse(
+                template_id=t.template_id,
+                name=t.name,
+                description=t.description,
+                task_family=t.task_family,
+                category=t.category,
+                default_query=t.default_query,
+                tags=tuple(t.tags),
+                suggested_budgets=t.suggested_budgets,
+                variables_schema=tuple(t.variables_schema),
+                is_builtin=t.is_builtin,
+                created_at=t.created_at,
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.delete("/api/v1/research/templates/{template_id}")
+    async def delete_research_template(template_id: str):
+        try:
+            success = task_template_store.delete_custom_template(template_id)
+            if not success:
+                raise ValueError(f"Template not found: {template_id}")
+            return {"deleted": True, "template_id": template_id}
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/research/templates/{template_id}/instantiate", response_model=ResearchTaskAcceptedResponse)
+    async def instantiate_research_template(template_id: str, request: ResearchTemplateInstantiateRequest = Body(...)):
+        try:
+            t = task_template_store.get_template(template_id)
+            if not t:
+                raise ValueError(f"Template not found: {template_id}")
+            rendered_query = t.render_query(request.variables)
+            submission_input = {
+                "query": rendered_query,
+                "objective": rendered_query,
+                "template_id": template_id,
+            }
+            if t.task_family == "managed_verified_research":
+                submission_input["max_subquestions"] = 4
+            task_sub = TaskSubmission(
+                task_kind=t.task_family,
+                input=submission_input,
+                idempotency_key=f"tpl-inst:{template_id}:{uuid4().hex}",
+            )
+            result = orchestrator.submit(task_sub)
+            all_tags = list(t.tags)
+            for rt in request.tags:
+                if rt and rt not in all_tags:
+                    all_tags.append(rt)
+            run_org_store.set_tags(result.run_id, all_tags)
+            if request.project_id:
+                run_org_store.set_project(result.run_id, request.project_id)
+            if request.is_favorite:
+                run_org_store.set_favorite(result.run_id, True)
+            run_org_store.touch(result.run_id)
+
+            state = query_service.get_run(result.run_id).state
+            return ResearchTaskAcceptedResponse(
+                task_id=result.task_id,
+                run_id=result.run_id,
+                created=result.created,
+                state=state,
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    # ---------------------------------------------------------------------------
+    # “继续上次研究”入口 (Continue Previous Research Entrypoint)
+    # ---------------------------------------------------------------------------
+
+    @app.get("/api/v1/research/runs/{run_id}/continuation-proposal", response_model=ContinuationProposalResponse)
+    async def get_continuation_proposal(run_id: str, focus: str | None = Query(default=None)):
+        try:
+            proposal = derive_continuation_proposal(
+                run_id=run_id,
+                repository=repository,
+                org_store=run_org_store,
+                custom_focus=focus,
+            )
+            return ContinuationProposalResponse(
+                predecessor_run_id=proposal.predecessor_run_id,
+                parent_query=proposal.parent_query,
+                recommended_task_family=proposal.recommended_task_family,
+                suggested_query=proposal.suggested_query,
+                inherited_project_id=proposal.inherited_project_id,
+                inherited_tags=tuple(proposal.inherited_tags),
+                inherited_note_ids=tuple(proposal.inherited_note_ids),
+                unresolved_limitations=tuple(proposal.unresolved_limitations),
+                unmet_criteria=tuple(proposal.unmet_criteria),
+                context_summary=proposal.context_summary,
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/research/runs/{run_id}/continue", response_model=ContinueResearchResponse)
+    async def execute_continue_research(run_id: str, request: ContinueResearchRequest = Body(default_factory=ContinueResearchRequest)):
+        try:
+            proposal = derive_continuation_proposal(
+                run_id=run_id,
+                repository=repository,
+                org_store=run_org_store,
+                custom_focus=request.question,
+            )
+            parent_task = repository.get_task_for_run(run_id)
+            effective_query = proposal.suggested_query
+            objective = (
+                f"Continuation from Run {run_id}\n"
+                f"Previous objective: {proposal.parent_query}\n"
+                f"Continuation research focus: {effective_query}\n"
+                f"Context summary: {proposal.context_summary}"
+            )
+            submission_input = {
+                "objective": objective,
+                "query": effective_query,
+                "parent_run_id": run_id,
+                "continuation_predecessor_id": run_id,
+                "max_subquestions": parent_task.input.get("max_subquestions", 4),
+                "conversation_id": parent_task.input.get("conversation_id"),
+            }
+            task_sub = TaskSubmission(
+                task_kind=proposal.recommended_task_family,
+                input=submission_input,
+                idempotency_key=f"continue:{run_id}:{uuid4().hex}",
+            )
+            result = orchestrator.submit(task_sub)
+
+            final_tags = list(proposal.inherited_tags)
+            for at in request.additional_tags:
+                if at and at not in final_tags:
+                    final_tags.append(at)
+            run_org_store.set_tags(result.run_id, final_tags)
+            if proposal.inherited_project_id:
+                run_org_store.set_project(result.run_id, proposal.inherited_project_id)
+            for nid in proposal.inherited_note_ids:
+                run_org_store.link_note(result.run_id, nid)
+            run_org_store.touch(result.run_id)
+
+            state = query_service.get_run(result.run_id).state
+            return ContinueResearchResponse(
+                task_id=result.task_id,
+                run_id=result.run_id,
+                predecessor_run_id=run_id,
+                inherited_project_id=proposal.inherited_project_id,
+                tags=tuple(final_tags),
+                state=state,
+                created=result.created,
             )
         except Exception as exc:
             return error_response(exc)

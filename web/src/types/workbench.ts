@@ -37,6 +37,11 @@ export interface RunSummary {
   evidence_count?: number;
   duration_seconds?: number;
   lifecycle?: "active" | "archived" | "deleted";
+  is_favorite?: boolean;
+  tags?: string[];
+  last_accessed_at?: string;
+  project_id?: string;
+  note_ids?: string[];
 }
 
 export interface DeliveryRecord {
@@ -464,5 +469,71 @@ export interface TopicLinkPayload {
   object_id: string;
   action: "link" | "unlink";
 }
+
+// P7-A4 研究任务组织 (Research Task Organization)
+export interface RunOrganizationRecord {
+  run_id: string;
+  is_favorite: boolean;
+  tags: string[];
+  last_accessed_at?: string;
+  project_id?: string;
+  note_ids: string[];
+  updated_at: string;
+}
+
+export interface ProjectRunGroupItem {
+  project_id?: string;
+  project_name: string;
+  run_count: number;
+  runs: RunSummary[];
+}
+
+export interface ProjectRunGroupingResponse {
+  groups: ProjectRunGroupItem[];
+  total_runs: number;
+}
+
+export interface ResearchTaskTemplate {
+  template_id: string;
+  name: string;
+  description: string;
+  task_family: string;
+  category: string;
+  default_query: string;
+  tags: string[];
+  suggested_budgets: Record<string, any>;
+  variables_schema: Array<{
+    name: string;
+    label: string;
+    placeholder?: string;
+    required?: boolean;
+  }>;
+  is_builtin: boolean;
+  created_at: string;
+}
+
+export interface ContinuationProposal {
+  predecessor_run_id: string;
+  parent_query: string;
+  recommended_task_family: string;
+  suggested_query: string;
+  inherited_project_id?: string;
+  inherited_tags: string[];
+  inherited_note_ids: string[];
+  unresolved_limitations: string[];
+  unmet_criteria: string[];
+  context_summary: string;
+}
+
+export interface ContinueResearchResponse {
+  task_id: string;
+  run_id: string;
+  predecessor_run_id: string;
+  inherited_project_id?: string;
+  tags: string[];
+  state: string;
+  created: boolean;
+}
+
 
 

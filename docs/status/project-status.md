@@ -25,6 +25,7 @@ Updated: 2026-10-06
 | v0.3 P7-B 记忆生命周期治理与物理向量清理 | `implemented_and_validated` | Migration 13、置顶/反馈/到期召回重排、物理向量级联删除与 vacuum 孤儿清理（785 passed 全量通过） |
 | v0.3 P7-C1/C2 内部阶段 Checkpoint 与统一恢复决策 | `implemented_and_validated` | plan/claim/verify/synthesize/write 内部 6 阶段 + deliver 逐阶段入账与恢复，5 种结果划分与 4 种推荐动作决策，788 passed 全量通过 |
 | v0.3 P7-B3/B4 程序性记忆与记忆评估基准体系 | `implemented_and_validated` | 5 大硬性门禁程序性经验提取、HITL 审核转正、7 维度真实评估黄金集（Recall@3=100%, MRR=0.9, 0% 无关注入与跨项目泄漏），794 passed 全量通过 |
+| v0.3 P7-A4 研究任务组织与延续研究 | `implemented_and_validated` | 标签/收藏/最近访问/项目归属/双向关联笔记、4 套内置+自定义模板参数渲染与实例化、基于局限性与未满足标准的智能续接推导引擎（798 passed 全量通过） |
 
 The v0.2 W0-W5 plans are no longer active gates. Their implementation and
 validation evidence remains available at `docs/plans/deprecated/v0.2/`; the
@@ -751,4 +752,36 @@ P2.3 冻结基准（`p2-multimodal-retrieval-v1`，40 篇论文）当时的裁�
   - 新增 `tests/test_p7_b_memory_evaluation.py`（3/3 passed）；
   - 记忆全套件回归（`lifecycle + recall + center + procedural + eval`）：32 passed；
   - 全仓自动化回归：`uv run pytest -q` → **794 passed, 1 skipped**（1 处为远程 BGE 端点临时 503 优雅跳过），0 failed。
+
+## P7-A4 研究任务组织与延续研究 (2026-10-06，已合入)
+
+- **核心领域模块 (`src/conflux_weave/task_organization.py`)**：
+  - `RunOrganizationRecord` & `RunOrganizationStore`：支持研究任务的标签 CRUD（自动去重并剔除空字符）、收藏切换（`set_favorite`, `toggle_favorite`）、最近访问时间戳记录（`touch_run`）、项目归属（`set_project`）、与权威笔记双向关联（`link_note`, `unlink_note`）及项目/最近/收藏聚合分组查询；
+  - `ResearchTaskTemplate` & `ResearchTaskTemplateStore`：内置 4 套覆盖学术调研与工程决策的核心模板（深度架构调研、学术文献综述、跨模态基准复现、工程落地决策），支持占位符参数渲染（`render_query`）、自定义模板 CRUD 及实例化；
+  - `ContinuationProposal` & `derive_continuation_proposal`：智能续接分析引擎，自动从前序 Run 交付的局限性（`limitations`）、未满足标准（`unmet_criteria`）或用户指定重点推导后续探索课题，自动继承 Project 归属、关联笔记与血缘标签（附加 `continued` 标记）。
+- **REST API 端点与服务端扩展 (`src/conflux_weave/api_contracts.py` & `src/conflux_weave/server.py`)**：
+  - `RunSummaryResponse` 与 `RunDetailResponse` 原生扩充 `is_favorite`、`tags`、`last_accessed_at`、`project_id`、`note_ids`，默认值全兼容；
+  - `WorkbenchQueryService` 接入 `org_store`，`GET /api/v1/runs` 支持 `project_id`、`is_favorite`、`tag` 多维结构化过滤；
+  - 暴露 16 个全功能端点：
+    - `GET/POST /api/v1/research/runs/{run_id}/organization`（获取/保存组织元数据）
+    - `POST /api/v1/research/runs/{run_id}/favorite`（设置/切换收藏状态）
+    - `POST /api/v1/research/runs/{run_id}/tags`（管理标签）
+    - `POST /api/v1/research/runs/{run_id}/touch`（刷新最近访问时间戳）
+    - `POST /api/v1/research/runs/{run_id}/project`（设置所属项目）
+    - `POST /api/v1/research/runs/{run_id}/link-note`（双向关联笔记）
+    - `GET /api/v1/research/runs/by-project`（按项目分组列举）
+    - `GET /api/v1/research/runs/recent`（最近访问任务列表）
+    - `GET /api/v1/research/runs/favorites`（收藏任务列表）
+    - `GET /api/v1/research/templates`（列出内置与自定义模板）
+    - `GET/POST/DELETE /api/v1/research/templates/{template_id}`（模板 CRUD）
+    - `POST /api/v1/research/templates/{template_id}/instantiate`（实例化模板创建任务）
+    - `GET /api/v1/research/runs/{run_id}/continuation-proposal`（推导智能续接课题）
+    - `POST /api/v1/research/runs/{run_id}/continue`（执行智能延续研究）
+- **Web 前端契约与类型定义 (`web/src/types/workbench.ts` & `web/src/services/api.ts`)**：
+  - 完整声明 TypeScript 数据模型与 16 个 API 方法契约；
+  - 执行 `npx tsc --noEmit` → **0 错误**。
+- **自动化测试回归**：
+  - 新增 `tests/test_p7_a4_task_organization.py`（4 组套件、15 项集成场景 100% 通过）；
+  - 关联套件回归通过（30 passed）；
+  - 全仓自动化回归：`uv run pytest -q` → **798 passed, 1 skipped**，0 failed。
 

@@ -302,6 +302,12 @@ class RunSummaryResponse(_ApiModel):
     lifecycle: Literal["active", "archived", "deleted"] = "active"
     archived_at: str | None = None
     deleted_at: str | None = None
+    is_favorite: bool = False
+    tags: tuple[str, ...] = ()
+    last_accessed_at: str | None = None
+    project_id: str | None = None
+    note_ids: tuple[str, ...] = ()
+
 
 
 class DocumentAnalyzeRequest(_ApiModel):
@@ -784,6 +790,113 @@ class MemoryEvaluationResponse(_ApiModel):
     p95_latency_ms: float
     provider_calls_count: int
     case_results: tuple[MemoryEvaluationCaseResult, ...] = ()
+
+
+# --- P7-A4 Research Task Organization Models ---
+class RunOrganizationResponse(_ApiModel):
+    run_id: str
+    is_favorite: bool = False
+    tags: tuple[str, ...] = ()
+    last_accessed_at: str | None = None
+    project_id: str | None = None
+    note_ids: tuple[str, ...] = ()
+    updated_at: str
+
+
+class RunFavoriteRequest(_ApiModel):
+    is_favorite: bool | None = None
+
+
+class RunTagsRequest(_ApiModel):
+    tags: list[str] | None = None
+    action: Literal["set", "add", "remove"] = "set"
+    tag: str | None = None
+
+
+class RunProjectRequest(_ApiModel):
+    project_id: str | None = None
+
+
+class RunLinkNoteRequest(_ApiModel):
+    note_id: str = Field(min_length=1, max_length=128)
+    action: Literal["link", "unlink"] = "link"
+
+
+class ProjectRunGroupItem(_ApiModel):
+    project_id: str | None = None
+    project_name: str
+    run_count: int
+    runs: tuple[RunSummaryResponse, ...] = ()
+
+
+class ProjectRunGroupingResponse(_ApiModel):
+    groups: tuple[ProjectRunGroupItem, ...] = ()
+    total_runs: int
+
+
+class ResearchTemplateItemResponse(_ApiModel):
+    template_id: str
+    name: str
+    description: str
+    task_family: str
+    category: str
+    default_query: str
+    tags: tuple[str, ...] = ()
+    suggested_budgets: dict[str, Any] = Field(default_factory=dict)
+    variables_schema: tuple[dict[str, Any], ...] = ()
+    is_builtin: bool
+    created_at: str
+
+
+class ResearchTemplateListResponse(_ApiModel):
+    items: tuple[ResearchTemplateItemResponse, ...] = ()
+    count: int
+
+
+class ResearchTemplateCreateRequest(_ApiModel):
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=2000)
+    task_family: str = Field(default="verified_paper_research", max_length=64)
+    category: str = Field(default="custom", max_length=64)
+    default_query: str = Field(default="", max_length=4000)
+    tags: list[str] = Field(default_factory=list)
+    suggested_budgets: dict[str, Any] = Field(default_factory=dict)
+    variables_schema: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ResearchTemplateInstantiateRequest(_ApiModel):
+    variables: dict[str, str] = Field(default_factory=dict)
+    project_id: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    is_favorite: bool = False
+
+
+class ContinuationProposalResponse(_ApiModel):
+    predecessor_run_id: str
+    parent_query: str
+    recommended_task_family: str
+    suggested_query: str
+    inherited_project_id: str | None = None
+    inherited_tags: tuple[str, ...] = ()
+    inherited_note_ids: tuple[str, ...] = ()
+    unresolved_limitations: tuple[str, ...] = ()
+    unmet_criteria: tuple[str, ...] = ()
+    context_summary: str
+
+
+class ContinueResearchRequest(_ApiModel):
+    question: str | None = Field(default=None, max_length=4000)
+    additional_tags: list[str] = Field(default_factory=list)
+
+
+class ContinueResearchResponse(_ApiModel):
+    task_id: str
+    run_id: str
+    predecessor_run_id: str
+    inherited_project_id: str | None = None
+    tags: tuple[str, ...] = ()
+    state: str
+    created: bool
 
 
 class SkillBudgetResponse(_ApiModel):
@@ -1359,8 +1472,9 @@ def map_exception(exc: Exception) -> tuple[int, ApiErrorResponse]:
 class WorkbenchQueryService:
     """Compile API views from authoritative persisted state without writes."""
 
-    def __init__(self, repository: SQLiteRuntimeRepository) -> None:
+    def __init__(self, repository: SQLiteRuntimeRepository, org_store: Any = None) -> None:
         self.repository = repository
+        self.org_store = org_store
 
     def list_runs(
         self,
@@ -1368,6 +1482,9 @@ class WorkbenchQueryService:
         cursor: str | None = None,
         limit: int = 20,
         lifecycle: str = "active",
+        project_id: str | None = None,
+        is_favorite: bool | None = None,
+        tag: str | None = None,
     ) -> RunPageResponse:
         page = self.repository.list_runs(
             cursor=decode_run_cursor(cursor) if cursor is not None else None,
@@ -1377,17 +1494,34 @@ class WorkbenchQueryService:
         lifecycle_map = self.repository.get_run_lifecycle_map(
             [item.run.run_id for item in page.items]
         )
-        annotated = tuple(
-            _summary(
-                item,
-                lifecycle_map.get(
-                    item.run.run_id, ("active", None, None)
-                ),
+        annotated = []
+        for item in page.items:
+            org = self.org_store.get(item.run.run_id) if self.org_store is not None else None
+            if project_id is not None:
+                item_pid = getattr(org, "project_id", None)
+                if project_id == "__unassigned__" and item_pid is not None:
+                    continue
+                elif project_id != "__unassigned__" and item_pid != project_id:
+                    continue
+            if is_favorite is not None:
+                item_fav = getattr(org, "is_favorite", False)
+                if item_fav != is_favorite:
+                    continue
+            if tag is not None:
+                item_tags = getattr(org, "tags", ())
+                if tag not in item_tags:
+                    continue
+            annotated.append(
+                _summary(
+                    item,
+                    lifecycle_map.get(
+                        item.run.run_id, ("active", None, None)
+                    ),
+                    org=org,
+                )
             )
-            for item in page.items
-        )
         return RunPageResponse(
-            items=annotated,
+            items=tuple(annotated),
             next_cursor=(
                 encode_run_cursor(page.next_cursor) if page.next_cursor is not None else None
             ),
@@ -1429,7 +1563,8 @@ class WorkbenchQueryService:
             StepStatus.SKIPPED,
         }
         lifecycle_map = self.repository.get_run_lifecycle_map([run_id])
-        summary = _summary(overview, lifecycle_map.get(run_id, ("active", None, None)))
+        org = self.org_store.get(run_id) if self.org_store is not None else None
+        summary = _summary(overview, lifecycle_map.get(run_id, ("active", None, None)), org=org)
         running_step = next((step for step in steps if step.status is StepStatus.RUNNING), None)
         pending_step = next((step for step in steps if step.status is StepStatus.PENDING), None)
         current_step = running_step or pending_step
@@ -1627,7 +1762,9 @@ class WorkbenchQueryService:
 
 
 def _summary(
-    record: RunOverviewRecord, lifecycle: tuple[str, str | None, str | None] = ("active", None, None)
+    record: RunOverviewRecord,
+    lifecycle: tuple[str, str | None, str | None] = ("active", None, None),
+    org: Any = None,
 ) -> RunSummaryResponse:
     state = map_run_state(record.run.status)
     query = record.task_input.get("query", record.task_input.get("objective"))
@@ -1653,6 +1790,11 @@ def _summary(
         lifecycle=lifecycle[0],  # type: ignore[arg-type]
         archived_at=lifecycle[1],
         deleted_at=lifecycle[2],
+        is_favorite=getattr(org, "is_favorite", False),
+        tags=tuple(getattr(org, "tags", ())),
+        last_accessed_at=getattr(org, "last_accessed_at", None),
+        project_id=getattr(org, "project_id", None),
+        note_ids=tuple(getattr(org, "note_ids", ())),
     )
 
 
@@ -1826,6 +1968,20 @@ __all__ = [
     "ProceduralMemoryExtractResponse",
     "MemoryEvaluationCaseResult",
     "MemoryEvaluationResponse",
+    "RunOrganizationResponse",
+    "RunFavoriteRequest",
+    "RunTagsRequest",
+    "RunProjectRequest",
+    "RunLinkNoteRequest",
+    "ProjectRunGroupItem",
+    "ProjectRunGroupingResponse",
+    "ResearchTemplateItemResponse",
+    "ResearchTemplateListResponse",
+    "ResearchTemplateCreateRequest",
+    "ResearchTemplateInstantiateRequest",
+    "ContinuationProposalResponse",
+    "ContinueResearchRequest",
+    "ContinueResearchResponse",
     "RouterRequest",
     "RouterResultResponse",
     "SkillBudgetResponse",
