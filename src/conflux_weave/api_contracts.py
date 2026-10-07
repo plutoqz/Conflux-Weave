@@ -1006,6 +1006,48 @@ class SkillExecuteApiResponse(_ApiModel):
     error: str | None = None
 
 
+class SkillVersionResponse(_ApiModel):
+    skill_id: str
+    version: str
+    name: str
+    description: str
+    category: str
+    author: str
+    change_summary: str = ""
+    created_at: str = ""
+
+
+class SkillVersionListResponse(_ApiModel):
+    items: tuple[SkillVersionResponse, ...] = ()
+    total: int = 0
+
+
+class SkillRollbackRequest(_ApiModel):
+    target_version: str
+
+
+class SkillUpdateSchemaRequest(_ApiModel):
+    new_schema: dict[str, Any] = Field(default_factory=dict)
+    new_version: str | None = None
+    change_summary: str = ""
+
+
+class SkillUpdateSchemaResponse(_ApiModel):
+    skill: SkillDetailResponse
+    compatible: bool
+    breaking_changes: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+
+
+class SkillUpdateBudgetRequest(_ApiModel):
+    budget: SkillBudgetResponse
+    change_summary: str = ""
+
+
+class SkillImportMarkdownRequest(_ApiModel):
+    content: str
+
+
 class MCPToolInfoResponse(_ApiModel):
     name: str
     description: str
@@ -1044,6 +1086,24 @@ class CreateMCPServerRequest(_ApiModel):
     timeout_seconds: float = Field(default=30.0, ge=1.0, le=300.0)
 
 
+class MCPProbeResponse(_ApiModel):
+    server_id: str
+    status: Literal["healthy", "unhealthy"]
+    latency_ms: float = 0.0
+    tool_count: int = 0
+    last_probe_at: str = ""
+    error: str | None = None
+
+
+class MCPDriftResponse(_ApiModel):
+    server_id: str
+    has_drift: bool
+    added_tools: tuple[str, ...] = ()
+    removed_tools: tuple[str, ...] = ()
+    modified_tools: tuple[str, ...] = ()
+    checked_at: str = ""
+
+
 class MCPToolCallApiRequest(_ApiModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
 
@@ -1055,6 +1115,16 @@ class MCPToolCallApiResponse(_ApiModel):
     raw_text: str = ""
 
 
+class ComputeSandboxStatusResponse(_ApiModel):
+    platform: str
+    os_sandbox_mechanism: str
+    os_isolation_enforced: bool
+    network_blocked: bool
+    max_timeout_seconds: float
+    max_memory_bytes: int
+    max_output_bytes: int
+
+
 class DAGTaskNodeApiRequest(_ApiModel):
     node_id: str
     agent_type: str = "research"
@@ -1063,14 +1133,19 @@ class DAGTaskNodeApiRequest(_ApiModel):
     skill_id: str | None = None
     input_payload: dict[str, Any] = Field(default_factory=dict)
     budget: dict[str, Any] = Field(default_factory=dict)
+    condition: dict[str, Any] | str | None = None
+    requires_approval: bool = False
+    approval_status: str | None = None
+    join_policy: str = "all"
 
 
 class DAGTaskNodeApiResponse(DAGTaskNodeApiRequest):
-    status: Literal["pending", "ready", "running", "completed", "failed", "skipped", "cancelled"] = "pending"
+    status: Literal["pending", "ready", "waiting_approval", "running", "completed", "failed", "skipped", "cancelled", "paused"] = "pending"
     result: dict[str, Any] | None = None
     error: str | None = None
     started_at: str | None = None
     completed_at: str | None = None
+    approval_decision: dict[str, Any] | None = None
 
 
 class DAGPlanApiRequest(_ApiModel):
@@ -1092,15 +1167,50 @@ class DAGPlanValidationResponse(_ApiModel):
 class DAGExecutionResultApiResponse(_ApiModel):
     plan_id: str
     run_id: str
-    status: Literal["completed", "failed", "cancelled", "partial"]
+    status: Literal["completed", "failed", "cancelled", "partial", "paused", "waiting_approval"]
     completed_nodes: tuple[str, ...] = ()
     failed_nodes: tuple[str, ...] = ()
     cancelled_nodes: tuple[str, ...] = ()
     skipped_nodes: tuple[str, ...] = ()
+    waiting_approval_nodes: tuple[str, ...] = ()
     node_results: dict[str, Any] = Field(default_factory=dict)
     events_count: int = 0
     duration_seconds: float = 0.0
     error: str | None = None
+    is_paused: bool = False
+
+
+class DAGPausePlanResponse(_ApiModel):
+    plan_id: str
+    status: str
+    is_paused: bool
+
+
+class DAGResumePlanRequest(_ApiModel):
+    max_concurrency: int = 3
+
+
+class DAGAppendNodesRequest(_ApiModel):
+    nodes: tuple[DAGTaskNodeApiRequest, ...]
+
+
+class DAGAppendNodesResponse(_ApiModel):
+    plan_id: str
+    appended_node_ids: tuple[str, ...]
+
+
+class DAGNodeApproveRequest(_ApiModel):
+    decision: Literal["approved", "rejected"] = "approved"
+    approved_by: str = "user"
+    comment: str = ""
+
+
+class DAGNodeApproveResponse(_ApiModel):
+    plan_id: str
+    node_id: str
+    decision: str
+    approved: bool
+
 
 
 class AgentEventApiResponse(_ApiModel):
@@ -2038,6 +2148,22 @@ __all__ = [
     "CreateMCPServerRequest",
     "MCPToolCallApiRequest",
     "MCPToolCallApiResponse",
+    "SkillVersionResponse",
+    "SkillVersionListResponse",
+    "SkillRollbackRequest",
+    "SkillUpdateSchemaRequest",
+    "SkillUpdateSchemaResponse",
+    "SkillUpdateBudgetRequest",
+    "SkillImportMarkdownRequest",
+    "MCPProbeResponse",
+    "MCPDriftResponse",
+    "ComputeSandboxStatusResponse",
+    "DAGPausePlanResponse",
+    "DAGResumePlanRequest",
+    "DAGAppendNodesRequest",
+    "DAGAppendNodesResponse",
+    "DAGNodeApproveRequest",
+    "DAGNodeApproveResponse",
     "DAGTaskNodeApiRequest",
     "DAGTaskNodeApiResponse",
     "DAGPlanApiRequest",

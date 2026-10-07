@@ -368,6 +368,51 @@ export interface MCPServer {
   updated_at: string;
 }
 
+export interface SkillVersion {
+  skill_id: string;
+  version: string;
+  name: string;
+  description: string;
+  category: string;
+  author: string;
+  change_summary?: string;
+  created_at: string;
+}
+
+export interface SchemaCompatibilityReport {
+  compatible: boolean;
+  breaking_changes: string[];
+  warnings: string[];
+}
+
+export interface MCPProbeResult {
+  server_id: string;
+  status: "healthy" | "unhealthy";
+  latency_ms: number;
+  tool_count: number;
+  last_probe_at: string;
+  error?: string | null;
+}
+
+export interface MCPDriftResult {
+  server_id: string;
+  has_drift: boolean;
+  added_tools: string[];
+  removed_tools: string[];
+  modified_tools: string[];
+  checked_at: string;
+}
+
+export interface ComputeSandboxStatus {
+  platform: string;
+  os_sandbox_mechanism: string;
+  os_isolation_enforced: boolean;
+  network_blocked: boolean;
+  max_timeout_seconds: number;
+  max_memory_bytes: number;
+  max_output_bytes: number;
+}
+
 export interface DAGTaskNode {
   task_id: string;
   agent_role: string;
@@ -375,10 +420,14 @@ export interface DAGTaskNode {
   dependencies: string[];
   required_tools: string[];
   timeout_seconds: number;
-  status: "pending" | "running" | "completed" | "failed" | "skipped" | "cancelled";
+  status: "pending" | "ready" | "waiting_approval" | "running" | "completed" | "failed" | "skipped" | "cancelled" | "paused";
   result_summary?: string | null;
   tokens_consumed: number;
   error_message?: string | null;
+  condition?: Record<string, any> | string | null;
+  requires_approval?: boolean;
+  approval_status?: string | null;
+  join_policy?: "all" | "any" | "first_success" | string;
 }
 
 export interface DAGExecutionPlan {
@@ -388,7 +437,9 @@ export interface DAGExecutionPlan {
   execution_order: string[][];
   total_tokens_consumed: number;
   created_at: string;
-  status: "pending" | "running" | "completed" | "failed" | "cancelled";
+  status: "pending" | "running" | "completed" | "failed" | "cancelled" | "paused" | "waiting_approval";
+  is_paused?: boolean;
+  waiting_approval_nodes?: string[];
 }
 
 export interface AgentEvent {

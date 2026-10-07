@@ -42,6 +42,7 @@ from conflux_weave.compute_tools import (
     ToolClass,
     ToolDecision,
     ToolPolicy,
+    get_sandbox_status,
 )
 from conflux_weave.runtime.sqlite_tool_budget import ToolBudgetExceeded
 from conflux_weave.core import RunStatus
@@ -132,17 +133,33 @@ from conflux_weave.api_contracts import (
     SkillListResponse,
     SkillExecuteApiRequest,
     SkillExecuteApiResponse,
+    SkillVersionResponse,
+    SkillVersionListResponse,
+    SkillRollbackRequest,
+    SkillUpdateSchemaRequest,
+    SkillUpdateSchemaResponse,
+    SkillUpdateBudgetRequest,
+    SkillImportMarkdownRequest,
     MCPToolInfoResponse,
     MCPServerResponse,
     MCPServerListResponse,
     CreateMCPServerRequest,
+    MCPProbeResponse,
+    MCPDriftResponse,
     MCPToolCallApiRequest,
     MCPToolCallApiResponse,
+    ComputeSandboxStatusResponse,
     DAGTaskNodeApiRequest,
     DAGTaskNodeApiResponse,
     DAGPlanApiRequest,
     DAGPlanValidationResponse,
     DAGExecutionResultApiResponse,
+    DAGPausePlanResponse,
+    DAGResumePlanRequest,
+    DAGAppendNodesRequest,
+    DAGAppendNodesResponse,
+    DAGNodeApproveRequest,
+    DAGNodeApproveResponse,
     AgentEventApiResponse,
     AgentEventListResponse,
     TopicCreateRequest,
@@ -198,7 +215,15 @@ from conflux_weave.runtime.memory_store import (
     CandidateStatus,
 )
 from conflux_weave.memory_agent import MemoryAgent
-from conflux_weave.skills import SkillRegistry, SkillRunner, SkillExecutionRequest
+from conflux_weave.skills import (
+    SkillBudget,
+    SkillCategory,
+    SkillExecutionRequest,
+    SkillRegistry,
+    SkillRunner,
+    SkillSpec,
+    SkillStatus,
+)
 from conflux_weave.mcp import (
     MCPServerConfig,
     MCPServerCore,
@@ -1572,6 +1597,163 @@ def create_app(
         except Exception as exc:
             return error_response(exc)
 
+    @app.get("/api/v1/skills/{skill_id}/versions", response_model=SkillVersionListResponse)
+    async def list_skill_versions_endpoint(skill_id: str):
+        try:
+            versions = skill_registry.list_versions(skill_id)
+            items = tuple(
+                SkillVersionResponse(
+                    skill_id=v.skill_id,
+                    version=v.version,
+                    name=v.name,
+                    description=v.description,
+                    category=v.category,
+                    author=v.author,
+                    change_summary=v.change_summary,
+                    created_at=v.created_at,
+                )
+                for v in versions
+            )
+            return SkillVersionListResponse(items=items, total=len(items))
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/skills/{skill_id}/rollback", response_model=SkillDetailResponse)
+    async def rollback_skill_endpoint(skill_id: str, request: SkillRollbackRequest):
+        try:
+            rolled = skill_registry.rollback_skill(skill_id, request.target_version)
+            return SkillDetailResponse(
+                skill_id=rolled.skill_id,
+                version=rolled.version,
+                name=rolled.name,
+                description=rolled.description,
+                category=rolled.category.value,
+                author=rolled.author,
+                required_tools=rolled.required_tools,
+                default_budget=SkillBudgetResponse(
+                    max_tokens=rolled.default_budget.max_tokens,
+                    max_steps=rolled.default_budget.max_steps,
+                    estimated_time_seconds=rolled.default_budget.estimated_time_seconds,
+                ),
+                is_builtin=rolled.is_builtin,
+                status=rolled.status.value,
+                input_schema=rolled.input_schema,
+                prompt_template=rolled.prompt_template,
+                rules=rolled.rules,
+                created_at=rolled.created_at,
+                updated_at=rolled.updated_at,
+            )
+        except ValueError as exc:
+            return JSONResponse(status_code=404, content={"code": "version_not_found", "message": str(exc)})
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.put("/api/v1/skills/{skill_id}/schema", response_model=SkillUpdateSchemaResponse)
+    async def update_skill_schema_endpoint(skill_id: str, request: SkillUpdateSchemaRequest):
+        try:
+            updated, report = skill_registry.update_skill_schema(
+                skill_id,
+                request.new_schema,
+                new_version=request.new_version,
+                change_summary=request.change_summary,
+            )
+            detail = SkillDetailResponse(
+                skill_id=updated.skill_id,
+                version=updated.version,
+                name=updated.name,
+                description=updated.description,
+                category=updated.category.value,
+                author=updated.author,
+                required_tools=updated.required_tools,
+                default_budget=SkillBudgetResponse(
+                    max_tokens=updated.default_budget.max_tokens,
+                    max_steps=updated.default_budget.max_steps,
+                    estimated_time_seconds=updated.default_budget.estimated_time_seconds,
+                ),
+                is_builtin=updated.is_builtin,
+                status=updated.status.value,
+                input_schema=updated.input_schema,
+                prompt_template=updated.prompt_template,
+                rules=updated.rules,
+                created_at=updated.created_at,
+                updated_at=updated.updated_at,
+            )
+            return SkillUpdateSchemaResponse(
+                skill=detail,
+                compatible=report.compatible,
+                breaking_changes=report.breaking_changes,
+                warnings=report.warnings,
+            )
+        except ValueError as exc:
+            return JSONResponse(status_code=404, content={"code": "skill_not_found", "message": str(exc)})
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.put("/api/v1/skills/{skill_id}/budget", response_model=SkillDetailResponse)
+    async def update_skill_budget_endpoint(skill_id: str, request: SkillUpdateBudgetRequest):
+        try:
+            budget = SkillBudget(
+                max_tokens=request.budget.max_tokens,
+                max_steps=request.budget.max_steps,
+                estimated_time_seconds=request.budget.estimated_time_seconds,
+            )
+            updated = skill_registry.update_skill_budget(skill_id, budget, change_summary=request.change_summary)
+            return SkillDetailResponse(
+                skill_id=updated.skill_id,
+                version=updated.version,
+                name=updated.name,
+                description=updated.description,
+                category=updated.category.value,
+                author=updated.author,
+                required_tools=updated.required_tools,
+                default_budget=SkillBudgetResponse(
+                    max_tokens=updated.default_budget.max_tokens,
+                    max_steps=updated.default_budget.max_steps,
+                    estimated_time_seconds=updated.default_budget.estimated_time_seconds,
+                ),
+                is_builtin=updated.is_builtin,
+                status=updated.status.value,
+                input_schema=updated.input_schema,
+                prompt_template=updated.prompt_template,
+                rules=updated.rules,
+                created_at=updated.created_at,
+                updated_at=updated.updated_at,
+            )
+        except ValueError as exc:
+            return JSONResponse(status_code=404, content={"code": "skill_not_found", "message": str(exc)})
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/skills/import-markdown", response_model=SkillDetailResponse)
+    async def import_skill_markdown_endpoint(request: SkillImportMarkdownRequest):
+        try:
+            spec = skill_registry.import_skill_from_markdown(request.content)
+            return SkillDetailResponse(
+                skill_id=spec.skill_id,
+                version=spec.version,
+                name=spec.name,
+                description=spec.description,
+                category=spec.category.value,
+                author=spec.author,
+                required_tools=spec.required_tools,
+                default_budget=SkillBudgetResponse(
+                    max_tokens=spec.default_budget.max_tokens,
+                    max_steps=spec.default_budget.max_steps,
+                    estimated_time_seconds=spec.default_budget.estimated_time_seconds,
+                ),
+                is_builtin=spec.is_builtin,
+                status=spec.status.value,
+                input_schema=spec.input_schema,
+                prompt_template=spec.prompt_template,
+                rules=spec.rules,
+                created_at=spec.created_at,
+                updated_at=spec.updated_at,
+            )
+        except ValueError as exc:
+            return JSONResponse(status_code=400, content={"code": "invalid_skill_markdown", "message": str(exc)})
+        except Exception as exc:
+            return error_response(exc)
+
     def _server_config_to_response(s: MCPServerConfig) -> MCPServerResponse:
         return MCPServerResponse(
             server_id=s.server_id,
@@ -1678,6 +1860,38 @@ def create_app(
         except Exception as exc:
             return error_response(exc)
 
+    @app.post("/api/v1/mcp/servers/{server_id}/probe", response_model=MCPProbeResponse)
+    async def probe_mcp_server_endpoint(server_id: str):
+        try:
+            res = mcp_manager.probe_server(server_id)
+            return MCPProbeResponse(
+                server_id=res["server_id"],
+                status=res["status"],
+                latency_ms=res["latency_ms"],
+                tool_count=res["tool_count"],
+                last_probe_at=res["last_probe_at"],
+                error=res["error"],
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.get("/api/v1/mcp/servers/{server_id}/drift", response_model=MCPDriftResponse)
+    async def check_mcp_server_drift_endpoint(server_id: str):
+        try:
+            res = mcp_manager.check_schema_drift(server_id)
+            return MCPDriftResponse(
+                server_id=res["server_id"],
+                has_drift=res["has_drift"],
+                added_tools=tuple(res["added_tools"]),
+                removed_tools=tuple(res["removed_tools"]),
+                modified_tools=tuple(res["modified_tools"]),
+                checked_at=res["checked_at"],
+            )
+        except ValueError as exc:
+            return JSONResponse(status_code=404, content={"code": "mcp_server_not_found", "message": str(exc)})
+        except Exception as exc:
+            return error_response(exc)
+
     @app.get("/api/v1/mcp/sse")
     async def mcp_sse_endpoint(max_events: int = 0):
         session_id, queue = mcp_sse_manager.create_session()
@@ -1752,6 +1966,10 @@ def create_app(
                         skill_id=n.skill_id,
                         input_payload=n.input_payload,
                         budget=n.budget,
+                        condition=n.condition,
+                        requires_approval=n.requires_approval,
+                        approval_status=n.approval_status,
+                        join_policy=n.join_policy,
                     )
                     for n in request.nodes
                 ),
@@ -1790,6 +2008,10 @@ def create_app(
                         skill_id=n.skill_id,
                         input_payload=n.input_payload,
                         budget=n.budget,
+                        condition=n.condition,
+                        requires_approval=n.requires_approval,
+                        approval_status=n.approval_status,
+                        join_policy=n.join_policy,
                     )
                     for n in request.nodes
                 ),
@@ -1803,16 +2025,108 @@ def create_app(
                 failed_nodes=res.failed_nodes,
                 cancelled_nodes=res.cancelled_nodes,
                 skipped_nodes=res.skipped_nodes,
+                waiting_approval_nodes=res.waiting_approval_nodes,
                 node_results=res.node_results,
                 events_count=res.events_count,
                 duration_seconds=res.duration_seconds,
                 error=res.error,
+                is_paused=res.is_paused,
             )
         except (DAGCycleError, DAGDependencyError) as exc:
             return JSONResponse(
                 status_code=400,
                 content={"code": "invalid_dag_plan", "message": str(exc), "plan_id": request.plan_id},
             )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/dag/plans/{plan_id}/pause", response_model=DAGPausePlanResponse)
+    async def pause_dag_plan_endpoint(plan_id: str):
+        try:
+            ok = dag_scheduler.pause_plan(plan_id)
+            if not ok:
+                return JSONResponse(status_code=404, content={"code": "plan_not_found", "message": f"Plan '{plan_id}' not found or already ended"})
+            return DAGPausePlanResponse(plan_id=plan_id, status="paused", is_paused=True)
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/dag/plans/{plan_id}/resume", response_model=DAGExecutionResultApiResponse)
+    async def resume_dag_plan_endpoint(plan_id: str, request: DAGResumePlanRequest = DAGResumePlanRequest()):
+        try:
+            res = await dag_scheduler.resume_plan(plan_id, max_concurrency=request.max_concurrency)
+            return DAGExecutionResultApiResponse(
+                plan_id=res.plan_id,
+                run_id=res.run_id,
+                status=res.status,
+                completed_nodes=res.completed_nodes,
+                failed_nodes=res.failed_nodes,
+                cancelled_nodes=res.cancelled_nodes,
+                skipped_nodes=res.skipped_nodes,
+                waiting_approval_nodes=res.waiting_approval_nodes,
+                node_results=res.node_results,
+                events_count=res.events_count,
+                duration_seconds=res.duration_seconds,
+                error=res.error,
+                is_paused=res.is_paused,
+            )
+        except ValueError as exc:
+            return JSONResponse(status_code=404, content={"code": "plan_not_found", "message": str(exc)})
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/dag/plans/{plan_id}/append-nodes", response_model=DAGAppendNodesResponse)
+    async def append_dag_nodes_endpoint(plan_id: str, request: DAGAppendNodesRequest):
+        try:
+            nodes_to_append = [
+                DAGTaskNode(
+                    node_id=n.node_id,
+                    agent_type=n.agent_type,
+                    objective=n.objective,
+                    depends_on=n.depends_on,
+                    skill_id=n.skill_id,
+                    input_payload=n.input_payload,
+                    budget=n.budget,
+                    condition=n.condition,
+                    requires_approval=n.requires_approval,
+                    approval_status=n.approval_status,
+                    join_policy=n.join_policy,
+                )
+                for n in request.nodes
+            ]
+            appended = dag_scheduler.append_nodes(plan_id, nodes_to_append)
+            return DAGAppendNodesResponse(plan_id=plan_id, appended_node_ids=tuple(appended))
+        except (DAGCycleError, DAGDependencyError) as exc:
+            return JSONResponse(status_code=400, content={"code": "invalid_append", "message": str(exc)})
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/dag/plans/{plan_id}/nodes/{node_id}/approve", response_model=DAGNodeApproveResponse)
+    async def approve_dag_node_endpoint(plan_id: str, node_id: str, request: DAGNodeApproveRequest):
+        try:
+            ok = dag_scheduler.submit_approval(
+                plan_id=plan_id,
+                node_id=node_id,
+                decision=request.decision,
+                approved_by=request.approved_by,
+                comment=request.comment,
+            )
+            is_approved = request.decision.lower() in ("approved", "allow", "yes", "true")
+            return DAGNodeApproveResponse(
+                plan_id=plan_id,
+                node_id=node_id,
+                decision=request.decision,
+                approved=is_approved,
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.get("/api/v1/dag/plans/{plan_id}/status")
+    async def get_dag_plan_status_endpoint(plan_id: str):
+        try:
+            plan = dag_scheduler._plans.get(plan_id)
+            if plan is None:
+                return JSONResponse(status_code=404, content={"code": "plan_not_found", "message": f"Plan '{plan_id}' not found"})
+            return plan.to_dict()
         except Exception as exc:
             return error_response(exc)
 
@@ -2654,6 +2968,12 @@ def create_app(
                     actual_seconds=max(1, result.duration_ms // 1000),
                 )
         return result.to_dict()
+
+    @app.get("/api/v1/tools/compute/sandbox-status", response_model=ComputeSandboxStatusResponse)
+    async def get_compute_sandbox_status_endpoint():
+        status = get_sandbox_status()
+        return ComputeSandboxStatusResponse(**status)
+
     _EXPORT_FORMATS = ("markdown", "bibtex", "json", "zip")
 
     def _export_response(document, export_format: str, download_stem: str) -> Response:

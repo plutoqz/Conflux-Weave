@@ -33,6 +33,12 @@ import type {
   ResetCircuitResponse,
   StructuredRepairRequest,
   StructuredRepairResponse,
+  SkillVersion,
+  SchemaCompatibilityReport,
+  MCPProbeResult,
+  MCPDriftResult,
+  ComputeSandboxStatus,
+  SkillBudget,
 } from "@/types/workbench";
 
 const API_BASE = "";
@@ -768,9 +774,40 @@ export const api = {
       body: JSON.stringify({ question }),
     }),
 
-  // Skills Studio (P5.1)
+  // Skills Studio (P5.1 + Gate D1)
   getSkills: () => request<{ items: SkillSummary[]; count: number }>("/api/v1/skills"),
   getSkill: (skillId: string) => request<SkillDetail>(`/api/v1/skills/${encodeURIComponent(skillId)}`),
+  getSkillVersions: (skillId: string) =>
+    request<{ items: SkillVersion[]; total: number }>(`/api/v1/skills/${encodeURIComponent(skillId)}/versions`),
+  rollbackSkill: (skillId: string, targetVersion: string) =>
+    request<SkillDetail>(`/api/v1/skills/${encodeURIComponent(skillId)}/rollback`, {
+      method: "POST",
+      body: JSON.stringify({ target_version: targetVersion }),
+    }),
+  updateSkillSchema: (
+    skillId: string,
+    payload: { new_schema: Record<string, any>; new_version?: string; change_summary?: string }
+  ) =>
+    request<{ skill: SkillDetail; compatible: boolean; breaking_changes: string[]; warnings: string[] }>(
+      `/api/v1/skills/${encodeURIComponent(skillId)}/schema`,
+      {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      }
+    ),
+  updateSkillBudget: (
+    skillId: string,
+    payload: { budget: Partial<SkillBudget>; change_summary?: string }
+  ) =>
+    request<SkillDetail>(`/api/v1/skills/${encodeURIComponent(skillId)}/budget`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  importSkillMarkdown: (content: string) =>
+    request<SkillDetail>("/api/v1/skills/import-markdown", {
+      method: "POST",
+      body: JSON.stringify({ content }),
+    }),
   createSkill: (data: Record<string, any>) =>
     request<SkillDetail>("/api/v1/skills", {
       method: "POST",
@@ -782,7 +819,7 @@ export const api = {
       body: JSON.stringify({ inputs }),
     }),
 
-  // MCP Gateway (P5.2 / P5.3)
+  // MCP Gateway (P5.2 / P5.3 + Gate D1)
   getMcpServers: () => request<{ items: MCPServer[]; count: number }>("/api/v1/mcp/servers"),
   registerMcpServer: (data: Partial<MCPServer>) =>
     request<MCPServer>("/api/v1/mcp/servers", {
@@ -793,18 +830,55 @@ export const api = {
     request<any>(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}`, { method: "DELETE" }),
   syncMcpServer: (serverId: string) =>
     request<MCPServer>(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}/sync`, { method: "POST" }),
+  probeMcpServer: (serverId: string) =>
+    request<MCPProbeResult>(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}/probe`, { method: "POST" }),
+  checkMcpServerDrift: (serverId: string) =>
+    request<MCPDriftResult>(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}/drift`),
 
-  // DAG & Multi-Agent Orchestration (P5.4)
+  // Compute Sandbox Status (Gate D1)
+  getComputeSandboxStatus: () => request<ComputeSandboxStatus>("/api/v1/tools/compute/sandbox-status"),
+
+  // DAG & Multi-Agent Orchestration (P5.4 + Gate C3)
   validateDagPlan: (data: { objective: string; tasks: any[] }) =>
     request<{ valid: boolean; execution_order: string[][]; errors: string[] }>("/api/v1/dag/plans/validate", {
       method: "POST",
       body: JSON.stringify(data),
     }),
-  executeDagPlan: (data: { objective: string; tasks: any[]; run_id?: string }) =>
+  executeDagPlan: (data: { objective: string; tasks: any[]; run_id?: string; max_concurrency?: number }) =>
     request<DAGExecutionPlan>("/api/v1/dag/plans/execute", {
       method: "POST",
       body: JSON.stringify(data),
     }),
+  pauseDagPlan: (planId: string) =>
+    request<{ plan_id: string; status: string; is_paused: boolean }>(`/api/v1/dag/plans/${encodeURIComponent(planId)}/pause`, {
+      method: "POST",
+    }),
+  resumeDagPlan: (planId: string, maxConcurrency = 3) =>
+    request<DAGExecutionPlan>(`/api/v1/dag/plans/${encodeURIComponent(planId)}/resume`, {
+      method: "POST",
+      body: JSON.stringify({ max_concurrency: maxConcurrency }),
+    }),
+  appendDagNodes: (planId: string, nodes: any[]) =>
+    request<{ plan_id: string; appended_node_ids: string[] }>(`/api/v1/dag/plans/${encodeURIComponent(planId)}/append-nodes`, {
+      method: "POST",
+      body: JSON.stringify({ nodes }),
+    }),
+  approveDagNode: (
+    planId: string,
+    nodeId: string,
+    decision: "approved" | "rejected",
+    approvedBy = "user",
+    comment = ""
+  ) =>
+    request<{ plan_id: string; node_id: string; decision: string; approved: boolean }>(
+      `/api/v1/dag/plans/${encodeURIComponent(planId)}/nodes/${encodeURIComponent(nodeId)}/approve`,
+      {
+        method: "POST",
+        body: JSON.stringify({ decision, approved_by: approvedBy, comment }),
+      }
+    ),
+  getDagPlanStatus: (planId: string) =>
+    request<any>(`/api/v1/dag/plans/${encodeURIComponent(planId)}/status`),
   getAgentEvents: (runId: string) =>
     request<{ items: AgentEvent[]; count: number }>(`/api/v1/runs/${encodeURIComponent(runId)}/agent-events`),
 
