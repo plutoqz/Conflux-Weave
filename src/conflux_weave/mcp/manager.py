@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 import json
 from pathlib import Path
 import sqlite3
+import time
 from typing import Any
 
 from conflux_weave.harness.contracts import ToolSpec
@@ -206,6 +207,78 @@ class MCPServerManager:
 
         client = MCPClient(server)
         return client.call_tool(tool_name, arguments)
+
+    def probe_server(self, server_id: str) -> dict[str, Any]:
+        """Probe external MCP server connectivity, ping latency, and tool readiness (Gate D1)."""
+        server = self.get_server(server_id)
+        now = _utc_now()
+        if server is None:
+            return {
+                "server_id": server_id,
+                "status": "unhealthy",
+                "latency_ms": 0.0,
+                "tool_count": 0,
+                "last_probe_at": now,
+                "error": f"MCP server '{server_id}' not found",
+            }
+
+        start_time = time.monotonic()
+        try:
+            client = MCPClient(server)
+            tools = client.list_tools()
+            latency = (time.monotonic() - start_time) * 1000
+            return {
+                "server_id": server_id,
+                "status": "healthy",
+                "latency_ms": round(latency, 2),
+                "tool_count": len(tools),
+                "last_probe_at": now,
+                "error": None,
+            }
+        except Exception as exc:
+            latency = (time.monotonic() - start_time) * 1000
+            return {
+                "server_id": server_id,
+                "status": "unhealthy",
+                "latency_ms": round(latency, 2),
+                "tool_count": 0,
+                "last_probe_at": now,
+                "error": str(exc),
+            }
+
+    def check_schema_drift(self, server_id: str) -> dict[str, Any]:
+        """Detect schema drift and tool definition modifications against cached specifications (Gate D1)."""
+        server = self.get_server(server_id)
+        now = _utc_now()
+        if server is None:
+            raise ValueError(f"MCP server '{server_id}' not found")
+
+        cached_map = {t.name: t.input_schema for t in server.tools_cache}
+        client = MCPClient(server)
+        live_tools = client.list_tools()
+        live_map = {t.name: t.input_schema for t in live_tools}
+
+        cached_names = set(cached_map.keys())
+        live_names = set(live_map.keys())
+
+        added_tools = sorted(live_names - cached_names)
+        removed_tools = sorted(cached_names - live_names)
+        modified_tools = []
+
+        for name in cached_names & live_names:
+            if cached_map[name] != live_map[name]:
+                modified_tools.append(name)
+        modified_tools.sort()
+
+        has_drift = bool(added_tools or removed_tools or modified_tools)
+        return {
+            "server_id": server_id,
+            "has_drift": has_drift,
+            "added_tools": added_tools,
+            "removed_tools": removed_tools,
+            "modified_tools": modified_tools,
+            "checked_at": now,
+        }
 
     def get_all_harness_tools(self) -> list[ToolSpec]:
         """Convert all cached tools from all enabled MCP servers into Harness ToolSpecs."""

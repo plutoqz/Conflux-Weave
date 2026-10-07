@@ -87,3 +87,36 @@ class SkillExecutionResult:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
+class SkillVersionRecord:
+    skill_id: str
+    version: str
+    name: str
+    description: str
+    category: str
+    author: str
+    input_schema: dict[str, Any]
+    required_tools: tuple[str, ...]
+    prompt_template: str
+    rules: tuple[str, ...]
+    default_budget: SkillBudget
+    change_summary: str = ""
+    created_at: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["default_budget"] = self.default_budget.to_dict()
+        return data
+
+
+@dataclass(frozen=True, slots=True)
+class SchemaCompatibilityReport:
+    compatible: bool
+    breaking_changes: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+

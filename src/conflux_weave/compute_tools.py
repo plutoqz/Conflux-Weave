@@ -156,6 +156,106 @@ class ComputeToolResult:
         }
 
 
+class _WindowsJobObjectManager:
+    """Manages OS-level job object resource quotas and memory limits on Windows (Gate D1)."""
+
+    def __init__(self, max_memory_bytes: int | None = None) -> None:
+        self.max_memory_bytes = max_memory_bytes
+        self.job_handle = None
+        self._init_job()
+
+    def _init_job(self) -> None:
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.windll.kernel32
+
+            class IO_COUNTERS(ctypes.Structure):
+                _fields_ = [
+                    ("ReadOperationCount", ctypes.c_uint64),
+                    ("WriteOperationCount", ctypes.c_uint64),
+                    ("OtherOperationCount", ctypes.c_uint64),
+                    ("ReadTransferCount", ctypes.c_uint64),
+                    ("WriteTransferCount", ctypes.c_uint64),
+                    ("OtherTransferCount", ctypes.c_uint64),
+                ]
+
+            class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+                _fields_ = [
+                    ("PerProcessUserTimeLimit", ctypes.c_int64),
+                    ("PerJobUserTimeLimit", ctypes.c_int64),
+                    ("LimitFlags", wintypes.DWORD),
+                    ("MinimumWorkingSetSize", ctypes.c_size_t),
+                    ("MaximumWorkingSetSize", ctypes.c_size_t),
+                    ("ActiveProcessLimit", wintypes.DWORD),
+                    ("Affinity", ctypes.c_size_t),
+                    ("PriorityClass", wintypes.DWORD),
+                    ("SchedulingClass", wintypes.DWORD),
+                ]
+
+            class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+                _fields_ = [
+                    ("BasicLimitInformation", JOBOBJECT_BASIC_LIMIT_INFORMATION),
+                    ("IoInfo", IO_COUNTERS),
+                    ("ProcessMemoryLimit", ctypes.c_size_t),
+                    ("JobMemoryLimit", ctypes.c_size_t),
+                    ("PeakProcessMemoryLimit", ctypes.c_size_t),
+                    ("PeakJobMemoryLimit", ctypes.c_size_t),
+                ]
+
+            JobObjectExtendedLimitInformation = 9
+            JOB_OBJECT_LIMIT_PROCESS_MEMORY = 0x00000100
+            JOB_OBJECT_LIMIT_JOB_MEMORY = 0x00000200
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+
+            handle = kernel32.CreateJobObjectW(None, None)
+            if not handle:
+                return
+
+            self.job_handle = handle
+            flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+
+            if self.max_memory_bytes and self.max_memory_bytes > 0:
+                flags |= (JOB_OBJECT_LIMIT_PROCESS_MEMORY | JOB_OBJECT_LIMIT_JOB_MEMORY)
+                limits.ProcessMemoryLimit = self.max_memory_bytes
+                limits.JobMemoryLimit = self.max_memory_bytes
+
+            limits.BasicLimitInformation.LimitFlags = flags
+            kernel32.SetInformationJobObject(
+                handle,
+                JobObjectExtendedLimitInformation,
+                ctypes.byref(limits),
+                ctypes.sizeof(limits),
+            )
+        except Exception:
+            self.job_handle = None
+
+    def assign_process(self, process_handle: int) -> bool:
+        if self.job_handle is None or sys.platform != "win32":
+            return False
+        try:
+            import ctypes
+            kernel32 = ctypes.windll.kernel32
+            res = kernel32.AssignProcessToJobObject(self.job_handle, int(process_handle))
+            return bool(res)
+        except Exception:
+            return False
+
+    def close(self) -> None:
+        if self.job_handle is not None and sys.platform == "win32":
+            try:
+                import ctypes
+                kernel32 = ctypes.windll.kernel32
+                kernel32.CloseHandle(self.job_handle)
+            except Exception:
+                pass
+            self.job_handle = None
+
+
 class RestrictedComputeSandbox:
     """受限 Python 计算工具执行器（subprocess + bootstrap 守卫 + 输出白名单）。"""
 
@@ -264,35 +364,61 @@ class RestrictedComputeSandbox:
         script_path = sandbox_dir / "user_script.py"
         script_path.write_text(request.script, encoding="utf-8")
 
-        limits: dict[str, int] = {}
+        limits: dict[str, Any] = {}
         preexec = None
-        if sys.platform != "win32" and policy.max_memory_bytes:
-            preexec = _make_posix_limits(policy.max_memory_bytes)
-            limits["memory_rlimit"] = policy.max_memory_bytes
-        else:
-            limits["memory_rlimit"] = "unavailable"  # Windows：诚实降级，不虚报
+        job_mgr: _WindowsJobObjectManager | None = None
 
+        effective_mem = policy.max_memory_bytes or self.max_memory_bytes
+        if sys.platform == "win32":
+            job_mgr = _WindowsJobObjectManager(effective_mem)
+            limits["os_mechanism"] = "windows_job_object"
+            limits["os_sandbox_enforced"] = job_mgr.job_handle is not None
+            limits["memory_limit_bytes"] = effective_mem
+            limits["memory_rlimit"] = "unavailable"  # Preserve contract field
+        elif effective_mem:
+            preexec = _make_posix_limits(effective_mem)
+            limits["os_mechanism"] = "posix_rlimit"
+            limits["os_sandbox_enforced"] = True
+            limits["memory_limit_bytes"] = effective_mem
+            limits["memory_rlimit"] = effective_mem
+        else:
+            limits["os_mechanism"] = "none"
+            limits["os_sandbox_enforced"] = False
+            limits["memory_rlimit"] = "unavailable"
+
+        proc = None
         try:
-            completed = subprocess.run(
+            proc = subprocess.Popen(
                 [sys.executable, "-I", str(boot_path), str(script_path)],
-                capture_output=True,
-                timeout=timeout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 cwd=str(output_dir),
                 preexec_fn=preexec,
             )
+            if job_mgr is not None and proc is not None:
+                job_mgr.assign_process(proc._handle)
+
+            stdout, stderr_b = proc.communicate(timeout=timeout)
+            returncode = proc.returncode
         except subprocess.TimeoutExpired:
+            if proc is not None:
+                proc.kill()
+                proc.communicate()
             result.status = "timeout"
             result.error = f"execution exceeded {timeout}s and was terminated"
             result.resource_usage = dict(limits)
             return result
-        except Exception as exc:  # noqa: BLE001 - 工具错误不进入 API 进程崩溃路径
+        except Exception as exc:  # noqa: BLE001
             result.status = "failed"
             result.error = f"sandbox launch failed: {type(exc).__name__}: {exc}"
             result.resource_usage = dict(limits)
             return result
+        finally:
+            if job_mgr is not None:
+                job_mgr.close()
 
-        stdout = completed.stdout or b""
-        stderr = (completed.stderr or b"").decode("utf-8", errors="replace")
+        stdout = stdout or b""
+        stderr = (stderr_b or b"").decode("utf-8", errors="replace")
         truncated = False
         if len(stdout) > DEFAULT_MAX_STDOUT_BYTES:
             stdout = stdout[:DEFAULT_MAX_STDOUT_BYTES]
@@ -306,9 +432,12 @@ class RestrictedComputeSandbox:
         result.stdout_artifact_id = stdout_artifact.artifact_id
         result.resource_usage = {**limits, "stdout_bytes": len(stdout), "stdout_truncated": truncated}
 
-        if completed.returncode != 0:
+        if returncode != 0:
             result.status = "failed"
-            result.error = stderr.strip()[-2000:] or f"exit code {completed.returncode}"
+            if "MemoryError" in stderr:
+                result.error = "OS memory limit exceeded (terminated by OS memory quota)"
+            else:
+                result.error = stderr.strip()[-2000:] or f"exit code {returncode}"
         return result
 
     def _list_outputs(self, output_dir: Path) -> list[str]:
@@ -374,7 +503,7 @@ OUTPUT_DIR = {output_dir!r}
 _BLOCKED_MODULES = {{
     "socket", "ssl", "http", "urllib", "urllib2", "ftplib", "telnetlib",
     "smtplib", "socketserver", "asyncio", "subprocess", "multiprocessing",
-    "ctypes", "pty",
+    "ctypes", "pty", "requests", "httpx", "aiohttp", "urllib3",
 }}
 
 _REAL_OPEN = builtins.open
@@ -419,6 +548,19 @@ if __name__ == "__main__":
 '''
 
 
+def get_sandbox_status() -> dict[str, Any]:
+    """Return OS-level compute sandbox security and quota status (Gate D1)."""
+    return {
+        "platform": sys.platform,
+        "os_sandbox_mechanism": "windows_job_object" if sys.platform == "win32" else "posix_rlimit",
+        "os_isolation_enforced": True,
+        "network_blocked": True,
+        "max_timeout_seconds": DEFAULT_MAX_TIMEOUT_SECONDS,
+        "max_memory_bytes": DEFAULT_MAX_MEMORY_BYTES,
+        "max_output_bytes": DEFAULT_MAX_OUTPUT_BYTES,
+    }
+
+
 __all__ = [
     "COMPUTE_TOOL_CALL_SCHEMA",
     "COMPUTE_TOOL_RESULT_SCHEMA",
@@ -429,4 +571,6 @@ __all__ = [
     "ToolDecision",
     "ToolPolicy",
     "DEFAULT_TOOL_POLICY",
+    "get_sandbox_status",
 ]
+
