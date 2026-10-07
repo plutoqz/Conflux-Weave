@@ -15,11 +15,13 @@ def _utc_now() -> str:
 class DAGTaskStatus(StrEnum):
     PENDING = "pending"
     READY = "ready"
+    WAITING_APPROVAL = "waiting_approval"
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
     SKIPPED = "skipped"
     CANCELLED = "cancelled"
+    PAUSED = "paused"
 
 
 class DAGCycleError(ValueError):
@@ -44,6 +46,11 @@ class DAGTaskNode:
     error: str | None = None
     started_at: str | None = None
     completed_at: str | None = None
+    condition: dict[str, Any] | str | None = None
+    requires_approval: bool = False
+    approval_status: str | None = None
+    approval_decision: dict[str, Any] | None = None
+    join_policy: str = "all"  # "all" | "any" | "first_success"
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -65,6 +72,11 @@ class DAGTaskNode:
             error=data.get("error"),
             started_at=data.get("started_at"),
             completed_at=data.get("completed_at"),
+            condition=data.get("condition"),
+            requires_approval=bool(data.get("requires_approval", False)),
+            approval_status=data.get("approval_status"),
+            approval_decision=dict(data["approval_decision"]) if data.get("approval_decision") else None,
+            join_policy=str(data.get("join_policy", "all")),
         )
 
 
@@ -75,6 +87,9 @@ class DAGPlan:
     objective: str
     nodes: tuple[DAGTaskNode, ...] = ()
     created_at: str = ""
+    status: str = "pending"
+    is_paused: bool = False
+    version: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -83,6 +98,9 @@ class DAGPlan:
             "objective": self.objective,
             "nodes": [n.to_dict() for n in self.nodes],
             "created_at": self.created_at,
+            "status": self.status,
+            "is_paused": self.is_paused,
+            "version": self.version,
         }
 
     @classmethod
@@ -93,6 +111,9 @@ class DAGPlan:
             objective=str(data.get("objective", "")),
             nodes=tuple(DAGTaskNode.from_dict(n) for n in data.get("nodes", ())),
             created_at=str(data.get("created_at") or _utc_now()),
+            status=str(data.get("status", "pending")),
+            is_paused=bool(data.get("is_paused", False)),
+            version=int(data.get("version", 1)),
         )
 
 
@@ -131,10 +152,12 @@ class DAGExecutionResult:
     failed_nodes: tuple[str, ...] = ()
     cancelled_nodes: tuple[str, ...] = ()
     skipped_nodes: tuple[str, ...] = ()
+    waiting_approval_nodes: tuple[str, ...] = ()
     node_results: dict[str, Any] = field(default_factory=dict)
     events_count: int = 0
     duration_seconds: float = 0.0
     error: str | None = None
+    is_paused: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

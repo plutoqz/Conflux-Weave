@@ -12,6 +12,15 @@ import uuid
 from conflux_weave.orchestrator.spec import AgentEvent, _utc_now
 
 
+def _json_default(obj: Any) -> Any:
+    if hasattr(obj, "to_dict"):
+        return obj.to_dict()
+    if hasattr(obj, "__dict__"):
+        return obj.__dict__
+    return str(obj)
+
+
+
 class AsyncAgentEventBus:
     """Event bus recording cross-Agent interaction signals and broadcasting live events."""
 
@@ -88,7 +97,7 @@ class AsyncAgentEventBus:
                         event.agent_id,
                         event.event_type,
                         event.causation_event_id,
-                        json.dumps(event.payload, ensure_ascii=False),
+                        json.dumps(event.payload, ensure_ascii=False, default=_json_default),
                         event.created_at,
                     ),
                 )
