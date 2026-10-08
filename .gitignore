@@ -42,3 +42,4 @@ tmp/
 
 # Stray runtime artifact store created at repo root by some live runs
 artifacts/
+*-registry.json
