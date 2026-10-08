@@ -688,3 +688,118 @@ export interface LongHorizonSurveyReportResponse {
   }>;
   full_markdown: string;
 }
+
+// --- Paper Reading V2 Types ---
+export interface PaperClassifyRequest {
+  title: string;
+  abstract?: string;
+  section_headings?: string[];
+  full_text_sample?: string;
+}
+
+export interface PaperClassifyResponse {
+  paradigm: string;
+  confidence: number;
+  rationale: string;
+  chapters: Array<{
+    key: string;
+    title: string;
+    target_aspect: string;
+    expected_visual_types: string[];
+  }>;
+}
+
+export interface PaperCitationGraphRequest {
+  paper_id?: string;
+  title: string;
+  raw_text?: string;
+  doi?: string | null;
+  allow_network?: boolean;
+}
+
+export interface PaperCitationGraphResponse {
+  seed_paper_title: string;
+  seed_paper_id: string;
+  backward_foundations: Array<{
+    paper_id: string;
+    title: string;
+    authors: string[];
+    year?: number | null;
+    venue?: string | null;
+    citation_type: string;
+    summary_or_context: string;
+  }>;
+  forward_derivatives: Array<{
+    paper_id: string;
+    title: string;
+    authors: string[];
+    year?: number | null;
+    venue?: string | null;
+    citation_type: string;
+    summary_or_context: string;
+  }>;
+  local_references: Array<{
+    paper_id: string;
+    title: string;
+    authors: string[];
+    year?: number | null;
+    summary_or_context: string;
+  }>;
+  mermaid_graph: string;
+}
+
+export interface CrossPaperCompareRequest {
+  papers: Array<{
+    paper_id?: string;
+    title: string;
+    raw_text?: string;
+    year?: number | null;
+  }>;
+}
+
+export interface CrossPaperCompareResponse {
+  entities: Array<{
+    paper_id: string;
+    title: string;
+    year?: number | null;
+    paradigm: string;
+    core_problem: string;
+    key_architecture_mechanism: string;
+    compute_space_overhead: string;
+    main_benchmark_metrics: string;
+    tradeoffs_and_risks: string;
+  }>;
+  dimension_matrix_markdown: string;
+  lineage_mermaid_timeline: string;
+  synthesis_narrative: string;
+}
+
+export interface PaperReadingV2SubmitRequest {
+  paper_id?: string;
+  title: string;
+  raw_text?: string;
+  pdf_path?: string | null;
+  doi?: string | null;
+  section_headings?: string[];
+  allow_network?: boolean;
+}
+
+export interface PaperReadingV2ReportResponse {
+  paper_id: string;
+  title: string;
+  paradigm: string;
+  outline: Record<string, any>;
+  markdown_content: string;
+  visual_slices: Array<{
+    asset_id: string;
+    page: number;
+    asset_type: string;
+    caption: string;
+    image_rel_path: string;
+    deep_analysis: string;
+  }>;
+  citation_graph?: PaperCitationGraphResponse | null;
+  metadata: Record<string, any>;
+  created_at: string;
+}
+

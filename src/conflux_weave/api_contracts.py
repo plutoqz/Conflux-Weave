@@ -2039,6 +2039,71 @@ class LongHorizonSurveyReportResponse(_ApiModel):
     full_markdown: str
 
 
+class PaperClassifyRequest(_ApiModel):
+    title: str = Field(min_length=1, max_length=500)
+    abstract: str = Field(default="", max_length=10000)
+    section_headings: list[str] = Field(default_factory=list)
+    full_text_sample: str = Field(default="", max_length=20000)
+
+
+class PaperClassifyResponse(_ApiModel):
+    paradigm: str
+    confidence: float
+    rationale: str
+    chapters: list[dict[str, Any]]
+
+
+class PaperCitationGraphRequest(_ApiModel):
+    paper_id: str = Field(default="")
+    title: str = Field(min_length=1, max_length=500)
+    raw_text: str = Field(default="", max_length=50000)
+    doi: str | None = None
+    allow_network: bool = True
+
+
+class PaperCitationGraphResponse(_ApiModel):
+    seed_paper_title: str
+    seed_paper_id: str
+    backward_foundations: list[dict[str, Any]]
+    forward_derivatives: list[dict[str, Any]]
+    local_references: list[dict[str, Any]]
+    mermaid_graph: str
+
+
+class CrossPaperCompareRequest(_ApiModel):
+    papers: list[dict[str, Any]] = Field(min_length=2, max_length=10)
+
+
+class CrossPaperCompareResponse(_ApiModel):
+    entities: list[dict[str, Any]]
+    dimension_matrix_markdown: str
+    lineage_mermaid_timeline: str
+    synthesis_narrative: str
+
+
+class PaperReadingV2SubmitRequest(_ApiModel):
+    paper_id: str = Field(default="", max_length=200)
+    title: str = Field(min_length=1, max_length=500)
+    raw_text: str = Field(default="", max_length=200000)
+    pdf_path: str | None = None
+    doi: str | None = None
+    section_headings: list[str] = Field(default_factory=list)
+    allow_network: bool = True
+
+
+class PaperReadingV2ReportResponse(_ApiModel):
+    paper_id: str
+    title: str
+    paradigm: str
+    outline: dict[str, Any]
+    markdown_content: str
+    visual_slices: list[dict[str, Any]]
+    citation_graph: dict[str, Any] | None = None
+    metadata: dict[str, Any]
+    created_at: str
+
+
+
 def _artifact_metadata(artifact: ArtifactRef) -> ArtifactMetadataResponse:
     return ArtifactMetadataResponse(
         artifact_id=artifact.artifact_id,
@@ -2210,6 +2275,14 @@ __all__ = [
     "LongHorizonSurveySubmitRequest",
     "LongHorizonSurveyOutlineResponse",
     "LongHorizonSurveyReportResponse",
+    "PaperClassifyRequest",
+    "PaperClassifyResponse",
+    "PaperCitationGraphRequest",
+    "PaperCitationGraphResponse",
+    "CrossPaperCompareRequest",
+    "CrossPaperCompareResponse",
+    "PaperReadingV2SubmitRequest",
+    "PaperReadingV2ReportResponse",
     "decode_run_cursor",
     "encode_run_cursor",
     "map_exception",

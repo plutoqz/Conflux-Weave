@@ -42,6 +42,14 @@ import type {
   LongHorizonSurveySubmitRequest,
   LongHorizonSurveyOutlineResponse,
   LongHorizonSurveyReportResponse,
+  PaperClassifyRequest,
+  PaperClassifyResponse,
+  PaperCitationGraphRequest,
+  PaperCitationGraphResponse,
+  CrossPaperCompareRequest,
+  CrossPaperCompareResponse,
+  PaperReadingV2SubmitRequest,
+  PaperReadingV2ReportResponse,
 } from "@/types/workbench";
 
 const API_BASE = "";
@@ -1026,6 +1034,28 @@ export const api = {
     }),
   executeSurvey: (payload: LongHorizonSurveySubmitRequest) =>
     request<LongHorizonSurveyReportResponse>("/api/v1/research/survey/execute", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  // Paper Reading V2 (Phase 2)
+  classifyPaperParadigm: (payload: PaperClassifyRequest) =>
+    request<PaperClassifyResponse>("/api/v1/paper-reading/classify", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  getPaperCitationGraph: (payload: PaperCitationGraphRequest) =>
+    request<PaperCitationGraphResponse>("/api/v1/paper-reading/citation-graph", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  compareCrossPapers: (payload: CrossPaperCompareRequest) =>
+    request<CrossPaperCompareResponse>("/api/v1/paper-reading/cross-compare", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  executePaperReadingV2: (payload: PaperReadingV2SubmitRequest) =>
+    request<PaperReadingV2ReportResponse>("/api/v1/paper-reading/read", {
       method: "POST",
       body: JSON.stringify(payload),
     }),

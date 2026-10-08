@@ -61,6 +61,12 @@ from conflux_weave.long_horizon_research import (
     SearchGraphCrawler,
     SurveySynthesizer,
 )
+from conflux_weave.paper_reading import (
+    build_adaptive_reading_outline,
+    build_dual_citation_graph,
+    generate_cross_paper_matrix,
+    run_paper_reading_v2,
+)
 from conflux_weave.conversation_router import ConversationRouter, RouterResult
 from conflux_weave.api_contracts import (
     ChatAnswerChecks,
@@ -179,6 +185,14 @@ from conflux_weave.api_contracts import (
     LongHorizonSurveySubmitRequest,
     LongHorizonSurveyOutlineResponse,
     LongHorizonSurveyReportResponse,
+    PaperClassifyRequest,
+    PaperClassifyResponse,
+    PaperCitationGraphRequest,
+    PaperCitationGraphResponse,
+    CrossPaperCompareRequest,
+    CrossPaperCompareResponse,
+    PaperReadingV2SubmitRequest,
+    PaperReadingV2ReportResponse,
     FixtureResearchTaskRequest,
     FollowUpResearchTaskRequest,
     ProviderConfigResponse,
@@ -2206,6 +2220,92 @@ def create_app(
                 total_sources_cited=report.total_sources_cited,
                 citations_ledger=list(report.citations_ledger),
                 full_markdown=report.render_full_markdown(),
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/paper-reading/classify", response_model=PaperClassifyResponse)
+    async def paper_reading_classify_endpoint(request: PaperClassifyRequest):
+        try:
+            outline = build_adaptive_reading_outline(
+                title=request.title,
+                abstract=request.abstract,
+                section_headings=request.section_headings,
+                full_text_sample=request.full_text_sample,
+                adapter=chat_adapter,
+            )
+            return PaperClassifyResponse(
+                paradigm=outline.paradigm.value,
+                confidence=outline.confidence,
+                rationale=outline.rationale,
+                chapters=[c.to_dict() for c in outline.chapters],
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/paper-reading/citation-graph", response_model=PaperCitationGraphResponse)
+    async def paper_reading_citation_graph_endpoint(request: PaperCitationGraphRequest):
+        try:
+            graph = build_dual_citation_graph(
+                seed_paper_id=request.paper_id or "seed_paper",
+                seed_paper_title=request.title,
+                raw_text=request.raw_text,
+                doi=request.doi,
+                allow_network=request.allow_network,
+            )
+            return PaperCitationGraphResponse(
+                seed_paper_title=graph.seed_paper_title,
+                seed_paper_id=graph.seed_paper_id,
+                backward_foundations=[c.to_dict() for c in graph.backward_foundations],
+                forward_derivatives=[c.to_dict() for c in graph.forward_derivatives],
+                local_references=[c.to_dict() for c in graph.local_references],
+                mermaid_graph=graph.mermaid_graph,
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/paper-reading/cross-compare", response_model=CrossPaperCompareResponse)
+    async def paper_reading_cross_compare_endpoint(request: CrossPaperCompareRequest):
+        try:
+            matrix = generate_cross_paper_matrix(
+                papers=request.papers,
+                adapter=chat_adapter,
+            )
+            return CrossPaperCompareResponse(
+                entities=[e.to_dict() for e in matrix.entities],
+                dimension_matrix_markdown=matrix.dimension_matrix_markdown,
+                lineage_mermaid_timeline=matrix.lineage_mermaid_timeline,
+                synthesis_narrative=matrix.synthesis_narrative,
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/paper-reading/read", response_model=PaperReadingV2ReportResponse)
+    async def paper_reading_read_endpoint(request: PaperReadingV2SubmitRequest):
+        try:
+            store = getattr(repository, "artifact_store", None)
+            paper_id = request.paper_id or f"paper_{int(time.time())}"
+            report = run_paper_reading_v2(
+                paper_id=paper_id,
+                title=request.title,
+                raw_text=request.raw_text,
+                pdf_path=request.pdf_path,
+                doi=request.doi,
+                section_headings=request.section_headings,
+                artifact_store=store,
+                adapter=chat_adapter,
+                allow_network=request.allow_network,
+            )
+            return PaperReadingV2ReportResponse(
+                paper_id=report.paper_id,
+                title=report.title,
+                paradigm=report.paradigm.value,
+                outline=report.outline.to_dict(),
+                markdown_content=report.markdown_content,
+                visual_slices=[s.to_dict() for s in report.visual_slices],
+                citation_graph=report.citation_graph.to_dict() if report.citation_graph else None,
+                metadata=report.metadata,
+                created_at=report.created_at,
             )
         except Exception as exc:
             return error_response(exc)
