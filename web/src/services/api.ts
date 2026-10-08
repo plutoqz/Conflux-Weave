@@ -39,6 +39,9 @@ import type {
   MCPDriftResult,
   ComputeSandboxStatus,
   SkillBudget,
+  LongHorizonSurveySubmitRequest,
+  LongHorizonSurveyOutlineResponse,
+  LongHorizonSurveyReportResponse,
 } from "@/types/workbench";
 
 const API_BASE = "";
@@ -1011,6 +1014,18 @@ export const api = {
     }),
   repairStructuredOutput: (payload: StructuredRepairRequest) =>
     request<StructuredRepairResponse>("/api/v1/provider/structured/repair", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  // Deep Research V2 Long-Horizon Survey
+  planSurveyOutline: (payload: LongHorizonSurveySubmitRequest) =>
+    request<LongHorizonSurveyOutlineResponse>("/api/v1/research/survey/plan-outline", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  executeSurvey: (payload: LongHorizonSurveySubmitRequest) =>
+    request<LongHorizonSurveyReportResponse>("/api/v1/research/survey/execute", {
       method: "POST",
       body: JSON.stringify(payload),
     }),

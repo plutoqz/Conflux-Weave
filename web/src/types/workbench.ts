@@ -628,3 +628,63 @@ export interface StructuredRepairResponse {
 
 
 
+
+// --- Deep Research V2 Long-Horizon Survey Types ---
+export interface LongHorizonSurveySubmitRequest {
+  objective: string;
+  background_context?: string;
+  max_sources?: number;
+}
+
+export interface ResearchProbeItem {
+  probe_id: string;
+  target_aspect: string;
+  query_intent: string;
+  expected_data_type: string;
+}
+
+export interface SurveyChapterPlanItem {
+  chapter_id: string;
+  chapter_index: number;
+  title: string;
+  core_thesis: string;
+  probes: ResearchProbeItem[];
+  depends_on: string[];
+}
+
+export interface LongHorizonSurveyOutlineResponse {
+  outline_id: string;
+  objective: string;
+  background_summary: string;
+  target_word_count_range: [number, number];
+  chapters: SurveyChapterPlanItem[];
+  total_probes_count: number;
+}
+
+export interface SurveyReportSectionItem {
+  chapter_id: string;
+  chapter_index: number;
+  title: string;
+  content_markdown: string;
+  word_count: number;
+  cited_source_urls: string[];
+}
+
+export interface LongHorizonSurveyReportResponse {
+  report_id: string;
+  objective: string;
+  executive_summary: string[];
+  sections: SurveyReportSectionItem[];
+  evolution_timeline_mermaid: string;
+  comparison_matrix_markdown: string;
+  total_word_count: number;
+  total_sources_cited: number;
+  citations_ledger: Array<{
+    source_id?: string;
+    title: string;
+    url: string;
+    authority_score?: number;
+    source_channel?: string;
+  }>;
+  full_markdown: string;
+}

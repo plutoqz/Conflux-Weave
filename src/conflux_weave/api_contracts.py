@@ -2011,6 +2011,34 @@ def _event(record: RunEventRecord, state: UserRunState) -> RunEventResponse:
     )
 
 
+class LongHorizonSurveySubmitRequest(_ApiModel):
+    objective: str = Field(min_length=1, max_length=4000)
+    background_context: str = Field(default="", max_length=8000)
+    max_sources: int = Field(default=80, ge=5, le=200)
+
+
+class LongHorizonSurveyOutlineResponse(_ApiModel):
+    outline_id: str
+    objective: str
+    background_summary: str
+    target_word_count_range: tuple[int, int]
+    chapters: list[dict[str, Any]]
+    total_probes_count: int
+
+
+class LongHorizonSurveyReportResponse(_ApiModel):
+    report_id: str
+    objective: str
+    executive_summary: list[str]
+    sections: list[dict[str, Any]]
+    evolution_timeline_mermaid: str
+    comparison_matrix_markdown: str
+    total_word_count: int
+    total_sources_cited: int
+    citations_ledger: list[dict[str, Any]]
+    full_markdown: str
+
+
 def _artifact_metadata(artifact: ArtifactRef) -> ArtifactMetadataResponse:
     return ArtifactMetadataResponse(
         artifact_id=artifact.artifact_id,
@@ -2179,6 +2207,9 @@ __all__ = [
     "TopicDetailResponse",
     "TopicListResponse",
     "NoteFromChatRequest",
+    "LongHorizonSurveySubmitRequest",
+    "LongHorizonSurveyOutlineResponse",
+    "LongHorizonSurveyReportResponse",
     "decode_run_cursor",
     "encode_run_cursor",
     "map_exception",

@@ -54,6 +54,13 @@ from conflux_weave.export_bundle import (
     render_export_markdown,
 )
 from urllib.parse import quote
+from conflux_weave.long_horizon_research import (
+    InformationGapAuditor,
+    LongHorizonSurveyWorkflow,
+    OutlinePlanner,
+    SearchGraphCrawler,
+    SurveySynthesizer,
+)
 from conflux_weave.conversation_router import ConversationRouter, RouterResult
 from conflux_weave.api_contracts import (
     ChatAnswerChecks,
@@ -169,6 +176,9 @@ from conflux_weave.api_contracts import (
     TopicSummaryResponse,
     TopicDetailResponse,
     TopicListResponse,
+    LongHorizonSurveySubmitRequest,
+    LongHorizonSurveyOutlineResponse,
+    LongHorizonSurveyReportResponse,
     FixtureResearchTaskRequest,
     FollowUpResearchTaskRequest,
     ProviderConfigResponse,
@@ -2147,6 +2157,56 @@ def create_app(
                 for e in events
             )
             return AgentEventListResponse(items=items, total=len(items))
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/research/survey/plan-outline", response_model=LongHorizonSurveyOutlineResponse)
+    async def plan_survey_outline_endpoint(request: LongHorizonSurveySubmitRequest):
+        try:
+            planner = OutlinePlanner(chat_adapter=chat_adapter)
+            outline = planner.plan_outline(request.objective, background_context=request.background_context)
+            return LongHorizonSurveyOutlineResponse(
+                outline_id=outline.outline_id,
+                objective=outline.objective,
+                background_summary=outline.background_summary,
+                target_word_count_range=outline.target_word_count_range,
+                chapters=[c.to_dict() for c in outline.chapters],
+                total_probes_count=outline.total_probes_count(),
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/research/survey/execute", response_model=LongHorizonSurveyReportResponse)
+    async def execute_survey_workflow_endpoint(request: LongHorizonSurveySubmitRequest):
+        try:
+            planner = OutlinePlanner(chat_adapter=chat_adapter)
+            auditor = InformationGapAuditor(chat_adapter=chat_adapter)
+            synthesizer = SurveySynthesizer(chat_adapter=chat_adapter)
+            crawler = SearchGraphCrawler(max_sources=request.max_sources)
+            wf = LongHorizonSurveyWorkflow(
+                planner=planner,
+                crawler=crawler,
+                auditor=auditor,
+                synthesizer=synthesizer,
+                repository=repository,
+            )
+            report = await wf.execute(
+                objective=request.objective,
+                background_context=request.background_context,
+                max_sources=request.max_sources,
+            )
+            return LongHorizonSurveyReportResponse(
+                report_id=report.report_id,
+                objective=report.objective,
+                executive_summary=list(report.executive_summary),
+                sections=[s.to_dict() for s in report.sections],
+                evolution_timeline_mermaid=report.evolution_timeline_mermaid,
+                comparison_matrix_markdown=report.comparison_matrix_markdown,
+                total_word_count=report.total_word_count,
+                total_sources_cited=report.total_sources_cited,
+                citations_ledger=list(report.citations_ledger),
+                full_markdown=report.render_full_markdown(),
+            )
         except Exception as exc:
             return error_response(exc)
 
