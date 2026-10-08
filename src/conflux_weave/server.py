@@ -67,6 +67,10 @@ from conflux_weave.paper_reading import (
     generate_cross_paper_matrix,
     run_paper_reading_v2,
 )
+from conflux_weave.project_tutor import (
+    audit_project_hygiene,
+    run_project_dissection_v2,
+)
 from conflux_weave.conversation_router import ConversationRouter, RouterResult
 from conflux_weave.api_contracts import (
     ChatAnswerChecks,
@@ -193,6 +197,10 @@ from conflux_weave.api_contracts import (
     CrossPaperCompareResponse,
     PaperReadingV2SubmitRequest,
     PaperReadingV2ReportResponse,
+    ProjectTutorDissectRequest,
+    ProjectTutorDissectResponse,
+    ProjectHygieneAuditRequest,
+    ProjectHygieneAuditResponse,
     FixtureResearchTaskRequest,
     FollowUpResearchTaskRequest,
     ProviderConfigResponse,
@@ -2306,6 +2314,52 @@ def create_app(
                 citation_graph=report.citation_graph.to_dict() if report.citation_graph else None,
                 metadata=report.metadata,
                 created_at=report.created_at,
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/projects/tutor/dissect", response_model=ProjectTutorDissectResponse)
+    async def project_tutor_dissect_endpoint(request: ProjectTutorDissectRequest):
+        try:
+            store = getattr(repository, "artifact_store", None)
+            report = run_project_dissection_v2(
+                root_path=request.project_path,
+                project_name=request.project_name,
+                artifact_store=store,
+                adapter=chat_adapter,
+            )
+            return ProjectTutorDissectResponse(
+                project_id=report.project_id,
+                project_name=report.project_name,
+                root_path=report.root_path,
+                mental_model_summary=report.motivations.mental_model_summary,
+                decisions=[d.to_dict() for d in report.motivations.decisions],
+                topology_mermaid=report.motivations.topology_mermaid,
+                dataflow_sequence_mermaid=report.motivations.dataflow_sequence_mermaid,
+                dependency_cards=[c.to_dict() for c in report.dependency_cards],
+                walkthrough_stages=[s.to_dict() for s in report.walkthrough_stages],
+                hygiene_score=report.hygiene_report.hygiene_score,
+                executive_verdict=report.hygiene_report.executive_verdict,
+                findings_count=report.hygiene_report.total_findings_count,
+                full_markdown=report.full_markdown,
+            )
+        except Exception as exc:
+            return error_response(exc)
+
+    @app.post("/api/v1/projects/tutor/hygiene-audit", response_model=ProjectHygieneAuditResponse)
+    async def project_tutor_hygiene_audit_endpoint(request: ProjectHygieneAuditRequest):
+        try:
+            report = audit_project_hygiene(
+                root_path=request.project_path,
+                max_files=request.max_files,
+            )
+            return ProjectHygieneAuditResponse(
+                project_path=report.project_path,
+                hygiene_score=report.hygiene_score,
+                total_findings_count=report.total_findings_count,
+                findings_by_category=report.findings_by_category,
+                findings=[f.to_dict() for f in report.findings],
+                executive_verdict=report.executive_verdict,
             )
         except Exception as exc:
             return error_response(exc)

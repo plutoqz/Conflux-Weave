@@ -803,3 +803,68 @@ export interface PaperReadingV2ReportResponse {
   created_at: string;
 }
 
+// --- Project Tutor V2 Types ---
+export interface ProjectTutorDissectRequest {
+  project_path: string;
+  project_name?: string;
+}
+
+export interface ProjectTutorDissectResponse {
+  project_id: string;
+  project_name: string;
+  root_path: string;
+  mental_model_summary: string;
+  decisions: Array<{
+    topic: string;
+    chosen_solution: string;
+    rejected_alternatives: string[];
+    core_rationale: string;
+    tradeoffs_accepted: string;
+  }>;
+  topology_mermaid: string;
+  dataflow_sequence_mermaid: string;
+  dependency_cards: Array<{
+    package_name: string;
+    category: string;
+    role_in_project: string;
+    underlying_mechanism: string;
+    why_needed: string;
+  }>;
+  walkthrough_stages: Array<{
+    stage_index: number;
+    stage_name: string;
+    core_theme: string;
+    key_files: string[];
+    reading_tips: string;
+  }>;
+  hygiene_score: number;
+  executive_verdict: string;
+  findings_count: number;
+  full_markdown: string;
+}
+
+export interface ProjectHygieneAuditRequest {
+  project_path: string;
+  max_files?: number;
+}
+
+export interface ProjectHygieneAuditResponse {
+  project_path: string;
+  hygiene_score: number;
+  total_findings_count: number;
+  findings_by_category: Record<string, number>;
+  findings: Array<{
+    finding_id: string;
+    category: string;
+    severity: string;
+    file_path: string;
+    line_number: number;
+    code_snippet: string;
+    issue_description: string;
+    harm_analysis: string;
+    refactor_diff_suggestion: string;
+  }>;
+  executive_verdict: string;
+}
+
+

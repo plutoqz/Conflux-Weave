@@ -2103,6 +2103,42 @@ class PaperReadingV2ReportResponse(_ApiModel):
     created_at: str
 
 
+class ProjectTutorDissectRequest(_ApiModel):
+    project_path: str = Field(min_length=1, max_length=500)
+    project_name: str = Field(default="", max_length=120)
+
+
+class ProjectTutorDissectResponse(_ApiModel):
+    project_id: str
+    project_name: str
+    root_path: str
+    mental_model_summary: str
+    decisions: list[dict[str, Any]]
+    topology_mermaid: str
+    dataflow_sequence_mermaid: str
+    dependency_cards: list[dict[str, Any]]
+    walkthrough_stages: list[dict[str, Any]]
+    hygiene_score: int
+    executive_verdict: str
+    findings_count: int
+    full_markdown: str
+
+
+class ProjectHygieneAuditRequest(_ApiModel):
+    project_path: str = Field(min_length=1, max_length=500)
+    max_files: int = Field(default=100, ge=1, le=500)
+
+
+class ProjectHygieneAuditResponse(_ApiModel):
+    project_path: str
+    hygiene_score: int
+    total_findings_count: int
+    findings_by_category: dict[str, int]
+    findings: list[dict[str, Any]]
+    executive_verdict: str
+
+
+
 
 def _artifact_metadata(artifact: ArtifactRef) -> ArtifactMetadataResponse:
     return ArtifactMetadataResponse(
@@ -2283,6 +2319,10 @@ __all__ = [
     "CrossPaperCompareResponse",
     "PaperReadingV2SubmitRequest",
     "PaperReadingV2ReportResponse",
+    "ProjectTutorDissectRequest",
+    "ProjectTutorDissectResponse",
+    "ProjectHygieneAuditRequest",
+    "ProjectHygieneAuditResponse",
     "decode_run_cursor",
     "encode_run_cursor",
     "map_exception",

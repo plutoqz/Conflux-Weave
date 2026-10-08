@@ -50,6 +50,10 @@ import type {
   CrossPaperCompareResponse,
   PaperReadingV2SubmitRequest,
   PaperReadingV2ReportResponse,
+  ProjectTutorDissectRequest,
+  ProjectTutorDissectResponse,
+  ProjectHygieneAuditRequest,
+  ProjectHygieneAuditResponse,
 } from "@/types/workbench";
 
 const API_BASE = "";
@@ -1056,6 +1060,18 @@ export const api = {
     }),
   executePaperReadingV2: (payload: PaperReadingV2SubmitRequest) =>
     request<PaperReadingV2ReportResponse>("/api/v1/paper-reading/read", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  // Project Tutor V2 & AI Hygiene Auditor (Phase 3)
+  dissectProjectTutor: (payload: ProjectTutorDissectRequest) =>
+    request<ProjectTutorDissectResponse>("/api/v1/projects/tutor/dissect", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  auditProjectHygiene: (payload: ProjectHygieneAuditRequest) =>
+    request<ProjectHygieneAuditResponse>("/api/v1/projects/tutor/hygiene-audit", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
