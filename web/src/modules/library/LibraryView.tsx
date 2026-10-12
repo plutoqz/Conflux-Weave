@@ -23,6 +23,7 @@ import {
   Check,
   Upload,
   MessageSquare,
+  Scale,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -39,10 +40,15 @@ import { api } from "@/services/api";
 import { cn } from "@/lib/utils";
 import { useWorkbenchStore } from "@/stores/useWorkbenchStore";
 import type { LibraryDocument, PaperItem } from "@/types/workbench";
+import { PaperReadingV2Modal } from "./PaperReadingV2Modal";
+import { CrossPaperCompareModal } from "./CrossPaperCompareModal";
 
 export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = ({ onOpenNote }) => {
   const { setSection, setActiveScopeDocIds } = useWorkbenchStore();
   const [activeTab, setActiveTab] = useState<"documents" | "multimodal" | "assets" | "papers">("documents");
+  const [selectedPaperForReading, setSelectedPaperForReading] = useState<PaperItem | null>(null);
+  const [isReadingV2Open, setIsReadingV2Open] = useState(false);
+  const [isCompareModalOpen, setIsCompareModalOpen] = useState(false);
   const [documents, setDocuments] = useState<LibraryDocument[]>([]);
   const [docFilter, setDocFilter] = useState<"active" | "archived" | "deleted">("active");
   const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -760,6 +766,27 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
                         </Button>
                         <Button
                           size="sm"
+                          variant="outline"
+                          className="h-7 text-xs text-emerald-800 dark:text-emerald-300 font-serif-academic gap-1 border-emerald-600/40 hover:bg-emerald-900/10 cursor-pointer"
+                          onClick={() => {
+                            const isPdf = Boolean(doc.relative_path && doc.relative_path.toLowerCase().endsWith(".pdf"));
+                            setSelectedPaperForReading({
+                              id: doc.document_id,
+                              title: doc.title,
+                              authors: [],
+                              abstract: doc.relative_path || "",
+                              source: doc.source_type || "local",
+                              url: doc.relative_path,
+                              pdf_path: isPdf ? doc.relative_path : undefined,
+                            });
+                            setIsReadingV2Open(true);
+                          }}
+                          title="自适应范式精读与双向引文图谱"
+                        >
+                          <span>🔬 精读 V2</span>
+                        </Button>
+                        <Button
+                          size="sm"
                           variant="ghost"
                           className="h-7 text-xs sm:text-sm text-emerald-800 dark:text-emerald-300 font-serif-academic gap-1.5 hover:bg-emerald-900/10 font-medium"
                           onClick={() => onOpenNote?.(doc.document_id)}
@@ -1254,6 +1281,18 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
                     <span>批量导入本地资料库 ({selectedPaperIds.size})</span>
                   </Button>
                 )}
+
+                {selectedPaperIds.size >= 2 && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setIsCompareModalOpen(true)}
+                    className="gap-1.5 h-7 text-xs border-emerald-800/40 text-emerald-800 dark:text-emerald-300 hover:bg-emerald-900/10 cursor-pointer"
+                  >
+                    <Scale className="h-3.5 w-3.5" />
+                    <span>跨论文对比 ({selectedPaperIds.size})</span>
+                  </Button>
+                )}
               </div>
 
               <span className="font-mono text-muted-foreground">检索到 {papers.length} 篇学术成果</span>
@@ -1327,6 +1366,18 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
                         size="sm"
                         variant="outline"
                         type="button"
+                        onClick={() => {
+                          setSelectedPaperForReading(paper);
+                          setIsReadingV2Open(true);
+                        }}
+                        className="h-7 text-xs font-serif-academic text-emerald-800 dark:text-emerald-300 border-emerald-800/40 hover:bg-emerald-900/10 cursor-pointer"
+                      >
+                        🔬 论文精读 V2
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        type="button"
                         disabled={importingPaperIds[paper.id] === "fetching" || batchImporting}
                         onClick={() => handleImportPaper(paper, "metadata")}
                         className="h-7 text-xs font-serif-academic text-muted-foreground hover:text-foreground"
@@ -1394,6 +1445,18 @@ export const LibraryView: React.FC<{ onOpenNote?: (docId: string) => void }> = (
           </DialogContent>
         </Dialog>
       )}
+
+      <PaperReadingV2Modal
+        paper={selectedPaperForReading}
+        open={isReadingV2Open}
+        onOpenChange={setIsReadingV2Open}
+      />
+
+      <CrossPaperCompareModal
+        papers={papers.filter((p) => selectedPaperIds.has(p.id))}
+        open={isCompareModalOpen}
+        onOpenChange={setIsCompareModalOpen}
+      />
     </div>
   );
 };

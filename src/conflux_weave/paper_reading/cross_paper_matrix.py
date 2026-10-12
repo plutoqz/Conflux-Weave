@@ -15,6 +15,32 @@ from conflux_weave.paper_reading.spec import (
 from conflux_weave.provider import OpenAICompatibleChatAdapter
 
 
+def _extract_benchmark_metrics(raw_text: str, title: str) -> str:
+    """Extract factual benchmark metrics from raw_text or return a faithful non-hallucinated statement."""
+    if not raw_text:
+        return "需参考原论文实验章节（未提供实验数据与评测文本）"
+
+    # Search for actual quantitative metrics in text
+    patterns = [
+        r"([^.\n]*\b(?:\d+(?:\.\d+)?\s*(?:BLEU|%|accuracy|acc|F1|perplexity|x\s*speedup|x\s*提速|倍提速))\b[^.\n]*)",
+        r"([^.\n]*\b(?:WMT\s*20\d\d|GLUE|SuperGLUE|ImageNet|SQuAD|HumanEval)\b[^.\n]*)",
+    ]
+    for pat in patterns:
+        m = re.search(pat, raw_text, re.IGNORECASE)
+        if m:
+            clean = " ".join(m.group(1).split()).strip()
+            if len(clean) >= 8:
+                return clean[:120]
+
+    m_eval = re.search(r"([^.\n]*\b(?:benchmark|evaluation|results|outperform|experiment)\b[^.\n]*)", raw_text, re.IGNORECASE)
+    if m_eval:
+        clean = " ".join(m_eval.group(1).split()).strip()
+        if len(clean) >= 10:
+            return clean[:120]
+
+    return "需参考原论文评测章节（输入文本未包含明确量化指标）"
+
+
 def extract_comparison_entity(
     paper_id: str,
     title: str,
@@ -28,41 +54,37 @@ def extract_comparison_entity(
     # Heuristic default extractions
     t_lower = title.lower()
     text_lower = raw_text[:3000].lower()
+    benchmark = _extract_benchmark_metrics(raw_text, title)
 
     # Core Problem
     if "attention" in t_lower or "transformer" in t_lower:
         core_problem = "传统序列递归模型（RNN/LSTM）计算时序串行依赖，导致长程信息衰减且难以发挥现代 GPU 高并行计算优势。"
         key_mechanism = "完全基于缩放点积注意力与多头并行机制，引入位置编码与残差前馈网络构建编码器-解码器架构。"
         overhead = "单层计算与自注意力矩阵显存开销均为 $O(n^2)$，序列增长时内存消耗显著。"
-        benchmark = "WMT 2014 英德翻译任务达到 28.4 BLEU，显著降低训练耗时并刷新权威基准成绩。"
         tradeoffs = "缺乏归纳偏置导致依赖大规模数据预训练；长序列 $O(n^2)$ 复杂度导致上下文扩展成本高。"
         detected_year = 2017
     elif "flash" in t_lower:
         core_problem = "标准注意力在 GPU HBM 与 SRAM 间频繁读写大尺寸中间注意力矩阵，内存带宽（IO 瓶颈）成为计算核心瓶颈。"
         key_mechanism = "采用 Tiling 分块重计算算法，在 SRAM 内部在线计算 Softmax，避免将 $N \\times N$ 注意力矩阵物化写回 HBM。"
         overhead = "计算 FLOPs 略微增加（部分重计算），但将 HBM 显存读写降至亚二次方，显存峰值由 $O(n^2)$ 降为 $O(n)$。"
-        benchmark = "长文本基准训练提速 2-4 倍，在保持与精确注意力 100% 数学等价的同时支持上下文数倍扩展。"
         tradeoffs = "高度依赖底层 GPU 硬件架构微调与融合算子（Triton/CUDA），跨架构移植门槛高。"
         detected_year = 2022
     elif "mamba" in t_lower or "state space" in t_lower:
         core_problem = "Transformer 推理阶段需要维系庞大 KV Cache，显存占用随长度线性激增，且自注意力难以实现线性时间步推理。"
         key_mechanism = "引入基于时变参数的选择性状态空间机制 (Selective SSM)，配合硬件感知并行扫描算法 (Parallel Scan)。"
         overhead = "序列训练与推理计算均为严格 $O(n)$ 线性，推理阶段保持常数级 $O(1)$ 状态显存。"
-        benchmark = "在通用语言建模与长程关联基准（LRA）上取得优于同等规模 Transformer 的综合性能。"
         tradeoffs = "在联想记忆（Associative Recall）与精确键值检索任务上略逊于全局稠密注意力。"
         detected_year = 2023
     elif "lora" in t_lower or "adapter" in t_lower:
         core_problem = "超大参数量模型在特定下游任务全量微调算力开销巨大、显存门槛极高，难以在多任务间灵活分发权重。"
         key_mechanism = "冻结预训练主干权重，在多头自注意力投影矩阵旁边注入低秩分解可训练分支 ($W + \\Delta W = W + B \\times A$)。"
         overhead = "训练显存节省 3 倍以上，可训练参数量压缩至原模型的 0.01%~0.1%，推理阶段可无损重参数化融合。"
-        benchmark = "在 GLUE、SuperGLUE 与长文本大模型下游生成任务上与全量微调表现持平甚至在少量样本上更优。"
         tradeoffs = "低秩假设在极端复杂多模态或全新领域知识注入时表征容量存在上限。"
         detected_year = 2021
     else:
         core_problem = f"针对《{title}》领域的关键技术瓶颈与性能制约展开系统性优化与机理突破。"
         key_mechanism = "提出模块化解耦架构与协同优化算法，重构特征流转与计算拓扑。"
         overhead = "在同等算力预算下显著优化计算与内存开销，提升系统端到端吞吐。"
-        benchmark = "在权威公开基准上超越主流基准线，指标取得显著正向增益。"
         tradeoffs = "对极端边界工况的适应性仍需进一步工程验证，依赖超参数敏感性微调。"
         detected_year = year or 2023
 

@@ -83,7 +83,7 @@ def synthesize_chapter_markdown(
         elif "benchmarks" in chapter_key or "ablation" in chapter_key:
             lines.extend([
                 "### 主实验权威基准评测\n",
-                "本文在标准化公开基准集上展开全面评测，验证了所提架构在精度与效率维度的全面压制性优势：\n",
+                "本文在标准化公开基准集上展开系统性实证评测，客观呈现了所提机制在精度与效率维度的实验表现：\n",
                 "- **跨基线全景指标对比**：在同等或更低的训练算力开销下，模型在核心评价指标上实现质的跃升；\n",
                 "- **统计严谨性保障**：采用严格跨多次随机种子独立重复实验，排除随机超参扰动对实证结论的干扰。\n",
                 "\n### 消融实验与超参敏感性量化归因\n",
@@ -215,119 +215,26 @@ def run_paper_reading_v2(
         adapter=adapter,
     )
 
-    # Step 2: Extract visual slices from PDF if available, otherwise synthesize
+    # Step 2: Extract visual slices from PDF if available
     slices: list[PhysicalVisualSlice] = []
-    if pdf_path and Path(pdf_path).is_file():
-        pdf_slices = extract_visual_slices_from_pdf(
-            pdf_path=pdf_path,
-            artifact_store=artifact_store,
-            max_slices=6,
-        )
-        slices.extend(pdf_slices)
-
-    # If no slices extracted from PDF, synthesize standard representative visual assets
-    if not slices:
-        if outline.paradigm == PaperParadigm.ALGORITHM_ARCHITECTURE:
-            slices.append(
-                PhysicalVisualSlice(
-                    asset_id=f"{paper_id}_arch_diag",
-                    page=3,
-                    asset_type=VisualAssetType.ARCHITECTURE_DIAGRAM,
-                    caption=f"Figure 1: {title} 端到端核心系统架构与计算流转路线图",
-                    image_rel_path=f"visual_slices/{paper_id}_arch.png",
-                    deep_analysis=generate_deep_visual_analysis(
-                        f"Figure 1: {title} 架构路线图",
-                        VisualAssetType.ARCHITECTURE_DIAGRAM,
-                        3,
-                    ),
-                )
+    if pdf_path:
+        p = Path(pdf_path)
+        if not p.is_file():
+            for cand in (
+                Path.cwd() / pdf_path,
+                Path.cwd() / "var" / "corpus" / Path(pdf_path).name,
+                Path.cwd() / "var" / "uploads" / Path(pdf_path).name,
+            ):
+                if cand.is_file():
+                    p = cand
+                    break
+        if p.is_file():
+            pdf_slices = extract_visual_slices_from_pdf(
+                pdf_path=p,
+                artifact_store=artifact_store,
+                max_slices=6,
             )
-            slices.append(
-                PhysicalVisualSlice(
-                    asset_id=f"{paper_id}_perf_table",
-                    page=6,
-                    asset_type=VisualAssetType.PERFORMANCE_TABLE,
-                    caption=f"Table 1: 主实验权威基准成绩对比与性能增益",
-                    image_rel_path=f"visual_slices/{paper_id}_table1.png",
-                    deep_analysis=generate_deep_visual_analysis(
-                        f"Table 1: 主实验对比表",
-                        VisualAssetType.PERFORMANCE_TABLE,
-                        6,
-                    ),
-                )
-            )
-            slices.append(
-                PhysicalVisualSlice(
-                    asset_id=f"{paper_id}_ablation_chart",
-                    page=8,
-                    asset_type=VisualAssetType.ABLATION_CHART,
-                    caption=f"Figure 2: 核心组件消融实验与超参数敏感性演进趋势",
-                    image_rel_path=f"visual_slices/{paper_id}_ablation.png",
-                    deep_analysis=generate_deep_visual_analysis(
-                        f"Figure 2: 消融趋势图",
-                        VisualAssetType.ABLATION_CHART,
-                        8,
-                    ),
-                )
-            )
-        elif outline.paradigm == PaperParadigm.SURVEY_TAXONOMY:
-            slices.append(
-                PhysicalVisualSlice(
-                    asset_id=f"{paper_id}_taxonomy_tree",
-                    page=2,
-                    asset_type=VisualAssetType.ARCHITECTURE_DIAGRAM,
-                    caption=f"Figure 1: 领域多维体系化分类学演化树全景拓扑",
-                    image_rel_path=f"visual_slices/{paper_id}_taxonomy.png",
-                    deep_analysis=generate_deep_visual_analysis(
-                        "Figure 1: 分类学演化树",
-                        VisualAssetType.ARCHITECTURE_DIAGRAM,
-                        2,
-                    ),
-                )
-            )
-            slices.append(
-                PhysicalVisualSlice(
-                    asset_id=f"{paper_id}_school_table",
-                    page=5,
-                    asset_type=VisualAssetType.PERFORMANCE_TABLE,
-                    caption=f"Table 1: 各主流学术流派核心机制与技术指标横向解构",
-                    image_rel_path=f"visual_slices/{paper_id}_schools.png",
-                    deep_analysis=generate_deep_visual_analysis(
-                        "Table 1: 流派解构表",
-                        VisualAssetType.PERFORMANCE_TABLE,
-                        5,
-                    ),
-                )
-            )
-        else:  # BENCHMARK_DATASET
-            slices.append(
-                PhysicalVisualSlice(
-                    asset_id=f"{paper_id}_pipeline_diag",
-                    page=3,
-                    asset_type=VisualAssetType.ARCHITECTURE_DIAGRAM,
-                    caption=f"Figure 1: 数据构建、清洗与对抗防泄漏过滤管线",
-                    image_rel_path=f"visual_slices/{paper_id}_pipeline.png",
-                    deep_analysis=generate_deep_visual_analysis(
-                        "Figure 1: 数据清洗管线",
-                        VisualAssetType.ARCHITECTURE_DIAGRAM,
-                        3,
-                    ),
-                )
-            )
-            slices.append(
-                PhysicalVisualSlice(
-                    asset_id=f"{paper_id}_leaderboard_tbl",
-                    page=6,
-                    asset_type=VisualAssetType.PERFORMANCE_TABLE,
-                    caption=f"Table 1: 权威模型全景天梯排行榜与细分指标对比",
-                    image_rel_path=f"visual_slices/{paper_id}_leaderboard.png",
-                    deep_analysis=generate_deep_visual_analysis(
-                        "Table 1: 全景天梯表",
-                        VisualAssetType.PERFORMANCE_TABLE,
-                        6,
-                    ),
-                )
-            )
+            slices.extend(pdf_slices)
 
     # Step 3: Build zero-key dual citation graph
     citation_graph = build_dual_citation_graph(

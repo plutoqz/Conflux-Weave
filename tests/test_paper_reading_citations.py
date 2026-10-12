@@ -59,6 +59,7 @@ def test_build_mermaid_citation_graph() -> None:
     assert "理论源流与奠基性工作" in graph_code
     assert "后序衍生与突破" in graph_code
     assert "Attention Is All You Need" in graph_code
+    assert graph_code.count("subgraph") == graph_code.count("end") == 2
 
 
 def test_build_dual_citation_graph_offline_fallback() -> None:
@@ -71,7 +72,7 @@ def test_build_dual_citation_graph_offline_fallback() -> None:
     )
     assert graph.seed_paper_title == "Transformer Network"
     assert len(graph.backward_foundations) >= 2
-    assert len(graph.forward_derivatives) >= 1
+    assert len(graph.forward_derivatives) == 0  # Offline mode does not fabricate fake synthetic derivatives
     assert "```mermaid" in graph.mermaid_graph
 
 

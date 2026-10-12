@@ -27,6 +27,25 @@ def test_extract_comparison_entity() -> None:
     assert "点积" in entity.key_architecture_mechanism or "注意力" in entity.key_architecture_mechanism
 
 
+def test_extract_comparison_entity_evidence_fidelity() -> None:
+    # Arbitrary paper containing attention in title without benchmark text must NOT fabricate 28.4 BLEU
+    arbitrary = extract_comparison_entity(
+        paper_id="p_arb",
+        title="Visual Attention in Autonomous Driving",
+        raw_text="This paper investigates visual attention for vehicle control.",
+    )
+    assert "28.4 BLEU" not in arbitrary.main_benchmark_metrics
+    assert "WMT 2014" not in arbitrary.main_benchmark_metrics
+
+    # Paper with real metric in text should extract that metric
+    with_metric = extract_comparison_entity(
+        paper_id="p_metric",
+        title="Novel Model",
+        raw_text="Our method achieves 94.5% accuracy on ImageNet benchmarks.",
+    )
+    assert "94.5%" in with_metric.main_benchmark_metrics or "ImageNet" in with_metric.main_benchmark_metrics
+
+
 def test_build_markdown_comparison_table() -> None:
     e1 = extract_comparison_entity("p1", "Attention Is All You Need", year=2017)
     e2 = extract_comparison_entity("p2", "FlashAttention: Fast and Memory-Efficient Attention", year=2022)

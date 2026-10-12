@@ -31,6 +31,7 @@ def test_paper_reading_workflow_end_to_end(tmp_path: Path) -> None:
     [2] Vaswani, A., et al., "Attention is all you need", NeurIPS, 2017.
     """
 
+    # 1. Without PDF: zero fake synthetic visual slices (evidence fidelity)
     report = run_paper_reading_v2(
         paper_id="test_transformer_p2",
         title="Attention Is All You Need",
@@ -43,14 +44,36 @@ def test_paper_reading_workflow_end_to_end(tmp_path: Path) -> None:
     assert report.title == "Attention Is All You Need"
     assert report.paradigm == PaperParadigm.ALGORITHM_ARCHITECTURE
     assert len(report.outline.chapters) == 5
-    assert len(report.visual_slices) >= 3
+    assert len(report.visual_slices) == 0
     assert report.citation_graph is not None
     assert len(report.citation_graph.backward_foundations) >= 1
-    assert "Figure 1:" in report.markdown_content
-    assert "Table 1:" in report.markdown_content
-    assert "Figure 2:" in report.markdown_content
     assert "```mermaid" in report.markdown_content
-    assert "> [!NOTE]" in report.markdown_content
+
+    # 2. With real PDF: verifies physical extraction, real bbox, and disk storage
+    import fitz
+    pdf_path = tmp_path / "sample_paper.pdf"
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((50, 50), "Figure 1: The Transformer model architecture.")
+    pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 200, 200), 0)
+    pix.set_rect(fitz.IRect(0, 0, 200, 200), (100, 150, 200))
+    page.insert_image(fitz.Rect(50, 100, 250, 300), pixmap=pix)
+    doc.save(str(pdf_path))
+    doc.close()
+
+    report_pdf = run_paper_reading_v2(
+        paper_id="test_transformer_with_pdf",
+        title="Attention Is All You Need",
+        raw_text=raw_sample,
+        pdf_path=pdf_path,
+        artifact_store=store,
+        allow_network=False,
+    )
+    assert len(report_pdf.visual_slices) >= 1
+    assert report_pdf.visual_slices[0].bbox is not None
+    assert (store.root / "visual_slices" / Path(report_pdf.visual_slices[0].image_rel_path).name).is_file()
+    assert "> [!NOTE]" in report_pdf.markdown_content
+    assert "图表物理切片深度解析" in report_pdf.markdown_content
 
 
 def test_paper_reading_api_endpoints(tmp_path: Path) -> None:
@@ -129,4 +152,4 @@ def test_paper_reading_api_endpoints(tmp_path: Path) -> None:
     assert data_read["paradigm"] == "algorithm_architecture"
     assert len(data_read["outline"]["chapters"]) == 5
     assert len(data_read["markdown_content"]) > 1000
-    assert len(data_read["visual_slices"]) >= 3
+    assert len(data_read["visual_slices"]) == 0

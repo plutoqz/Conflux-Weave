@@ -73,36 +73,30 @@ def generate_deep_visual_analysis(
 ) -> str:
     """Generate structured, rigorous analytical breakdown for an embedded visual asset."""
     clean_cap = caption.strip() or f"未命名图表 (Page {page})"
+    hint = f"\n- **上下文导读**：{context_hint.strip()}" if context_hint.strip() else ""
 
     if asset_type == VisualAssetType.ARCHITECTURE_DIAGRAM:
         return (
             f"**【核心架构拓扑与数据流解剖 · {clean_cap}】**\n"
-            f"- **模块分层与输入输出交互**：本图呈现端到端计算图拓扑，原始输入在张量空间经过前处理投影后，"
-            f"流经核心特征提取与注意力/状态空间算子，完成高维表征提纯与条件约束对齐。\n"
-            f"- **关键控制原语与通信开销**：模块间采用残差直连与动态门控机制，有效避免梯度弥散，保障长程前向激活传递；"
-            f"计算图内并行度高，具备显著的 GPU 硬件吞吐友好性。\n"
-            f"- **设计意图总结**：通过对传统紧耦合模块的解耦，在保障表征表达力的同时大幅压降了全局计算复杂度。"
+            f"- **模块分层与数据流转**：该图呈现了系统核心拓扑，包含张量与特征输入投影、核心算子计算图变换与输出目标对齐的计算路径。\n"
+            f"- **设计意图与关键算子**：围绕「{clean_cap}」的结构定义，分析各子模块之间的交互协议与状态更新机制，降低端到端通信与内存占用开销。{hint}"
         )
     elif asset_type == VisualAssetType.ABLATION_CHART:
         return (
             f"**【消融趋势与超参敏感性量化归因 · {clean_cap}】**\n"
-            f"- **核心趋势与性能拐点**：曲线显式刻画了关键超参数（如模型容量、计算预算、学习率衰减）对目标收敛指标的非线性影响，"
-            f"在达到设计饱和区间前呈现平稳增益，而在超出临界窗口后边际收益递减甚至出现过拟合。\n"
-            f"- **核心机制贡献度归因**：消融对比表明，引入的核心机制贡献了绝大部分超额性能增益，验证了理论假设的有效性。\n"
-            f"- **工程调优启示**：在落地部署中建议保持在该拐点左侧的安全裕度区间内，兼顾显存开销与精度收益。"
+            f"- **趋势演化与敏感性分析**：曲线展示了关键变量在不同设定下的响应特征，揭示了性能增益与资源开销之间的权衡边界。\n"
+            f"- **机制有效性归因**：实证对比验证了核心组件的独立贡献，明确了调参敏感区间与工程可行性窗口。{hint}"
         )
     elif asset_type == VisualAssetType.PERFORMANCE_TABLE:
         return (
             f"**【主实验权威评测与基准性能对比 · {clean_cap}】**\n"
-            f"- **基准表现与横向对齐**：表格数据在主流公共基准（Benchmark）上与强基线（Baselines）进行了全面多指标对齐，"
-            f"在核心准确率、吞吐延迟与能效比等关键指标上均取得显著优势。\n"
-            f"- **统计显著性与严谨度**：跨多次随机种子或标准评测协议测试方差极小，证明所提算法的稳健性与泛化能力并非源于随机采样扰动。\n"
-            f"- **综合结论**：主实验全面支撑了前文立论假设，确立了所提方法在同等参数量级与算力预算下的前沿竞争力。"
+            f"- **指标对比与基准对齐**：表格数据客观对齐了所提方法与代表性基线在多项评测指标下的表现分布。\n"
+            f"- **实证结论与边界**：量化数据支撑了论证依据，展现了在目标应用场景下的实际表现与精度/耗时权衡。{hint}"
         )
     else:
         return (
             f"**【图表关键信息提炼 · {clean_cap}】**\n"
-            f"- **图表主旨**：展示了 Page {page} 中的关键实证与技术细节，为正文论点提供直观佐证与定量支撑。"
+            f"- **图表主旨**：展示了第 {page} 页中的实证观测与技术细节，为正文论点提供直观佐证与定量支撑。{hint}"
         )
 
 
@@ -175,10 +169,40 @@ def extract_visual_slices_from_pdf(
                 asset_type = classify_visual_asset_type(best_caption, "figure")
                 asset_id = f"fig_p{page_num}_{xref}_{hashlib.sha256(image_bytes[:100]).hexdigest()[:8]}"
 
+                rects = page.get_image_rects(xref)
+                if rects:
+                    r = rects[0]
+                    bbox: tuple[float, float, float, float] | None = (
+                        round(float(r.x0), 2),
+                        round(float(r.y0), 2),
+                        round(float(r.x1), 2),
+                        round(float(r.y1), 2),
+                    )
+                elif captions_found:
+                    cr = captions_found[0][1]
+                    bbox = (
+                        round(float(cr.x0), 2),
+                        max(0.0, round(float(cr.y0 - 200), 2)),
+                        round(float(cr.x1), 2),
+                        round(float(cr.y1), 2),
+                    )
+                else:
+                    bbox = (0.0, 0.0, round(float(page.rect.width), 2), round(float(page.rect.height), 2))
+
                 rel_path = f"visual_slices/{asset_id}.{ext}"
                 if artifact_store is not None:
                     try:
-                        artifact_store.write_bytes(rel_path, image_bytes)
+                        if hasattr(artifact_store, "root"):
+                            out_p = Path(artifact_store.root) / "visual_slices" / f"{asset_id}.{ext}"
+                            out_p.parent.mkdir(parents=True, exist_ok=True)
+                            out_p.write_bytes(image_bytes)
+                        if hasattr(artifact_store, "put_bytes"):
+                            artifact_store.put_bytes(
+                                image_bytes,
+                                media_type=f"image/{ext}",
+                                producer_step_id="step-paper-visual-extract",
+                                schema_version="visual-slice.v1",
+                            )
                     except Exception:
                         pass
 
@@ -195,7 +219,7 @@ def extract_visual_slices_from_pdf(
                         asset_type=asset_type,
                         caption=best_caption,
                         image_rel_path=rel_path,
-                        bbox=None,
+                        bbox=bbox,
                         deep_analysis=deep_analysis,
                     )
                 )

@@ -237,6 +237,9 @@ def build_mermaid_citation_graph(
             lines.append(f'        {did}["{author_str}{year_str}<br/>{clean_t}"]:::drvStyle')
             lines.append(f"        SEED -->|技术演进/扩展| {did}")
         lines.append("    end")
+    if not backward_foundations and not forward_derivatives:
+        lines.append('    NOTE["[离线/免Key模式: 仅基于本地文献，未索引到公开引文流向]"]:::fndStyle')
+        lines.append('    SEED -.-> NOTE')
 
     lines.append("```")
     return "\n".join(lines)
@@ -265,7 +268,7 @@ def build_dual_citation_graph(
     # If network returned no foundations, convert top local references to foundations
     if not foundations and local_refs:
         converted: list[CitationItem] = []
-        for ref in local_refs[:3]:
+        for ref in local_refs[:5]:
             converted.append(
                 CitationItem(
                     paper_id=ref.paper_id,
@@ -278,20 +281,6 @@ def build_dual_citation_graph(
                 )
             )
         foundations = tuple(converted)
-
-    # If network returned no derivatives, synthesize domain-aware derivatives based on seed title
-    if not derivatives:
-        derivatives = (
-            CitationItem(
-                paper_id="synthetic_deriv_1",
-                title="下游工业落地与算子加速优化体系",
-                authors=("学术界后续团队",),
-                year=2024,
-                citation_type=CitationType.FORWARD_DERIVATIVE,
-                summary_or_context="针对本文架构的硬件编译优化、显存降维与低延迟推理演进路线",
-                relevance_score=0.8,
-            ),
-        )
 
     mermaid_graph = build_mermaid_citation_graph(
         seed_title=seed_paper_title,
