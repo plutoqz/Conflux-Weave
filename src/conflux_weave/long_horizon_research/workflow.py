@@ -246,7 +246,7 @@ class LongHorizonSurveyWorkflow:
 
         citations_ledger: list[dict[str, Any]] = []
         for s in sources:
-            if s.url in all_cited_urls or len(citations_ledger) < min(len(sources), 35):
+            if s.url in all_cited_urls:
                 citations_ledger.append(
                     {
                         "source_id": s.source_id,

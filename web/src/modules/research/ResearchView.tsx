@@ -15,6 +15,7 @@ import {
   ChevronDown,
   Download,
   Image as ImageIcon,
+  Compass,
 } from "lucide-react";
 import { useWorkbenchStore } from "@/stores/useWorkbenchStore";
 import { Button } from "@/components/ui/button";
@@ -29,6 +30,7 @@ import {
 import { api } from "@/services/api";
 import { cn } from "@/lib/utils";
 import type { RunDetail } from "@/types/workbench";
+import { SurveyV2Modal } from "./SurveyV2Modal";
 
 export const ResearchView: React.FC = () => {
   const {
@@ -51,6 +53,7 @@ export const ResearchView: React.FC = () => {
   const [exporting, setExporting] = useState<string>("");
   const [exportError, setExportError] = useState<string>("");
   const [runSteps, setRunSteps] = useState<any[]>([]);
+  const [isSurveyV2Open, setIsSurveyV2Open] = useState(false);
 
   const loadMoreEvidence = async () => {
     if (!activeRunId || loadingMoreEvidence || evidenceList.length >= allEvidenceIds.length) return;
@@ -440,8 +443,16 @@ export const ResearchView: React.FC = () => {
 
   if (!activeRunId) {
     return (
-      <div className="flex h-full items-center justify-center p-8 text-center text-muted-foreground text-sm">
-        请从左侧列表选择一项研究，或点击“新建研究”启动新的学术探索。
+      <div className="flex flex-col h-full items-center justify-center p-8 text-center text-muted-foreground text-sm space-y-4">
+        <div>请从左侧列表选择一项研究，或点击“新建研究”启动新的学术探索。</div>
+        <Button
+          onClick={() => setIsSurveyV2Open(true)}
+          className="gap-2 text-xs bg-emerald-800 hover:bg-emerald-900 text-white font-serif-academic cursor-pointer"
+        >
+          <Compass className="h-4 w-4" />
+          <span>长程学术综述与假设树规划 (Deep Research V2)</span>
+        </Button>
+        <SurveyV2Modal open={isSurveyV2Open} onOpenChange={setIsSurveyV2Open} />
       </div>
     );
   }
@@ -481,6 +492,15 @@ export const ResearchView: React.FC = () => {
         </div>
 
         <div className="flex items-center space-x-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setIsSurveyV2Open(true)}
+            className="gap-1.5 text-xs text-emerald-800 dark:text-emerald-400 border-emerald-800/40 hover:bg-emerald-800/10 font-serif-academic cursor-pointer"
+          >
+            <Compass className="h-3.5 w-3.5" />
+            <span>长程综述 V2</span>
+          </Button>
           {(currentStatus === "working" || currentStatus === "pending" || currentStatus === "running") && (
             <Button
               variant="outline"
@@ -1006,6 +1026,12 @@ export const ResearchView: React.FC = () => {
           </DialogContent>
         </Dialog>
       )}
+
+      <SurveyV2Modal
+        open={isSurveyV2Open}
+        onOpenChange={setIsSurveyV2Open}
+        initialQuery={runQuery !== activeRunId ? runQuery : ""}
+      />
     </div>
   );
 };

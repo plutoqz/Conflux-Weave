@@ -123,3 +123,49 @@ def test_discovered_source_serialization_roundtrip():
     assert restored.hop_depth == src.hop_depth
     assert restored.parent_url == src.parent_url
     assert restored.extracted_outbound_links == src.extracted_outbound_links
+
+
+def test_search_graph_crawler_max_sources_strict_bound() -> None:
+    async def mock_search(query: str, limit: int = 4):
+        return [
+            {
+                "url": f"https://arxiv.org/abs/2401.{i}_{abs(hash(query)) % 1000}",
+                "title": f"Paper {i} for {query}",
+                "snippet": "High authority paper",
+            }
+            for i in range(limit)
+        ]
+
+    async def mock_fetcher(url: str):
+        return (f"Title {url}", f"Content for {url}")
+
+    async def run_test():
+        crawler = SearchGraphCrawler(
+            max_sources=5,
+            max_depth=2,
+            concurrency=8,
+            fetcher=mock_fetcher,
+            search_engine=mock_search,
+        )
+        probes = tuple(ResearchProbe(f"p-{i}", f"Aspect {i}", f"Intent {i}", "metric") for i in range(25))
+        collected = await crawler.explore_probes(probes)
+        assert len(collected) <= 5
+        assert len(collected) == 5
+
+    asyncio.run(run_test())
+
+
+def test_search_graph_crawler_allow_network_false() -> None:
+    async def run_test():
+        crawler = SearchGraphCrawler(
+            max_sources=3,
+            allow_network=False,
+        )
+        probes = (ResearchProbe("p-1", "Offline probe", "Local Intent", "metric"),)
+        collected = await crawler.explore_probes(probes)
+        assert len(collected) > 0
+        for s in collected:
+            assert s.source_channel == "offline_local"
+            assert s.url.startswith("offline://")
+
+    asyncio.run(run_test())

@@ -309,13 +309,14 @@ class SurveySynthesizer:
             "从系统设计与计算理论的角度审视，当前技术演进不仅涉及单点算法的效率改进，更体现了计算范式从理论推导向物理工程落地的系统性重构。"
         ]
 
+        cited_urls: list[str] = []
         for p_idx, p in enumerate(chapter.probes, start=1):
             ref_source = sources[p_idx % len(sources)] if sources else None
-            ref_citation = (
-                f"根据相关权威研究 [{ref_source.title}]({ref_source.url})"
-                if ref_source
-                else "在已有的经典基准文献中"
-            )
+            if ref_source:
+                cited_urls.append(ref_source.url)
+                ref_citation = f"根据相关权威研究 [{ref_source.title}]({ref_source.url})"
+            else:
+                ref_citation = "在已有的经典基准文献中"
 
             paras.append(
                 f"\n#### {chapter.chapter_index}.{p_idx + 1} 切面剖析：{p.target_aspect}\n\n"
@@ -332,7 +333,7 @@ class SurveySynthesizer:
         )
 
         full_text = "\n".join(paras)
-        cited_urls = tuple(s.url for s in sources[:4]) if sources else ()
+        unique_cited = tuple(dict.fromkeys(cited_urls))
 
         return SurveyReportSection(
             chapter_id=chapter.chapter_id,
@@ -340,5 +341,5 @@ class SurveySynthesizer:
             title=chapter.title,
             content_markdown=full_text,
             word_count=len(full_text),
-            cited_source_urls=cited_urls,
+            cited_source_urls=unique_cited,
         )
