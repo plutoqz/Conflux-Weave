@@ -16,11 +16,12 @@ export const TaskDialog: React.FC = () => {
   const { isNewTaskOpen, setIsNewTaskOpen, setRuns, setActiveRunId, setSection } =
     useWorkbenchStore();
 
-  const [mode, setMode] = useState<"single" | "managed" | "discovery" | "fixture">("single");
+  const [mode, setMode] = useState<"single" | "managed" | "discovery" | "survey" | "fixture">("single");
   const [query, setQuery] = useState("");
   const [topics, setTopics] = useState("");
   const [maxResults, setMaxResults] = useState(15);
   const [maxSubquestions, setMaxSubquestions] = useState(4);
+  const [surveyWordCount, setSurveyWordCount] = useState<number>(6000);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -31,8 +32,14 @@ export const TaskDialog: React.FC = () => {
     setSubmitting(true);
     setError(null);
     try {
-      let result;
-      if (mode === "fixture") {
+      let result: any;
+      if (mode === "survey") {
+        result = await api.executeSurvey({
+          objective: query.trim(),
+          max_sources: Math.min(100, Math.max(20, Math.round(surveyWordCount / 100))),
+          allow_network: true,
+        });
+      } else if (mode === "fixture") {
         result = await api.createFixtureTask({
           objective: query.trim(),
         });
@@ -89,7 +96,7 @@ export const TaskDialog: React.FC = () => {
 
         <form onSubmit={handleSubmit} className="space-y-4 py-2">
           {/* Mode switch */}
-          <div className="grid grid-cols-4 bg-muted/60 p-1 rounded-lg text-xs gap-1">
+          <div className="grid grid-cols-5 bg-muted/60 p-1 rounded-lg text-xs gap-1">
             <button
               type="button"
               onClick={() => setMode("single")}
@@ -125,6 +132,17 @@ export const TaskDialog: React.FC = () => {
             </button>
             <button
               type="button"
+              onClick={() => setMode("survey")}
+              className={`py-1 px-1 rounded-md font-medium text-center transition ${
+                mode === "survey"
+                  ? "bg-background text-foreground shadow-xs font-semibold"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              长程综述
+            </button>
+            <button
+              type="button"
               onClick={() => setMode("fixture")}
               className={`py-1 px-1 rounded-md font-medium text-center transition ${
                 mode === "fixture"
@@ -138,7 +156,7 @@ export const TaskDialog: React.FC = () => {
 
           <div className="space-y-1.5">
             <label className="text-xs font-medium text-foreground">
-              {mode === "fixture" ? "验证目标" : mode === "discovery" ? "检索主题 / 问题" : "研究目标 / 核心问题"}
+              {mode === "fixture" ? "验证目标" : mode === "discovery" ? "检索主题 / 问题" : mode === "survey" ? "长程综述核心课题" : "研究目标 / 核心问题"}
             </label>
             <textarea
               required
@@ -148,11 +166,36 @@ export const TaskDialog: React.FC = () => {
               placeholder={
                 mode === "discovery"
                   ? "例如：DeepSeek-R1 架构分析与推理能力测评..."
+                  : mode === "survey"
+                  ? "例如：长序列大模型注意力机制与块稀疏架构演化脉络全景综述..."
                   : "例如：量子纠错码在拓扑量子计算中的最新容错阈值与实验突破..."
               }
               className="w-full text-xs p-2.5 rounded-md border border-input bg-transparent focus:outline-none focus:ring-1 focus:ring-ring"
             />
           </div>
+
+          {mode === "survey" && (
+            <div className="space-y-2 p-3 rounded-lg border border-border/70 bg-muted/20">
+              <div className="flex justify-between items-center">
+                <label className="text-xs font-medium text-foreground">目标篇幅 (字数预估)</label>
+                <span className="text-xs font-mono font-semibold text-emerald-700 dark:text-emerald-300">
+                  {surveyWordCount} 字
+                </span>
+              </div>
+              <input
+                type="range"
+                min={4000}
+                max={12000}
+                step={1000}
+                value={surveyWordCount}
+                onChange={(e) => setSurveyWordCount(Number(e.target.value))}
+                className="w-full h-1.5 bg-muted rounded-lg appearance-none cursor-pointer"
+              />
+              <p className="text-[11px] text-muted-foreground leading-relaxed font-serif-academic">
+                采用双层探针矩阵与演化时序拓扑，调用 OpenAlex / arXiv 真实接口自动进行长程文献检索与章节合成。
+              </p>
+            </div>
+          )}
 
           {mode === "managed" && (
             <div className="space-y-2 p-3 rounded-lg border border-border/70 bg-muted/20">

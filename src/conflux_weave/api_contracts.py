@@ -2015,6 +2015,7 @@ class LongHorizonSurveySubmitRequest(_ApiModel):
     objective: str = Field(min_length=1, max_length=4000)
     background_context: str = Field(default="", max_length=8000)
     max_sources: int = Field(default=80, ge=5, le=200)
+    allow_network: bool = True
 
 
 class LongHorizonSurveyOutlineResponse(_ApiModel):
@@ -2028,6 +2029,7 @@ class LongHorizonSurveyOutlineResponse(_ApiModel):
 
 class LongHorizonSurveyReportResponse(_ApiModel):
     report_id: str
+    run_id: str = ""
     objective: str
     executive_summary: list[str]
     sections: list[dict[str, Any]]

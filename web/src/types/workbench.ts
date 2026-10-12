@@ -230,6 +230,7 @@ export interface PaperItem {
   match_snippet?: string;
   raw_paper?: any;
   status?: string;
+  pdf_path?: string;
 }
 
 export interface ProjectSummary {
@@ -634,6 +635,7 @@ export interface LongHorizonSurveySubmitRequest {
   objective: string;
   background_context?: string;
   max_sources?: number;
+  allow_network?: boolean;
 }
 
 export interface ResearchProbeItem {
@@ -672,6 +674,7 @@ export interface SurveyReportSectionItem {
 
 export interface LongHorizonSurveyReportResponse {
   report_id: string;
+  run_id?: string;
   objective: string;
   executive_summary: string[];
   sections: SurveyReportSectionItem[];

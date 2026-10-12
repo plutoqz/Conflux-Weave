@@ -2201,10 +2201,26 @@ def create_app(
     @app.post("/api/v1/research/survey/execute", response_model=LongHorizonSurveyReportResponse)
     async def execute_survey_workflow_endpoint(request: LongHorizonSurveySubmitRequest):
         try:
+            from datetime import datetime, UTC
+            from uuid import uuid4
+            from conflux_weave.core import (
+                TaskSpec,
+                RunRecord,
+                RunStatus,
+                StepRecord,
+                StepStatus,
+                DeliveryRecord,
+                DeliveryDisposition,
+                BudgetLedger,
+            )
+
             planner = OutlinePlanner(chat_adapter=chat_adapter)
             auditor = InformationGapAuditor(chat_adapter=chat_adapter)
             synthesizer = SurveySynthesizer(chat_adapter=chat_adapter)
-            crawler = SearchGraphCrawler(max_sources=request.max_sources)
+            crawler = SearchGraphCrawler(
+                max_sources=request.max_sources,
+                allow_network=request.allow_network,
+            )
             wf = LongHorizonSurveyWorkflow(
                 planner=planner,
                 crawler=crawler,
@@ -2212,13 +2228,97 @@ def create_app(
                 synthesizer=synthesizer,
                 repository=repository,
             )
+
+            task_id = f"task-survey-{uuid4().hex[:12]}"
+            run_id = f"run-survey-{uuid4().hex[:12]}"
+            step_id = f"{run_id}:survey_synthesis"
+            now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+            store = getattr(repository, "artifact_store", None)
+
+            # Register durable task and run in repository
+            if repository is not None and store is not None:
+                try:
+                    cfg_ref = store.put_json(
+                        {
+                            "objective": request.objective,
+                            "background_context": request.background_context,
+                            "max_sources": request.max_sources,
+                            "allow_network": request.allow_network,
+                        },
+                        producer_step_id=step_id,
+                        schema_version="conflux-weave.config.v1",
+                    )
+                    task = TaskSpec(
+                        task_id,
+                        "deep_research",
+                        {
+                            "objective": request.objective,
+                            "background_context": request.background_context,
+                            "max_sources": request.max_sources,
+                            "allow_network": request.allow_network,
+                        },
+                        requested_policy="default",
+                        idempotency_key=task_id,
+                    )
+                    budget = BudgetLedger(300, 10000, 2000, "free", 1, 0, 1)
+                    run = RunRecord(
+                        run_id,
+                        task_id,
+                        RunStatus.ACCEPTED,
+                        "long-horizon-survey-v2",
+                        config_snapshot_ref=cfg_ref.artifact_id,
+                        budget=budget,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                    step = StepRecord(step_id, run_id, "publish_delivery", 1, StepStatus.PENDING)
+                    repository.submit_task(task, run, (step,))
+                    repository.transition_run(run_id, RunStatus.QUEUED, updated_at=now)
+                    repository.transition_run(run_id, RunStatus.RUNNING, updated_at=now)
+                    if run_org_store is not None:
+                        try:
+                            run_org_store.set_title(run_id, f"长程学术综述: {request.objective[:40]}")
+                        except Exception:
+                            pass
+                except Exception as reg_exc:
+                    logger.debug("Survey run registration skipped: %s", reg_exc)
+
             report = await wf.execute(
                 objective=request.objective,
                 background_context=request.background_context,
                 max_sources=request.max_sources,
+                run_id=run_id,
             )
+
+            # Deliver report artifact and complete run
+            if repository is not None and store is not None:
+                try:
+                    full_md = report.render_full_markdown()
+                    report_ref = store.put_bytes(
+                        full_md.encode("utf-8"),
+                        media_type="text/markdown; charset=utf-8",
+                        producer_step_id=step_id,
+                        schema_version="conflux-weave.long-horizon-survey-report.v2",
+                    )
+                    evidence_refs = tuple(
+                        s.get("source_id", "") for s in report.citations_ledger if s.get("source_id")
+                    ) or ("survey-evidence-001",)
+                    delivery = DeliveryRecord(
+                        run_id,
+                        DeliveryDisposition.COMPLETE,
+                        artifact_refs=(report_ref.artifact_id,),
+                        evidence_refs=evidence_refs,
+                        limitations=("长程深度综述研报由 LongHorizonSurveyWorkflow 自动生成并持久化归档。",),
+                        unmet_criteria=(),
+                        recovery_actions=(),
+                    )
+                    repository.publish_delivery(run_id, RunStatus.SUCCEEDED, delivery, (report_ref,))
+                except Exception as deliv_exc:
+                    logger.debug("Survey run delivery publication skipped: %s", deliv_exc)
+
             return LongHorizonSurveyReportResponse(
                 report_id=report.report_id,
+                run_id=run_id,
                 objective=report.objective,
                 executive_summary=list(report.executive_summary),
                 sections=[s.to_dict() for s in report.sections],
@@ -2317,6 +2417,48 @@ def create_app(
             )
         except Exception as exc:
             return error_response(exc)
+
+    @app.get("/api/v1/assets/{asset_id}")
+    @app.get("/api/v1/assets/{asset_id}/content")
+    async def serve_visual_slice_asset_endpoint(asset_id: str):
+        store = getattr(repository, "artifact_store", None)
+        if store is not None:
+            slice_dir = Path(store.root) / "visual_slices"
+            if slice_dir.is_dir():
+                for f in slice_dir.glob(f"{asset_id}.*"):
+                    if f.is_file():
+                        ext = f.suffix.lstrip(".").lower()
+                        mimes = {
+                            "png": "image/png",
+                            "jpg": "image/jpeg",
+                            "jpeg": "image/jpeg",
+                            "webp": "image/webp",
+                            "svg": "image/svg+xml",
+                        }
+                        return Response(content=f.read_bytes(), media_type=mimes.get(ext, "image/png"))
+
+            clean_id = asset_id.removeprefix("artifact-sha256-")
+            if len(clean_id) == 64 and all(c in "0123456789abcdef" for c in clean_id):
+                try:
+                    fpath = store.path_for_digest(clean_id)
+                    if fpath.is_file():
+                        return Response(content=fpath.read_bytes(), media_type="image/png")
+                except Exception:
+                    pass
+
+        try:
+            asset = await resolve_registered_asset(asset_id)
+            if asset is not None and asset.get("artifact_ref"):
+                ref = asset.get("artifact_ref")
+                digest = str(ref).removeprefix("artifact-sha256-")
+                if store is not None:
+                    fpath = store.path_for_digest(digest)
+                    if fpath.is_file():
+                        return Response(content=fpath.read_bytes(), media_type=asset.get("media_type", "image/png"))
+        except Exception:
+            pass
+
+        return JSONResponse(status_code=404, content={"code": "asset_not_found", "message": f"Asset '{asset_id}' not found"})
 
     @app.post("/api/v1/projects/tutor/dissect", response_model=ProjectTutorDissectResponse)
     async def project_tutor_dissect_endpoint(request: ProjectTutorDissectRequest):
