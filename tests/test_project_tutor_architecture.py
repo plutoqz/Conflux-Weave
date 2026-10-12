@@ -30,3 +30,12 @@ def test_reverse_engineer_architecture_motivations() -> None:
         assert "flowchart TD" in motivations.topology_mermaid
         assert "```mermaid" in motivations.dataflow_sequence_mermaid
         assert "sequenceDiagram" in motivations.dataflow_sequence_mermaid
+        # Check AST detected FastAPI
+        assert "FastAPI" in motivations.topology_mermaid
+
+
+def test_reverse_engineer_architecture_real_codebase() -> None:
+    motivations = reverse_engineer_architecture(Path("."), project_name="Conflux-Weave")
+    assert "FastAPI" in motivations.topology_mermaid
+    assert "模块 (" in motivations.topology_mermaid
+    assert "Entrypoint Dispatcher" not in motivations.topology_mermaid

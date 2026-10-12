@@ -51,3 +51,20 @@ def test_build_progressive_walkthrough_stages() -> None:
     assert "核心学术引擎" in stages[2].stage_name
     assert stages[3].stage_index == 4
     assert "外部边界" in stages[3].stage_name or "治理" in stages[3].stage_name
+
+    # Invariant: No path pollution from var/, acceptance, tests, or tmp
+    for stage in stages:
+        for f in stage.key_files:
+            assert not f.startswith("var/"), f"Found polluted path: {f}"
+            assert "acceptance" not in f, f"Found polluted path: {f}"
+            assert not f.startswith("tests/"), f"Found polluted path: {f}"
+
+
+def test_scan_real_project_no_pseudo_dependencies() -> None:
+    cards = scan_project_dependencies(Path("."), project_name="Conflux-Weave")
+    pkg_names = {c.package_name.lower() for c in cards}
+    assert "conflux-weave" not in pkg_names
+    assert "conflux_weave" not in pkg_names
+    assert "src" not in pkg_names
+    assert "tests" not in pkg_names
+    assert "fastapi" in pkg_names

@@ -38,6 +38,7 @@ class CodeVisitor(ast.NodeVisitor):
         self.rel_path = rel_path
         self.source_lines = source_lines
         self.findings: list[HygieneAuditFinding] = []
+        self.with_stack: list[ast.With | ast.AsyncWith] = []
 
     def _get_snippet(self, node: ast.AST, max_lines: int = 5) -> str:
         start = getattr(node, "lineno", 1) - 1
@@ -81,15 +82,95 @@ class CodeVisitor(ast.NodeVisitor):
                     )
         self.generic_visit(node)
 
+    def visit_With(self, node: ast.With) -> None:
+        self.with_stack.append(node)
+        self.generic_visit(node)
+        self.with_stack.pop()
+
+    def visit_AsyncWith(self, node: ast.AsyncWith) -> None:
+        self.with_stack.append(node)
+        self.generic_visit(node)
+        self.with_stack.pop()
+
+    def visit_Call(self, node: ast.Call) -> None:
+        # Check for unmanaged bare open() resource leaks
+        if isinstance(node.func, ast.Name) and node.func.id == "open":
+            is_in_with = False
+            for w in self.with_stack:
+                for item in w.items:
+                    if item.context_expr == node or getattr(item, "context_expr", None) is node:
+                        is_in_with = True
+                        break
+                if is_in_with:
+                    break
+            if not is_in_with:
+                finding_id = f"leak_{len(self.findings) + 1}_{node.lineno}"
+                self.findings.append(
+                    HygieneAuditFinding(
+                        finding_id=finding_id,
+                        category=HygieneCategory.ARCHITECTURAL_VULNERABILITY,
+                        severity="warning",
+                        file_path=self.rel_path,
+                        line_number=node.lineno,
+                        code_snippet=self._get_snippet(node, 2),
+                        issue_description="检测到未使用 with 上下文管理器的裸 open() 调用，存在资源泄漏隐患。",
+                        harm_analysis="未通过上下文管理器管理的文件句柄在遇到未受控异常或GC延迟时，极易造成句柄耗尽或文件锁死冲突。",
+                        refactor_diff_suggestion="重构为 `with open(...) as handle:` 确保异常安全与文件句柄及时回收。",
+                    )
+                )
+        self.generic_visit(node)
+
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self._check_function_stubs(node)
         self._check_unused_parameters(node)
+        self._check_mutable_defaults(node)
         self.generic_visit(node)
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         self._check_function_stubs(node)  # type: ignore[arg-type]
         self._check_unused_parameters(node)  # type: ignore[arg-type]
+        self._check_mutable_defaults(node)  # type: ignore[arg-type]
+        self._check_async_concurrency_risks(node)
         self.generic_visit(node)
+
+    def _check_mutable_defaults(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        all_defaults = [d for d in node.args.defaults if d is not None] + [
+            d for d in node.args.kw_defaults if d is not None
+        ]
+        for d in all_defaults:
+            if isinstance(d, (ast.List, ast.Dict, ast.Set)):
+                finding_id = f"mutable_default_{len(self.findings) + 1}_{node.lineno}"
+                self.findings.append(
+                    HygieneAuditFinding(
+                        finding_id=finding_id,
+                        category=HygieneCategory.ARCHITECTURAL_VULNERABILITY,
+                        severity="warning",
+                        file_path=self.rel_path,
+                        line_number=node.lineno,
+                        code_snippet=self._get_snippet(node, 2),
+                        issue_description=f"函数 `{node.name}` 使用了可变默认参数 (list/dict/set)。",
+                        harm_analysis="Python 可变默认参数在模块加载时单例初始化，后续多次调用将共享并累计修改，在并发或长程请求中引发难以排查的数据污染。",
+                        refactor_diff_suggestion="将默认形参重构为 None，并在函数体内通过动态初始判断赋值。",
+                    )
+                )
+
+    def _check_async_concurrency_risks(self, node: ast.AsyncFunctionDef) -> None:
+        for stmt in node.body:
+            if isinstance(stmt, ast.Global):
+                finding_id = f"concurrency_race_{len(self.findings) + 1}_{node.lineno}"
+                self.findings.append(
+                    HygieneAuditFinding(
+                        finding_id=finding_id,
+                        category=HygieneCategory.ARCHITECTURAL_VULNERABILITY,
+                        severity="warning",
+                        file_path=self.rel_path,
+                        line_number=node.lineno,
+                        code_snippet=self._get_snippet(node, 3),
+                        issue_description=f"异步函数 `{node.name}` 直接声明并读写全局变量 global，存在并发竞态风险。",
+                        harm_analysis="在 asyncio 事件循环高并发切换调度场景下，多协程无锁交替写入全局状态容易引发数据覆盖与脏读。",
+                        refactor_diff_suggestion="使用带有互斥锁 (asyncio.Lock) 的受控状态机或依赖注入隔离状态上下文。",
+                    )
+                )
 
     def _check_function_stubs(self, node: ast.FunctionDef) -> None:
         # Check for stub implementations: pass, ..., or raise NotImplementedError
@@ -108,34 +189,51 @@ class CodeVisitor(ast.NodeVisitor):
         if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str):
             effective_body = body[1:]
 
-        if not effective_body:
-            return
+        is_stub = False
+        stub_desc = ""
 
-        if len(effective_body) == 1:
+        if len(effective_body) == 0:
+            is_stub = True
+            stub_desc = f"函数 `{node.name}` 仅有文档字符串或空函数体，伪装假完成度。"
+        elif len(effective_body) == 1:
             first_stmt = effective_body[0]
-            if isinstance(first_stmt, ast.Pass) or (isinstance(first_stmt, ast.Expr) and isinstance(first_stmt.value, ast.Constant) and first_stmt.value.value is ...):
-                finding_id = f"stub_{len(self.findings) + 1}_{node.lineno}"
-                self.findings.append(
-                    HygieneAuditFinding(
-                        finding_id=finding_id,
-                        category=HygieneCategory.STUB_PLACEHOLDER,
-                        severity="warning",
-                        file_path=self.rel_path,
-                        line_number=node.lineno,
-                        code_snippet=self._get_snippet(node, 4),
-                        issue_description=f"函数 `{node.name}` 仅有 pass 或省略号桩代码，伪装假完成度。",
-                        harm_analysis="在未声明 @abstractmethod 的生产代码中遗留空壳桩函数，上层调用时将无任何反馈，引发难以追踪的逻辑断层。",
-                        refactor_diff_suggestion=(
-                            f"--- a/{self.rel_path}\n"
-                            f"+++ b/{self.rel_path}\n"
-                            f"@@ -{node.lineno} +{node.lineno} @@\n"
-                            f" def {node.name}(...):\n"
-                            f"-    pass\n"
-                            f"+    # 补充真实业务计算或明确显式抛出异常\n"
-                            f"+    raise NotImplementedError('请根据需求完成 {node.name} 真实实现')\n"
-                        ),
-                    )
+            if isinstance(first_stmt, ast.Pass):
+                is_stub = True
+                stub_desc = f"函数 `{node.name}` 仅有 pass 或省略号桩代码，伪装假完成度。"
+            elif isinstance(first_stmt, ast.Expr) and isinstance(first_stmt.value, ast.Constant) and first_stmt.value.value is ...:
+                is_stub = True
+                stub_desc = f"函数 `{node.name}` 仅有 pass 或省略号桩代码，伪装假完成度。"
+            elif isinstance(first_stmt, ast.Raise):
+                exc = first_stmt.exc
+                if (isinstance(exc, ast.Name) and exc.id == "NotImplementedError") or (
+                    isinstance(exc, ast.Call) and isinstance(exc.func, ast.Name) and exc.func.id == "NotImplementedError"
+                ):
+                    is_stub = True
+                    stub_desc = f"函数 `{node.name}` 未实现真实业务逻辑，直接抛出 NotImplementedError 占位桩。"
+
+        if is_stub:
+            finding_id = f"stub_{len(self.findings) + 1}_{node.lineno}"
+            self.findings.append(
+                HygieneAuditFinding(
+                    finding_id=finding_id,
+                    category=HygieneCategory.STUB_PLACEHOLDER,
+                    severity="warning",
+                    file_path=self.rel_path,
+                    line_number=node.lineno,
+                    code_snippet=self._get_snippet(node, 4),
+                    issue_description=stub_desc,
+                    harm_analysis="在未声明 @abstractmethod 的生产代码中遗留空壳桩函数，上层调用时将无任何反馈，引发难以追踪的逻辑断层。",
+                    refactor_diff_suggestion=(
+                        f"--- a/{self.rel_path}\n"
+                        f"+++ b/{self.rel_path}\n"
+                        f"@@ -{node.lineno} +{node.lineno} @@\n"
+                        f" def {node.name}(...):\n"
+                        f"-    pass\n"
+                        f"+    # 补充真实业务计算或明确显式抛出异常\n"
+                        f"+    raise NotImplementedError('请根据需求完成 {node.name} 真实实现')\n"
+                    ),
                 )
+            )
 
     def _check_unused_parameters(self, node: ast.FunctionDef) -> None:
         # Check for phantom arguments never referenced in body

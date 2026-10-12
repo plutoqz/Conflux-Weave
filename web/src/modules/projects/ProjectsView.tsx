@@ -70,6 +70,7 @@ import type {
   CodingRevertResult,
   ProjectMessage,
 } from "@/types/workbench";
+import { ProjectTutorV2Panel } from "./ProjectTutorV2Panel";
 
 function getLanguageFromPath(filePath: string): string {
   const ext = filePath.split(".").pop()?.toLowerCase() || "";
@@ -223,6 +224,7 @@ const FileTreeNode: React.FC<FileTreeNodeProps> = ({
 
 export type WorkspaceTabType =
   | "code"
+  | "tutor_v2"
   | "audit"
   | "learning"
   | "walkthrough"
@@ -772,6 +774,29 @@ export const ProjectsView: React.FC = () => {
     const qLower = q.toLowerCase();
 
     try {
+      // 0. Project Tutor V2 explicit intent
+      if (
+        qLower === "/tutor" ||
+        qLower === "/dissect" ||
+        qLower === "架构导师" ||
+        qLower === "项目导师" ||
+        qLower === "tutor" ||
+        qLower === "体检v2"
+      ) {
+        setWorkspaceTab("tutor_v2");
+        setCopilotMessages((prev) => [
+          ...prev,
+          {
+            id: (Date.now() + 1).toString(),
+            role: "assistant",
+            content: `已为您展开【架构导师与 7 维 AI 体检 (Project Tutor V2)】！\n\n系统正通过 AST 逆向解析工程拓扑、设计决策与依赖机理，并执行针对未实现桩基、资源泄漏与异步风险的 7 维度专项体检。`,
+            timestamp: new Date().toLocaleTimeString(),
+            targetTab: "tutor_v2",
+          },
+        ]);
+        return;
+      }
+
       // 1. Audit explicit intent
       if (
         qLower === "/audit" ||
@@ -1106,6 +1131,7 @@ export const ProjectsView: React.FC = () => {
             <div className="flex items-center space-x-1.5 shrink-0">
               {([
                 { id: "code", label: "📄 代码浏览", badge: undefined },
+                { id: "tutor_v2", label: "🎓 架构导师与 AI 体检 (V2)", badge: undefined },
                 { id: "audit", label: "🛡️ 架构体检报告", badge: auditData?.findings?.length },
                 { id: "learning", label: "📖 导学剖析全景", badge: learningData?.progressive_reading_roadmap?.length },
                 { id: "walkthrough", label: "📐 架构组件走查", badge: walkthroughData?.components?.length },
@@ -1336,6 +1362,20 @@ export const ProjectsView: React.FC = () => {
                   </div>
                 )}
               </div>
+            )}
+
+            {/* VIEW: Project Tutor V2 & AI Hygiene Auditor */}
+            {workspaceTab === "tutor_v2" && (
+              <ProjectTutorV2Panel
+                projectId={selectedProjectId}
+                projectName={selectedProj?.name || "项目"}
+                projectPath={selectedProj?.root_path || "."}
+                onSelectFile={(filePath) => handleSelectFile(filePath)}
+                onApplyPatch={(patchDiff) => {
+                  setDiff(patchDiff);
+                  setWorkspaceTab("patch");
+                }}
+              />
             )}
 
             {/* VIEW 2: Audit Report (架构体检报告) */}
